@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { cx, formatMoney, formatRate, parseLooseNumber } from '@/lib/format';
+import { cx, formatMoney, formatQty, formatRate, parseLooseNumber } from '@/lib/format';
 import type { QuoteItem } from '@/lib/types';
 import { IconButton } from '@/components/ui/button';
 import { IconCopy, IconEyeOff, IconEyeOn, IconRisk, IconTrash } from '@/components/icons';
@@ -8,6 +8,7 @@ import { IconCopy, IconEyeOff, IconEyeOn, IconRisk, IconTrash } from '@/componen
 /** 单元格级可编辑输入（Enter 提交并下移、Esc 还原、Tab 右移） */
 function CellInput({
   value,
+  display,
   onCommit,
   ariaLabel,
   rowKey,
@@ -17,6 +18,8 @@ function CellInput({
   invalid,
 }: {
   value: string;
+  /** 非编辑态显示什么。库里存的是 numeric(14,4)，原始值直接摆出来就是一串 `4333.3333`； 展示走格式化，提交仍按数值比较 */
+  display?: string;
   onCommit: (next: string) => void;
   ariaLabel: string;
   rowKey: string;
@@ -27,10 +30,18 @@ function CellInput({
 }) {
   const [draft, setDraft] = useState(value);
   const [focused, setFocused] = useState(false);
-  const shown = focused ? draft : value;
+  const shown = focused ? draft : (display ?? value);
+
+  /** 拖尾精度不该被当成一次修改：`4333.3333` 与显示的 `4,333.33` 是同一个数 */
+  function sameNumber(a: string, b: string): boolean {
+    const na = Number(a.replace(/[,\s]/g, ''));
+    const nb = Number(b.replace(/[,\s]/g, ''));
+    return Number.isFinite(na) && Number.isFinite(nb) && na === nb;
+  }
 
   function commit() {
-    if (draft !== value) onCommit(draft);
+    if (draft === value || sameNumber(draft, value)) return;
+    onCommit(draft);
   }
 
   function focusSibling(delta: number) {
@@ -51,7 +62,7 @@ function CellInput({
       aria-label={ariaLabel}
       aria-invalid={invalid || undefined}
       onFocus={() => {
-        setDraft(value);
+        setDraft(display ?? value);
         setFocused(true);
       }}
       onChange={(e) => setDraft(e.target.value)}
@@ -66,7 +77,7 @@ function CellInput({
           focusSibling(1);
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          setDraft(value);
+          setDraft(display ?? value);
           setFocused(false);
           e.currentTarget.blur();
         } else if (e.key === 'Tab' && !e.shiftKey) {
@@ -188,52 +199,55 @@ export function QuoteLineRow({
       <td className="ta-r">
         <CellInput
           value={line.qty}
+          display={formatQty(line.qty)}
           rowKey={line.id}
           field="qty"
           ariaLabel={`第 ${index + 1} 行数量`}
           onCommit={numberCommit('qty')}
         />
       </td>
-      {compact ? null : (
-        <td className="ta-r">
-          {flags.missingCost ? (
-            <div className="flex flex-col items-end gap-[2px]">
-              <CellInput
-                value=""
-                rowKey={line.id}
-                field="costUnitPrice"
-                ariaLabel={`第 ${index + 1} 行手填成本`}
-                placeholder="手填成本"
-                invalid
-                onCommit={numberCommit('costUnitPrice')}
-              />
-              {onRecreatePrice ? (
-                <button type="button" className="btn btn--link t-2xs" onClick={onRecreatePrice}>
-                  按旧价重新录价
-                </button>
-              ) : null}
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="cell-btn"
-              onClick={onPickSupplier}
-              aria-label={`第 ${index + 1} 行成本 ${formatMoney(line.costUnitPrice)}，点这里换供应商`}
-              title="点这里换供应商"
-            >
-              {formatMoney(line.costUnitPrice)}
-              {line.costSource === 'manual' ? <span className="badge badge--manual ml-[var(--space-1)]">手填</span> : null}
-              {flags.staleDays ? (
-                <span className="badge badge--warn ml-[var(--space-1)]">{flags.staleDays} 天</span>
-              ) : null}
-            </button>
-          )}
-        </td>
-      )}
+      {/* 成本单价**任何密度都不收起**。它是"换供应商"的唯一入口：
+          精简档为了省 84px 把它藏了，结果小屏用户勾完物料想改一家完全没有地方点——
+          省掉的像素换来了一个功能消失。要省就省规格和供应商两列，那两列只是"看得见"。 */}
+      <td className="ta-r">
+        {flags.missingCost ? (
+          <div className="flex flex-col items-end gap-[2px]">
+            <CellInput
+              value=""
+              rowKey={line.id}
+              field="costUnitPrice"
+              ariaLabel={`第 ${index + 1} 行手填成本`}
+              placeholder="手填成本"
+              invalid
+              onCommit={numberCommit('costUnitPrice')}
+            />
+            {onRecreatePrice ? (
+              <button type="button" className="btn btn--link t-2xs" onClick={onRecreatePrice}>
+                按旧价重新录价
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="cell-btn"
+            onClick={onPickSupplier}
+            aria-label={`第 ${index + 1} 行成本 ${formatMoney(line.costUnitPrice)}，点这里换供应商`}
+            title="点这里换供应商"
+          >
+            {formatMoney(line.costUnitPrice)}
+            {line.costSource === 'manual' ? <span className="badge badge--manual ml-[var(--space-1)]">手填</span> : null}
+            {flags.staleDays ? (
+              <span className="badge badge--warn ml-[var(--space-1)]">{flags.staleDays} 天</span>
+            ) : null}
+          </button>
+        )}
+      </td>
       <td className="ta-r t-3 num">{formatMoney(line.lineCost)}</td>
       <td className="ta-r">
         <CellInput
           value={line.saleUnitPrice}
+          display={formatMoney(line.saleUnitPrice)}
           rowKey={line.id}
           field="saleUnitPrice"
           ariaLabel={`第 ${index + 1} 行对客单价`}

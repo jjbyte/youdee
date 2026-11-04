@@ -234,6 +234,31 @@ async function main() {
   const same = lowestRow && lookupPrice && String(lowestRow.base_unit_price) === String(lookupPrice);
   record('比价价 = 取价价（同一价同一个数）', same, `比价 ${lowestRow?.base_unit_price ?? '-'} / 取价 ${lookupPrice ?? lookup.json?.message ?? '-'}`);
 
+  // 5b. 「用哪家」：取价接口带 supplier_id 时，必须**换成那一家的价**。
+  //     价格库默认取"同性质同口径里最便宜"的那家；但便宜那家可能做不出来、交不了期、
+  //     或者上次惹过客户——这是商务判断。界面原来没有传 supplier_id 的地方，
+  //     只能攒进去再逐行点成本格换，等于勾完还要回头挨个改一遍。
+  const sameBasisRows = rows.filter((r) => r.tax_included === true);
+  const notLowest = sameBasisRows.find((r) => r.supplier_id !== lowestRow?.supplier_id);
+  if (notLowest) {
+    const picked = await call(
+      'GET',
+      `/price-lookup?item_id=${truss.id}&qty=18&pricing_nature=custom_made&tax_basis=inclusive`
+        + `&supplier_id=${notLowest.supplier_id}&on_date=${new Date().toISOString().slice(0, 10)}`,
+      { as: 'admin' },
+    );
+    const gotSupplier = picked.json?.data?.resolved_from?.supplier_id;
+    const gotPrice = String(picked.json?.data?.base_unit_price ?? '');
+    record(
+      '攒单「用哪家」：指定供应商后取到的是这一家（不是默认的最低价那家）',
+      gotSupplier === notLowest.supplier_id && gotPrice === String(notLowest.base_unit_price),
+      `${notLowest.supplier_name} 应 ${notLowest.base_unit_price}，实得 ${gotPrice || picked.json?.message || '-'}`
+        + (gotSupplier === notLowest.supplier_id ? '' : `（取到的是 ${gotSupplier}）`),
+    );
+  } else {
+    record('攒单「用哪家」：指定供应商后取到的是这一家（不是默认的最低价那家）', false, '含税口径下只有一家，没法换');
+  }
+
   // 6. 建单 + 加两行
   const today = new Date();
   const eventDate = new Date(today.getTime() + 30 * 86400_000).toISOString().slice(0, 10);

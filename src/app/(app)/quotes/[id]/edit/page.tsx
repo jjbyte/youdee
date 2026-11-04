@@ -252,7 +252,9 @@ export default function QuoteEditPage() {
         <PickerPanel
           disabled={locked}
           marginRate={quote.targetMarginRate === null ? null : Number(quote.targetMarginRate)}
-          onAdd={(items, marginRate) => addItems(items, marginRate)}
+          taxBasis={quote.taxStatement}
+          eventDate={quote.eventDate}
+          onAdd={(items, marginRate, picks) => addItems(items, marginRate, picks)}
           onToast={(m, tone) => say(m, tone)}
         />
 

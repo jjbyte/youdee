@@ -97,6 +97,7 @@ fi
 tar -czf "$OUT" \
   --exclude=./node_modules \
   --exclude=./.next \
+  --exclude='./.next.bak*' \
   --exclude=./.git \
   --exclude=./pgdata \
   --exclude=./.pgtest \

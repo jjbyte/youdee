@@ -1,7 +1,7 @@
 'use client';
 import type { LowestSummary, ItemType } from '@/lib/types';
 import { formatMoney, cx } from '@/lib/format';
-import { groupLabel } from '@/lib/labels';
+import { groupLabel, unitLabel } from '@/lib/labels';
 
 /**
  * 最低价摘要（多行渲染，唯一实现，5 处共用）：
@@ -16,6 +16,7 @@ export function LowestSummaryView({
   summary,
   itemType,
   unitName,
+  hasPrices = false,
   maxRows = 2,
   className,
 }: {
@@ -23,6 +24,8 @@ export function LowestSummaryView({
   itemType: ItemType;
   /** base_unit_name，用于 unitCode 缺失时兜底 */
   unitName?: string | null;
+  /** 这家主体在库里有没有价（有价但没有本口径的价，和"从来没报过价"是两件事） */
+  hasPrices?: boolean;
   maxRows?: number;
   className?: string;
 }) {
@@ -34,24 +37,31 @@ export function LowestSummaryView({
         <span className="lowest-line" style={{ color: 'var(--table-num-muted)' }}>
           —
         </span>
+        {/* 「报价数 1 家」旁边写「未报价」是自相矛盾的：真正的情况是这一家有价，
+            但那条价不是这个口径（含税单遇上只报不含税的供应商）。分开说。 */}
         <span className="lowest-line" style={{ color: 'var(--fg-meta)' }}>
-          未报价
+          {hasPrices ? '本口径无价' : '未报价'}
         </span>
       </div>
     );
   }
 
-  // 单组：只出金额（并列时由调用方传 tieCount 才显示 ×2，没有就不编）
+  // 单组：出金额 + 单位。
+  // **单位必须跟着写**：group_lowest 是折算到比价单位后的价，而列表左边的「单位」列写的是
+  // 基础单位（如「套」）。桁架背景板一"套"是 18 ㎡，只写 ¥80.56 会被读成"一套 80.56"——
+  // 差 18 倍，而且看起来完全正常。
   if (!summary?.isMultiGroup && groups.length === 1) {
     const g = groups[0]!;
+    const unit = unitLabel(g.unitCode, unitName);
     return (
       <div className={cx('lowest-lines', className)}>
         <b
           className="num"
           style={{ color: 'var(--success)', fontWeight: 'var(--fw-medium)', fontSize: 'var(--text-sm)' }}
-          aria-label={`最低 ${formatMoney(g.groupLowest)} 元每${g.unitCode || unitName || ''}`}
+          aria-label={`最低 ${formatMoney(g.groupLowest)} 元每${unit}`}
         >
           {formatMoney(g.groupLowest, { symbol: true })}
+          {unit ? <span className="t-2xs t-3">/{unit}</span> : null}
         </b>
       </div>
     );
@@ -65,7 +75,7 @@ export function LowestSummaryView({
         <span className="lowest-line" key={`${g.pricingNature}-${g.pricingMode ?? ''}-${i}`}>
           {itemType === 'personnel' ? '' : `${groupLabel(g.pricingNature, g.pricingMode, itemType)} `}
           <b>{formatMoney(g.groupLowest, { symbol: true })}</b>
-          {g.unitCode ? `/${g.unitCode}` : ''}
+          {g.unitCode ? `/${unitLabel(g.unitCode, unitName)}` : ''}
         </span>
       ))}
       {rest > 0 ? <span className="lowest-line t-3">还有 {rest} 种</span> : null}

@@ -38,10 +38,17 @@ export async function lowestSummaries(
     group_lowest: string;
   }>(
     `SELECT DISTINCT ON (p.item_id, p.pricing_nature, COALESCE(p.unit_mode, ''))
-            p.item_id, p.pricing_nature, p.unit_mode, p.unit_code, p.supplier_id,
+            p.item_id, p.pricing_nature, p.unit_mode,
+            -- 单位必须用**比价单位**：group_lowest 是 unit_price × base_unit_qty，
+            -- 已经折算到比价单位上了。这里若返回 p.unit_code（供应商原始录入单位，
+            -- 比如"套"），就会出现「¥80.56/套」而真值是每㎡ 80.56——差 18 倍，
+            -- 而且看起来完全正常。数字和单位必须同源。
+            COALESCE(i.compare_unit_code, i.base_unit_code) AS unit_code,
+            p.supplier_id,
             s.name AS supplier_name, s.type AS supplier_type,
             ROUND(COALESCE(t.tier_price, p.unit_price) * COALESCE(p.base_unit_qty, 1), 4) AS group_lowest
        FROM prices p
+       JOIN items i ON i.id = p.item_id
        JOIN suppliers s ON s.id = p.supplier_id AND s.is_active
        LEFT JOIN LATERAL (
          SELECT ti.unit_price AS tier_price FROM price_tiers ti

@@ -3,7 +3,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { api, errorMessage, isApiError } from '@/lib/api';
 import { todayISO } from '@/lib/format';
 import type { ItemDetail, ItemListItem, QuoteDetail, QuoteItem, RiskCheckResult } from '@/lib/types';
-import { lineHasCost, linePatchBody } from './quote-shared';
+import { lineHasCost, linePatchBody, type SupplierPick } from './quote-shared';
 import type { LineFlags } from './quote-line-row';
 
 type Tone = 'success' | 'warn' | 'danger';
@@ -88,9 +88,17 @@ export function useQuoteLines({
    * `marginRate`（百分数，如 "40"）：单头还没有目标毛利率时由选品面板带上。
    * 对客价是成本按毛利率反推出来的，服务端拿不到毛利率就**整批拒绝**
    * （40001「无法反推」）——不先落这一笔，攒单在新单上一律失败。
+   *
+   * `picks`：选品面板里指定的「这一项用哪一家」。没指定就走价格库的默认取价。
+   * 指定了就必须**按指定的那家取**——`/price-lookup` 早就支持 `supplier_id`，
+   * 但界面从来没有传过它，于是"勾完再一家家去行上换供应商"成了必需动作。
    */
   const addItems = useCallback(
-    async (items: ItemListItem[], marginRate?: string): Promise<AddResult> => {
+    async (
+      items: ItemListItem[],
+      marginRate?: string,
+      picks?: Map<string, SupplierPick>,
+    ): Promise<AddResult> => {
       if (!quote) return { added: 0, message: '报价单还没打开。' };
 
       // 单头的目标毛利率是反推对客价的唯一依据：先落库，再攒行
@@ -106,26 +114,35 @@ export function useQuoteLines({
       const lines: Array<Record<string, unknown>> = [];
       const problems: string[] = [];
       for (const it of items) {
+        const pick = picks?.get(it.id);
         const groups = it.lowestSummary?.groups ?? [];
+        // 指定了供应商时，交易性质也一起定下了（两者是同一张价的属性，不能分开问）
         const nature =
-          groups.length === 1 ? groups[0]!.pricingNature : it.itemType === 'personnel' ? 'service' : null;
+          pick?.pricingNature ??
+          (groups.length === 1 ? groups[0]!.pricingNature : it.itemType === 'personnel' ? 'service' : null);
         if (!nature) {
           // 0 组 = 一条价都没录；>1 组 = 同一主体有两种交易性质（租赁 / 买断），价格不能混。
           // 这两种都不猜：猜错的成本会被当成真的写进客户版。
           problems.push(
             groups.length === 0
               ? `${it.name} 还没有任何一条价，先去比价页录一条（或在那里手填成本）`
-              : `${it.name} 有 ${groups.length} 种交易性质，去比价页选一种再攒`,
+              : `${it.name} 有 ${groups.length} 种交易性质，在左边的「用哪家」里选一种再攒`,
           );
           continue;
         }
+        // 参考价要取自**同一个性质**的组：选了买断却拿租赁的最低价当参照，
+        // 行上那句「比最低高 ¥120」就是错的
+        const refGroup = groups.find((g) => g.pricingNature === pick?.pricingNature) ?? groups[0];
         const base = {
           lineKind: it.itemType,
           pricingNature: nature,
           itemNameSnapshot: it.name,
           specSnapshot: it.spec,
           categorySnapshot: it.categoryName,
-          unitSnapshot: it.baseUnitName || it.baseUnitCode,
+          // 单位跟成本单价同源：costUnitPrice 是 price-lookup 归一化到**比价单位**的价，
+          // qty 也按比价单位填。这里若写基础单位，就会出现「¥177.78 / 套」而真值是每㎡
+          // 177.78（一"套"是 18㎡）——差 18 倍，且看起来完全正常。
+          unitSnapshot: it.compareUnitName || it.baseUnitName || it.baseUnitCode,
           qty: '1',
           itemId: it.id,
         };
@@ -137,6 +154,7 @@ export function useQuoteLines({
             // 本单口径只能从这张单自己身上读
             taxBasis: quote.taxStatement,
             onDate: quote.eventDate ?? todayISO(),
+            supplierId: pick?.supplierId,
           });
           lines.push({
             ...base,
@@ -145,8 +163,8 @@ export function useQuoteLines({
             priceId: look.resolvedFrom.priceId,
             supplierId: look.resolvedFrom.supplierId,
             supplierNameSnapshot: look.resolvedFrom.supplierName,
-            referenceLowestPrice: groups[0]?.groupLowest ?? null,
-            referenceLowestSupplierId: groups[0]?.supplierId ?? null,
+            referenceLowestPrice: refGroup?.groupLowest ?? null,
+            referenceLowestSupplierId: refGroup?.supplierId ?? null,
             sourceTierMinQty: look.resolvedFrom.tierMinQty,
             priceEffectiveFrom: look.resolvedFrom.effectiveFrom,
             priceEffectiveTo: look.resolvedFrom.effectiveTo,
@@ -154,7 +172,11 @@ export function useQuoteLines({
         } catch (e) {
           if (isApiError(e) && e.code === 42205) {
             lines.push({ ...base, costSource: 'price_book' });
-            problems.push(`${it.name} 在本单口径下没有有效价，进单后手填成本`);
+            problems.push(
+              pick
+                ? `${it.name}：${pick.supplierName} 在本单口径下没有有效价，进单后手填成本`
+                : `${it.name} 在本单口径下没有有效价，进单后手填成本`,
+            );
           } else {
             problems.push(`${it.name}：${errorMessage(e)}`);
           }

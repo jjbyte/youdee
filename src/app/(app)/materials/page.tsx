@@ -313,6 +313,7 @@ export default function MaterialsPage() {
                           summary={r.lowestSummary}
                           itemType={r.itemType}
                           unitName={r.baseUnitName}
+                          hasPrices={r.priceSupplierCount > 0}
                           maxRows={2}
                         />
                       </Td>

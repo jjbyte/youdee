@@ -45,7 +45,10 @@ export function QuoteLinesPanel({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    setCompact(window.innerWidth < 1366);
+    // 完整档 13 列要 1104px，而 1440 的屏扣掉侧栏 224 + 选品栏 320 + 边距只剩 848——
+    // 摆不下就会横滚，而横滚把"毛利率 / 供应商 / 操作"三列推出视口，看不见等于没有。
+    // 所以阈值从 1366 提到 1520：1440 及以下默认精简档（成本单价列不精简，见 row 注释）。
+    setCompact(window.innerWidth < 1520);
   }, []);
 
   // 行被删掉后，勾选里会留下不存在的 id——批量删的时候就会去删一个已经没了的行

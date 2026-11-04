@@ -98,6 +98,9 @@ export interface ItemListItem {
   spec: string | null;
   baseUnitCode: string;
   baseUnitName: string;
+  /** 比价单位（为空时等于基础单位）。成本单价是按它归一化的，行上的单位必须用它 */
+  compareUnitCode: string | null;
+  compareUnitName: string | null;
   firstImageUrl: string | null;
   categoryId: string;
   categoryName: string;

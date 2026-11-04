@@ -55,6 +55,7 @@ export function QuoteLines({
       <col />
       <col style={{ width: 52 }} />
       <col style={{ width: 60 }} />
+      <col style={{ width: 84 }} />
       <col style={{ width: 92 }} />
       <col style={{ width: 88 }} />
       <col style={{ width: 96 }} />
@@ -79,11 +80,11 @@ export function QuoteLines({
     </colgroup>
   );
 
-  const cols = compact ? 10 : 13;
+  const cols = compact ? 11 : 13;
 
   return (
     <div>
-      <table className="tbl" style={{ tableLayout: 'fixed', minWidth: compact ? 640 : 1104 }}>
+      <table className="tbl" style={{ tableLayout: 'fixed', minWidth: compact ? 724 : 1104 }}>
         {colgroup}
         <thead>
           <tr>
@@ -97,11 +98,10 @@ export function QuoteLines({
             <th scope="col" className="ta-r">
               数量
             </th>
-            {compact ? null : (
-              <th scope="col" className="ta-r">
-                成本单价
-              </th>
-            )}
+            {/* 成本单价列不随密度收起：它是「换供应商」的唯一入口，收起等于这个动作消失 */}
+            <th scope="col" className="ta-r">
+              成本单价
+            </th>
             <th scope="col" className="ta-r">
               成本小计
             </th>

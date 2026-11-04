@@ -9,9 +9,23 @@
  *   ③ 分组：按行上的 categorySnapshot 分段，小计按**该组全部行**算
  *      （导出时隐藏行会整行剔除并重算，但屏幕上那行必须留着）。
  */
-import type { QuoteItem } from '@/lib/types';
+import type { PricingNature, QuoteItem } from '@/lib/types';
 
 const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二'];
+
+/**
+ * 攒单时给某个物料指定的那一家（用户在选品面板里选了非「自动」的一项）。
+ *
+ * 为什么带着 pricingNature：一个物料可能同时有「租赁·按天」和「买断」两种价，
+ * 选供应商的同时也就把交易性质定死了——两者不能分两次问，否则会拼出一条
+ * "A 家的价 + B 家的性质"的组合，价格库里根本不存在这样的组合。
+ */
+export interface SupplierPick {
+  pricingNature: PricingNature;
+  priceId: string;
+  supplierId: string;
+  supplierName: string;
+}
 
 export interface LineGroup {
   key: string;

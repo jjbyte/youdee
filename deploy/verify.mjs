@@ -60,13 +60,38 @@ async function main() {
   record('找到示例主体「桁架背景板」', !!truss, truss ? truss.id : '未找到，后续比价与取价检查会跳过');
   if (!truss) return;
 
-  // 4. 比价：五条价必须都在（含不可比的），最低价必须标出来
+  // 4. 比价：所有价必须都在（含不可比的），最低价必须标出来
   const cmp = await call('GET', `/items/${truss.id}/compare?qty_base=18&tax_basis=inclusive`, { as: 'admin' });
   const group = (cmp.json?.data?.groups ?? [])[0];
   const rows = group?.rows ?? [];
   const lowestRow = rows.find((r) => r.is_lowest);
   record('比价命中 1 组', !!group, group ? `${group.pricing_nature} / ${group.unit_mode ?? '非时间'} / 可比 ${group.comparable_count}/${group.total_count}` : '无分组');
-  record('不可比的行没有被隐藏', rows.length >= 4, `返回 ${rows.length} 行`);
+
+  // 铁律：不可比的行不参与排序，但**绝不隐藏** —— 过滤掉"这家有货、只是单位或口径没法比"，
+  // 用户永远不会想起来补折算系数，也永远以为这家没报价。
+  //
+  // 这里曾经写的是 `rows.length >= 4`（期待种子有 4 家），种子只有 3 家就报失败，
+  // 把正确行为判成缺陷。断言不能依赖"现在有几家供应商"，只断言恒等关系：
+  //   ① 返回行数 == total_count                —— 少一行就说明被过滤了
+  //   ② 不可比行数 == total_count - 可比数      —— 组内计数自洽
+  //   ③ 每个不可比行都带 warnings              —— 灰化卡片上得有话说
+  //   ④ 换一次税口径，家数不变                  —— 换口径只改"谁最低"，不改"有谁"
+  const cmpOther = await call('GET', `/items/${truss.id}/compare?qty_base=18&tax_basis=exclusive`, { as: 'admin' });
+  const otherRows = (cmpOther.json?.data?.groups ?? [])[0]?.rows ?? [];
+  const incomparable = rows.filter((r) => r.exclusive_reason);
+  const groupTotal = group?.total_count ?? 0;
+  const comparableCount = group?.comparable_count ?? 0;
+  const allKept =
+    rows.length === groupTotal &&
+    incomparable.length === groupTotal - comparableCount &&
+    incomparable.every((r) => Array.isArray(r.warnings) && r.warnings.length > 0) &&
+    otherRows.length === groupTotal;
+  record(
+    '不可比的行没有被隐藏',
+    allKept,
+    `共 ${rows.length} 行 = 可比 ${comparableCount} + 不可比 ${incomparable.length}` +
+      `（${incomparable.map((r) => r.exclusive_reason).join('、') || '无'}）；换口径后仍 ${otherRows.length} 行`,
+  );
   record(
     '标出了最低价',
     !!lowestRow,

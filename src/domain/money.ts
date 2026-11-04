@@ -18,30 +18,51 @@ export const SCALE_MONEY = 4;
 const S_MONEY = 10n ** 4n;
 const S_AMOUNT = 10n ** 2n;
 const S_QTY = 10n ** 2n;
+/** 折算系数的标度。DB 是 numeric(12,6)，必须按 6 位解析，否则 0.055556 会被截成 0.0555 */
+export const SCALE_RATIO = 6;
+const S_RATIO = 10n ** 6n;
 
 export type MoneyInput = string | number | bigint | null | undefined;
 
-/** 解析为 scale=4 的定点整数。非法输入抛错，绝不静默变 0。 */
-export function parseMoney(v: MoneyInput): bigint {
+/**
+ * 通用定点解析。**超出目标标度的位一律 ROUND_HALF_UP，不截断。**
+ *
+ * 截断看着"保守"，实际是制造两个不一样的数：折算系数 0.055556 按 scale4 截断成
+ * 0.0555，于是比价页算出 80.4750，而取价 / 报价成本走 SQL numeric 得 80.5562。
+ * 同一个价在两个页面上显示两个数，用户会开始怀疑这个系统所有的数。
+ */
+function parseScaled(v: MoneyInput, scale: number, label: string): bigint {
   if (v === null || v === undefined || v === '') {
-    throw new Error('金额不能为空');
+    throw new Error(`${label}不能为空`);
   }
-  if (typeof v === 'bigint') return v * S_MONEY;
+  const unit = 10n ** BigInt(scale);
+  if (typeof v === 'bigint') return v * unit;
 
   const raw = typeof v === 'number' ? numToPlainString(v) : String(v).trim();
   if (!/^-?\d+(\.\d+)?$/.test(raw)) {
-    throw new Error(`金额格式非法: ${String(v)}`);
+    throw new Error(`${label}格式非法: ${String(v)}`);
   }
   const neg = raw.startsWith('-');
   const body = neg ? raw.slice(1) : raw;
   const [intPart = '0', fracRaw = ''] = body.split('.');
-  const frac = (fracRaw + '0000').slice(0, 4);
-  const scaled = BigInt(intPart) * S_MONEY + BigInt(frac || '0');
+
+  const keep = (fracRaw + '0'.repeat(scale)).slice(0, scale);
+  let scaled = BigInt(intPart) * unit + BigInt(keep || '0');
+
+  // 被丢掉的第 scale+1 位若 >= 5，进位（HALF_UP）
+  if (fracRaw.length > scale && Number(fracRaw[scale]) >= 5) {
+    scaled += 1n;
+  }
   return neg ? -scaled : scaled;
 }
 
+/** 解析为 scale=4 的定点整数（单价口径）。非法输入抛错，绝不静默变 0。 */
+export function parseMoney(v: MoneyInput): bigint {
+  return parseScaled(v, 4, '金额');
+}
+
 /**
- * ⚠ 格式化函数按**输入标度**分三个，名字里带清楚，不许混用：
+ * 【注意】格式化函数按**输入标度**分三个，名字里带清楚，不许混用：
  *
  *   fmtPrice(p4, decimals) —— 输入单价（scale 4），输出 2 或 4 位小数
  *   fmtAmount(a2)          —— 输入金额（scale 2），输出 2 位小数
@@ -87,31 +108,21 @@ export function formatMoney(scaled4: bigint): string {
 
 /** 解析金额为 scale=2 定点整数（行小计、合计、优惠额用这个，不要用 parseMoney） */
 export function parseAmount(v: MoneyInput): bigint {
-  if (v === null || v === undefined || v === '') throw new Error('金额不能为空');
-  if (typeof v === 'bigint') return v * S_AMOUNT;
-  const raw = typeof v === 'number' ? numToPlainString(v) : String(v).trim();
-  if (!/^-?\d+(\.\d+)?$/.test(raw)) throw new Error(`金额格式非法: ${String(v)}`);
-  const neg = raw.startsWith('-');
-  const body = neg ? raw.slice(1) : raw;
-  const [intPart = '0', fracRaw = ''] = body.split('.');
-  // 第三位四舍五入（HALF_UP），而不是截断
-  const frac3 = (fracRaw + '000').slice(0, 3);
-  let scaled = BigInt(intPart) * S_AMOUNT + BigInt(frac3.slice(0, 2));
-  if (Number(frac3[2]) >= 5) scaled += 1n;
-  return neg ? -scaled : scaled;
+  return parseScaled(v, 2, '金额');
 }
 
 /** 解析数量为 scale=2 定点整数 */
 export function parseQty(v: MoneyInput): bigint {
-  if (v === null || v === undefined || v === '') throw new Error('数量不能为空');
-  const raw = typeof v === 'number' ? numToPlainString(v) : String(v).trim();
-  if (!/^-?\d+(\.\d+)?$/.test(raw)) throw new Error(`数量格式非法: ${String(v)}`);
-  const neg = raw.startsWith('-');
-  const body = neg ? raw.slice(1) : raw;
-  const [intPart = '0', fracRaw = ''] = body.split('.');
-  const frac = (fracRaw + '00').slice(0, 2);
-  const scaled = BigInt(intPart) * S_QTY + BigInt(frac || '0');
-  return neg ? -scaled : scaled;
+  return parseScaled(v, 2, '数量');
+}
+
+/**
+ * 解析折算系数为 scale=6 定点整数。
+ * 必须单独一个函数：折算系数不是金额也不是数量，它是「1 个基准单位 = N 个本价格单位」
+ * 这个比例。用 parseMoney（scale4）解析 numeric(12,6) 的系数会丢两位有效数字。
+ */
+export function parseRatio(v: MoneyInput): bigint {
+  return parseScaled(v, SCALE_RATIO, '折算系数');
 }
 
 /** 单价(scale4) × 数量(scale2) → 金额(scale2)，HALF_UP */
@@ -130,9 +141,9 @@ export function applyConversion(unitPrice: bigint, baseUnitQty: MoneyInput): big
   if (baseUnitQty === null || baseUnitQty === undefined) {
     throw new Error('未填折算系数，该价格不参与比价');
   }
-  // unitPrice scale4 × baseUnitQty scale4 = scale8 → 回到 scale4 需 /1e4
-  const bq = parseMoney(baseUnitQty);
-  return divRoundHalfUp(unitPrice * bq, S_MONEY);
+  // unitPrice scale4 × ratio scale6 = scale10 → 回到 scale4 需 /1e6
+  const bq = parseRatio(baseUnitQty);
+  return divRoundHalfUp(unitPrice * bq, S_RATIO);
 }
 
 /**
@@ -143,9 +154,9 @@ export function qtyToPricingUnit(qtyBase: bigint, baseUnitQty: MoneyInput): bigi
   if (baseUnitQty === null || baseUnitQty === undefined) {
     throw new Error('未填折算系数，无法换算数量');
   }
-  const bq = parseMoney(baseUnitQty);
-  // qty scale2 × bq scale4 = scale6 → scale2 需 /1e4
-  return divRoundHalfUp(qtyBase * bq, S_MONEY);
+  const bq = parseRatio(baseUnitQty);
+  // qty scale2 × ratio scale6 = scale8 → 回到 scale2 需 /1e6
+  return divRoundHalfUp(qtyBase * bq, S_RATIO);
 }
 
 /** 由成本与目标毛利率反推对客价：sale = cost / (1 - margin)，HALF_UP 到分 */

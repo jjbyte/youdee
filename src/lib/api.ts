@@ -5,7 +5,14 @@
  *   - 信封 { code, data, message }，code !== 0 抛 ApiError（保留 code / message / data）
  *   - 页面显示 message 原文，**不改写服务端的中文提示**
  *   - 认证走 httpOnly Cookie rc_session，前端不读不写
- *   - 服务端若返回 snake_case，这里统一转 camelCase（deepCamel），页面只认一套键名
+ *   - **边界上只做一次换名**：响应 snake_case → camelCase（deepCamel），
+ *     请求体 camelCase → snake_case（deepSnake）。页面两侧都只认 camelCase。
+ *
+ * 为什么请求体也要转：服务端的 body 解析器（server/quote-item-body.ts、
+ * quotes/[id]/route.ts 等）**逐字读 snake_case 的键**，读不到就当「没传」。
+ * 于是 `{ discountAmount: 100 }` 不报错、返回 200、优惠金额却是 0——
+ * 它比 400 危险得多：用户以为存上了，下次打开发现没了，然后不再信这个系统。
+ * 这类 bug 只有真点过一遍才会暴露，而前端没有 e2e，所以只能靠边界统一兜住。
  */
 import type {
   Category,
@@ -20,6 +27,7 @@ import type {
   PriceLookupResult,
   PriceTrend,
   QuoteDetail,
+  QuoteItem,
   QuoteListItem,
   QuoteSettings,
   QuoteTotals,
@@ -95,7 +103,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
       credentials: 'same-origin',
       cache: 'no-store',
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(deepSnake(body)),
       signal,
     });
   } catch (e) {
@@ -130,11 +138,33 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   return deepCamel<T>(payload.data);
 }
 
+function snakeKey(k: string): string {
+  return k.replace(/[A-Z]/g, (c: string) => `_${c.toLowerCase()}`);
+}
+
+/** 递归把请求体的 camelCase 键转成 snake_case；只动键名，不动值（金额字符串原样过去） */
+function deepSnake(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map((x) => deepSnake(x));
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      out[snakeKey(k)] = deepSnake(val);
+    }
+    return out;
+  }
+  return v;
+}
+
+/**
+ * 拼 query string。**键名转 snake_case**——接口契约（openapi）全部是 `tax_basis`
+ * / `pricing_nature` / `item_id` 这类，传 camelCase 会被服务端静默忽略并退回默认值，
+ * 那种 bug 不报错、只是结果是错的，最难查。
+ */
 export function qs(params: Record<string, string | number | boolean | null | undefined>): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === null || v === undefined || v === '') continue;
-    sp.set(k, String(v));
+    sp.set(snakeKey(k), String(v));
   }
   const s = sp.toString();
   return s ? `?${s}` : '';
@@ -154,8 +184,12 @@ export const api = {
     ),
   suppliers: (params: { q?: string; type?: string; isActive?: boolean; page?: number; limit?: number } = {}) =>
     request<Page<Supplier>>(`/suppliers${qs(params)}`),
+  supplier: (id: string) => request<Supplier>(`/suppliers/${id}`),
   createSupplier: (body: Record<string, unknown>) =>
     request<Supplier>('/suppliers', { method: 'POST', body }),
+  updateSupplier: (id: string, body: Record<string, unknown>) =>
+    request<Supplier>(`/suppliers/${id}`, { method: 'PATCH', body }),
+  deleteSupplier: (id: string) => request<null>(`/suppliers/${id}`, { method: 'DELETE' }),
 
   // ── 主体 ──
   items: (params: {
@@ -167,6 +201,7 @@ export const api = {
     limit?: number;
   }) => request<Page<ItemListItem>>(`/items${qs(params)}`),
   item: (id: string) => request<ItemDetail>(`/items/${id}`),
+  createItem: (body: Record<string, unknown>) => request<{ id: string }>('/items', { method: 'POST', body }),
   searchLite: (q: string, itemType?: 'material' | 'personnel', limit = 20) =>
     request<ItemListItem[]>(`/items/search-lite${qs({ q, itemType, limit })}`),
 
@@ -203,7 +238,7 @@ export const api = {
     request<QuoteDetail>(`/quotes/${id}`, { method: 'PATCH', body }),
   deleteQuote: (id: string) => request<null>(`/quotes/${id}`, { method: 'DELETE' }),
   addQuoteItem: (id: string, body: Record<string, unknown>) =>
-    request<{ item: Record<string, unknown>; quoteTotals: QuoteTotals }>(`/quotes/${id}/items`, {
+    request<{ item: QuoteItem; quoteTotals: QuoteTotals }>(`/quotes/${id}/items`, {
       method: 'POST',
       body,
     }),
@@ -219,6 +254,12 @@ export const api = {
     ),
   deleteQuoteItem: (id: string, itemId: string) =>
     request<{ quoteTotals: QuoteTotals }>(`/quotes/${id}/items/${itemId}`, { method: 'DELETE' }),
+  /**
+   * 行排序。服务端要求**一次交全部行的完整顺序**（不多不少），只换一行也得把整张单的 id 列表发上去。
+   * 方法名是 PATCH 不是 POST——照后端 route.ts 抄的。
+   */
+  reorderQuoteItems: (id: string, orderedIds: string[]) =>
+    request<QuoteItem[]>(`/quotes/${id}/items/reorder`, { method: 'PATCH', body: { orderedIds } }),
   applyTargetMargin: (id: string, itemIds?: string[]) =>
     request<{ updated: Array<{ itemId: string; oldSaleUnitPrice: string; newSaleUnitPrice: string }>; quoteTotals: QuoteTotals }>(
       `/quotes/${id}/apply-target-margin`,

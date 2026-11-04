@@ -77,6 +77,9 @@ const ERROR_STATUS: Record<number, number> = {
 /**
  * PostgreSQL 原生错误 → 业务错误码。
  * 这里必须"认识"每一条约束，否则用户会看到 23P01 这种天书。
+ *
+ * 注意：约束名 / SQLSTATE 只允许留在服务端日志里，**一个字节都不能进响应体**。
+ * 用户不需要知道 prices_no_overlap 是什么，他只需要知道"这段有效期撞上了"。
  */
 export function translatePgError(e: unknown): AppError | null {
   const err = e as { code?: string; constraint?: string; detail?: string; message?: string };
@@ -88,7 +91,6 @@ export function translatePgError(e: unknown): AppError | null {
       40902,
       '这个供应商在相同口径下已有一段生效期重叠的价格。改价请用「新增并关闭旧价」，不要覆盖。',
       409,
-      { detail: { constraint: 'prices_no_overlap' } },
     );
   }
   // check 约束
@@ -104,7 +106,7 @@ export function translatePgError(e: unknown): AppError | null {
       quotes_issued_at_present: new AppError(50001, '出单时间缺失，已拒绝保存。', 500),
     };
     if (err.constraint && map[err.constraint]) return map[err.constraint]!;
-    return new AppError(40001, '数据未通过完整性校验，请检查填写内容。', 400, { detail: { constraint: err.constraint } });
+    return new AppError(40001, '数据未通过完整性校验，请检查填写内容。', 400);
   }
   // 唯一约束
   if (err.code === '23505') {
@@ -116,11 +118,11 @@ export function translatePgError(e: unknown): AppError | null {
       price_tiers_pkey: '同一价格下阶梯起始数量重复。',
     };
     const msg = (err.constraint && dup[err.constraint]) || '已存在相同记录。';
-    return new AppError(40901, msg, 409, { detail: { constraint: err.constraint } });
+    return new AppError(40901, msg, 409);
   }
   // 外键
   if (err.code === '23503') {
-    return new AppError(40904, '这条记录还被别处引用，不能删除。', 409, { detail: { constraint: err.constraint } });
+    return new AppError(40904, '这条记录还被别处引用，不能删除。', 409);
   }
   // 唯一约束（排除约束已在上方）
   if (err.code === '23502') {

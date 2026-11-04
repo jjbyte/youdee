@@ -198,6 +198,11 @@ export const EFFECTIVE_STATE_LABELS: Record<string, string> = {
   archived: '已作废',
 };
 
+export function effectiveStateLabel(state: string | null | undefined): string {
+  if (!state) return '';
+  return EFFECTIVE_STATE_LABELS[state] ?? state;
+}
+
 export function missingReasonText(reason: string): string {
   if (reason === 'NO_VALID_PRICE') return '今天没有有效价';
   return '没有能用的价';

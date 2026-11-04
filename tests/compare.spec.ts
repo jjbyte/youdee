@@ -140,6 +140,25 @@ describe('compare — 交易性质分组（TC-3 组）', () => {
   });
 });
 
+describe('compare — 数量必须按 scale2 换算（否则档位全错）', () => {
+  it('qty_base 是「比价基准单位」的数量，换算到供应商计价单位后要落在正确档', () => {
+    // 基准 = ㎡，该供应商按张售，1㎡ = 2 张；买 18㎡ → 36 张
+    // 阶梯 30 张起降到 40 元。若数量被放大 100 倍（1800 张），会命中 500 档的 38 元 —— 少报 2 元/张。
+    const g = computeComparison({
+      ...base,
+      compareUnitCode: 'sqm',
+      qtyBase: '18',
+      rows: [row({
+        priceId: 'a', supplierName: '甲', unitCode: 'sheet', baseUnitQty: '2',
+        unitPrice: '45',
+        tiers: [{ minQty: '1', unitPrice: '45' }, { minQty: '30', unitPrice: '40' }, { minQty: '500', unitPrice: '38' }],
+      })],
+    })[0]!;
+    expect(g.rows[0]!.unitPriceAtQty).toBe('40.0000');
+    expect(g.rows[0]!.tierCase).toBe('in_tier');
+  });
+});
+
 describe('compare — 阶梯价命中（TC-1 组）', () => {
   it('按数量命中对应档', () => {
     const g = computeComparison({

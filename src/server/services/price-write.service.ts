@@ -1,32 +1,21 @@
 /**
- * 价格写入：新建（含「新增并关闭旧价」标准调价流程）、受限修改、归档。
+ * 价格写入：新建（含「新增并关闭旧价」标准调价流程）。
  *
  * 三条铁律落在这里：
  *   1) 改价 = 新增一条 + 关闭旧价，**不原地 UPDATE 金额**（否则历史趋势与审计全废）；
  *   2) 区间重叠靠数据库 EXCLUDE 兜底（并发安全），预检只为给前端一条可读的建议关闭日；
  *   3) 六维唯一键里的字段（供应商/单位/性质/税口径/折算系数）换了，就是换了被比较的对象 —— 42207。
+ *
+ * 受限修改与归档见 price-patch.service：它们不动区间结构，混进来会让这份文件读起来像同一件事。
  */
 import { AppError } from '../http';
+import { addDays } from '../dates';
 import { one, today, tx } from '../db';
 import { unitModeOf } from '@/domain/units';
-import { derivePriceState } from '@/domain/price-resolve';
 import type { CurrentUser } from '../auth/session';
 import { getPriceRow, run, tiersByPriceIds, toPriceDTO, type PriceDTO } from '../store/prices.store';
 import { staleDaysThreshold } from '../store/settings.store';
-
-const LOCKED_FIELDS = [
-  'item_id',
-  'supplier_id',
-  'unit_code',
-  'pricing_nature',
-  'tax_included',
-  'base_unit_qty',
-  'unit_price',
-  'currency',
-  'effective_from',
-  'status',
-  'tiers',
-];
+import { findOverlaps, overlapError } from './price-overlap.service';
 
 export interface PriceTierInput {
   min_qty: string;
@@ -98,76 +87,11 @@ function checkTiers(tiers: PriceTierInput[] | undefined): PriceTierInput[] {
   return [...tiers].sort((a, b) => Number(a.min_qty) - Number(b.min_qty));
 }
 
-interface OverlapRow {
-  id: string;
-  supplier_name: string;
-  effective_from: string;
-  effective_to: string | null;
-}
-
-/** 与新区间有交叠的当前记录（含 superseded —— 六维键里它们同样占用区间） */
-async function findOverlaps(
-  c: Parameters<typeof run>[0],
-  p: { itemId: string; supplierId: string; nature: string; taxIncluded: boolean; unitMode: string | null },
-  from: string,
-  to: string | null,
-): Promise<OverlapRow[]> {
-  return run<OverlapRow>(
-    c,
-    `SELECT p.id, s.name AS supplier_name, p.effective_from, p.effective_to
-       FROM prices p JOIN suppliers s ON s.id = p.supplier_id
-      WHERE p.item_id = $1 AND p.supplier_id = $2 AND p.pricing_nature = $3
-        AND p.tax_included = $4 AND COALESCE(p.unit_mode, '') = COALESCE($5, '')
-        AND p.status <> 'archived'
-        AND daterange(p.effective_from, COALESCE(p.effective_to + 1, 'infinity'::date), '[)')
-            && daterange($6::date, COALESCE($7::date + 1, 'infinity'::date), '[)')
-      ORDER BY p.effective_from`,
-    [p.itemId, p.supplierId, p.nature, p.taxIncluded, p.unitMode, from, to],
-  );
-}
-
-function overlapError(rows: OverlapRow[], from: string): AppError {
-  const first = rows[0]!;
-  const closeDate = addDays(from, -1);
-  return new AppError(
-    40902,
-    `${first.supplier_name} 在 ${first.effective_from} 起已经有一段价格，与新录入的生效期重叠。`
-      + '如果是调价，请用「新增并关闭旧价」把旧价结束日设为新价生效日的前一天。',
-    409,
-    {
-      field: 'effective_from',
-      detail: {
-        proposed_close: {
-          price_id: first.id,
-          supplier_name: first.supplier_name,
-          close_effective_to: closeDate,
-          current_effective_to: first.effective_to,
-        },
-      },
-    },
-    // openapi ErrorEnvelope 把这个确认信息放在顶层，前端据此弹「将结束旧价」
-    {
-      proposed_close: {
-        price_id: first.id,
-        supplier_name: first.supplier_name,
-        close_effective_to: closeDate,
-        current_effective_to: first.effective_to,
-      },
-    },
-  );
-}
-
-export function addDays(date: string, days: number): string {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
 export async function createPrice(
   actor: CurrentUser,
   input: CreatePriceInput,
 ): Promise<PriceDTO & { previous_closed_id: string | null }> {
-  if ('id' in (input as Record<string, unknown>)) {
+  if ('id' in input) {
     throw new AppError(42207, '新建价格不接受 id。要改已有价格请新增一条并关闭旧价。', 422);
   }
   const item = await loadItem(input.item_id);
@@ -324,104 +248,4 @@ export async function createPrice(
   const tiersMap = await tiersByPriceIds([newId]);
   const dto = toPriceDTO(row, tiersMap.get(newId) ?? [], await staleDaysThreshold(), today());
   return { ...dto, previous_closed_id: prevClosedId };
-}
-
-// ── 受限修改 ────────────────────────────────────────────────
-
-export interface PatchPriceInput {
-  source_note?: string | null;
-  effective_to?: string | null;
-  moq?: string | null;
-  tax_rate?: string | null;
-}
-
-export async function patchPrice(id: string, input: PatchPriceInput, actor: CurrentUser): Promise<PriceDTO> {
-  const body = input as Record<string, unknown>;
-  const touched = Object.keys(body).filter((k) => body[k] !== undefined);
-  const violations = touched.filter((k) => LOCKED_FIELDS.includes(k));
-  if (violations.length > 0) {
-    throw new AppError(
-      40903,
-      `价格记录不能就地修改这些字段：${violations.join('、')}。改价请新增一条价格并关闭旧价。`,
-      409,
-      { detail: { locked_fields: violations } },
-    );
-  }
-  const current = await getPriceRow(id);
-  if (!current) throw new AppError(40401, '这条价格不存在。', 404);
-
-  if (input.effective_to !== undefined && input.effective_to !== null) {
-    if (input.effective_to < current.effective_from) {
-      throw new AppError(40001, '失效日不能早于生效日。', 400, { field: 'effective_to' });
-    }
-    if (!current.effective_to || input.effective_to > current.effective_to) {
-      throw new AppError(
-        40903,
-        '失效日只能往早改（提前终止）。要延长有效期请新增一条价格覆盖后面的时间。',
-        409,
-        { field: 'effective_to' },
-      );
-    }
-  }
-
-  const before = {
-    source_note: current.source_note,
-    moq: current.moq,
-    tax_rate: current.tax_rate,
-    effective_to: current.effective_to,
-  };
-  const next = {
-    source_note: input.source_note !== undefined ? input.source_note : current.source_note,
-    moq: input.moq !== undefined ? input.moq : current.moq,
-    tax_rate: input.tax_rate !== undefined ? input.tax_rate : current.tax_rate,
-    effective_to: input.effective_to !== undefined ? input.effective_to : current.effective_to,
-  };
-  await tx(async (c) => {
-    await c.query(
-      'UPDATE prices SET source_note=$2, moq=$3, tax_rate=$4, effective_to=$5, updated_at=now() WHERE id=$1',
-      [id, next.source_note, next.moq, next.tax_rate, next.effective_to],
-    );
-    await c.query(
-      `INSERT INTO price_change_logs (price_id, action, snapshot, prev_snapshot, changed_by, note)
-       VALUES ($1,'note_updated',$2::jsonb,$3::jsonb,$4,$5)`,
-      [id, JSON.stringify(next), JSON.stringify(before), actor.id, '更新备注/起订量/税率/失效日'],
-    );
-  });
-  const row = await getPriceRow(id);
-  const tiers = await tiersByPriceIds([id]);
-  return toPriceDTO(row!, tiers.get(id) ?? [], await staleDaysThreshold(), today());
-}
-
-/** 归档 = 不再参与比价与取价，历史仍可查（趋势图排除它） */
-export async function archivePrice(id: string, reason: string | null, actor: CurrentUser): Promise<PriceDTO> {
-  const current = await getPriceRow(id);
-  if (!current) throw new AppError(40401, '这条价格不存在。', 404);
-  if (current.status !== 'archived') {
-    await tx(async (c) => {
-      await c.query("UPDATE prices SET status='archived', updated_at=now() WHERE id=$1", [id]);
-      await c.query(
-        `INSERT INTO price_change_logs (price_id, action, snapshot, prev_snapshot, changed_by, note)
-         VALUES ($1,'archived',$2::jsonb,$3::jsonb,$4,$5)`,
-        [
-          id,
-          JSON.stringify({ status: 'archived' }),
-          JSON.stringify({ status: current.status }),
-          actor.id,
-          reason,
-        ],
-      );
-    });
-  }
-  const row = await getPriceRow(id);
-  const tiers = await tiersByPriceIds([id]);
-  const state = derivePriceState({
-    status: 'archived',
-    effectiveFrom: row!.effective_from,
-    effectiveTo: row!.effective_to,
-    lastUsedAt: null,
-    updatedAt: row!.updated_at.toISOString(),
-    onDate: today(),
-    staleDaysThreshold: await staleDaysThreshold(),
-  });
-  return { ...toPriceDTO(row!, tiers.get(id) ?? [], await staleDaysThreshold(), today()), effective_state: state.state };
 }

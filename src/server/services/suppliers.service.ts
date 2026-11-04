@@ -1,0 +1,159 @@
+/**
+ * 供应商主数据。
+ *
+ * 有价格记录的供应商不允许删除（40904）——历史报价单里的供应商名必须还能解析出来，
+ * 想"不看见它"应该用 is_active=false。
+ */
+import { q, one } from '../db';
+import { AppError } from '../http';
+import { SUPPLIER_TYPES } from '@/domain/units';
+
+// ── 供应商 ──────────────────────────────────────────────────
+
+export interface SupplierInput {
+  name: string;
+  type: string;
+  contact_name?: string | null;
+  contact_phone?: string | null;
+  shop_url?: string | null;
+  region?: string | null;
+  default_lead_time_days?: number | null;
+  note?: string | null;
+  is_active?: boolean;
+}
+
+interface SupplierRow {
+  id: string;
+  name: string;
+  type: string;
+  contact_name: string | null;
+  contact_phone: string | null;
+  shop_url: string | null;
+  region: string | null;
+  default_lead_time_days: number | null;
+  note: string | null;
+  is_active: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+function supplierDto(r: SupplierRow) {
+  return {
+    id: r.id,
+    name: r.name,
+    type: r.type,
+    contact_name: r.contact_name,
+    contact_phone: r.contact_phone,
+    shop_url: r.shop_url,
+    region: r.region,
+    default_lead_time_days: r.default_lead_time_days,
+    note: r.note,
+    is_active: r.is_active,
+    created_at: r.created_at.toISOString(),
+    updated_at: r.updated_at.toISOString(),
+  };
+}
+
+export interface SupplierListQuery {
+  q: string | null;
+  type: string | null;
+  isActive: boolean | null;
+  orderBy: string;
+  limit: number;
+  offset: number;
+}
+
+export async function listSuppliers(query: SupplierListQuery) {
+  const parts: string[] = [];
+  const params: unknown[] = [];
+  const add = (clause: (n: number) => string, v: unknown) => {
+    params.push(v);
+    parts.push(clause(params.length));
+  };
+  if (query.q) add((n) => `name ILIKE $${n}`, `%${query.q!.replace(/[\\%_]/g, (m) => `\\${m}`)}%`);
+  if (query.type) add((n) => `type = $${n}`, query.type);
+  if (query.isActive !== null) add((n) => `is_active = $${n}`, query.isActive);
+  const where = parts.length ? `WHERE ${parts.join(' AND ')}` : '';
+  const total = await q<{ n: string }>(`SELECT count(*)::text AS n FROM suppliers ${where}`, params);
+  const rows = await q<SupplierRow>(
+    `SELECT * FROM suppliers ${where} ORDER BY ${query.orderBy} LIMIT ${query.limit} OFFSET ${query.offset}`,
+    params,
+  );
+  return {
+    items: rows.map(supplierDto),
+    total: Number(total[0]?.n ?? 0),
+    page: Math.floor(query.offset / query.limit) + 1,
+    limit: query.limit,
+    hasMore: query.offset + rows.length < Number(total[0]?.n ?? 0),
+  };
+}
+
+export async function getSupplier(id: string) {
+  const row = await one<SupplierRow>('SELECT * FROM suppliers WHERE id = $1', [id]);
+  if (!row) throw new AppError(40401, '这家供应商不存在。', 404);
+  const stats = await one<{ price_count: string; item_count: string }>(
+    `SELECT count(*)::text AS price_count, count(DISTINCT item_id)::text AS item_count
+       FROM prices WHERE supplier_id = $1`,
+    [id],
+  );
+  return { ...supplierDto(row), price_count: Number(stats?.price_count ?? 0), item_count: Number(stats?.item_count ?? 0) };
+}
+
+export async function createSupplier(input: SupplierInput) {
+  if (!SUPPLIER_TYPES.includes(input.type as never)) {
+    throw new AppError(40001, '供应商类型不在允许值内。', 400, { field: 'type' });
+  }
+  const rows = await q<SupplierRow>(
+    `INSERT INTO suppliers (name, type, contact_name, contact_phone, shop_url, region,
+                            default_lead_time_days, note, is_active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [
+      input.name,
+      input.type,
+      input.contact_name ?? null,
+      input.contact_phone ?? null,
+      input.shop_url ?? null,
+      input.region ?? null,
+      input.default_lead_time_days ?? null,
+      input.note ?? null,
+      input.is_active ?? true,
+    ],
+  );
+  return supplierDto(rows[0]!);
+}
+
+export async function patchSupplier(id: string, input: Partial<SupplierInput>) {
+  const current = await one<SupplierRow>('SELECT * FROM suppliers WHERE id = $1', [id]);
+  if (!current) throw new AppError(40401, '这家供应商不存在。', 404);
+  if (input.type && !SUPPLIER_TYPES.includes(input.type as never)) {
+    throw new AppError(40001, '供应商类型不在允许值内。', 400, { field: 'type' });
+  }
+  const rows = await q<SupplierRow>(
+    `UPDATE suppliers SET name=$2, type=$3, contact_name=$4, contact_phone=$5, shop_url=$6, region=$7,
+            default_lead_time_days=$8, note=$9, is_active=$10, updated_at=now()
+      WHERE id=$1 RETURNING *`,
+    [
+      id,
+      input.name ?? current.name,
+      input.type ?? current.type,
+      input.contact_name !== undefined ? input.contact_name : current.contact_name,
+      input.contact_phone !== undefined ? input.contact_phone : current.contact_phone,
+      input.shop_url !== undefined ? input.shop_url : current.shop_url,
+      input.region !== undefined ? input.region : current.region,
+      input.default_lead_time_days !== undefined ? input.default_lead_time_days : current.default_lead_time_days,
+      input.note !== undefined ? input.note : current.note,
+      input.is_active !== undefined ? input.is_active : current.is_active,
+    ],
+  );
+  return supplierDto(rows[0]!);
+}
+
+export async function deleteSupplier(id: string) {
+  const current = await one<{ id: string }>('SELECT id FROM suppliers WHERE id = $1', [id]);
+  if (!current) throw new AppError(40401, '这家供应商不存在。', 404);
+  const used = await one<{ n: string }>('SELECT count(*)::text AS n FROM prices WHERE supplier_id = $1', [id]);
+  if (Number(used?.n ?? 0) > 0) {
+    throw new AppError(40904, '这家供应商还有价格记录，不能删除。可以先停用（is_active=false）。', 409);
+  }
+  await q('DELETE FROM suppliers WHERE id = $1', [id]);
+}

@@ -57,6 +57,23 @@ describe('money — 单位折算（只有乘法）', () => {
     expect(fmtPrice(normalized, 2)).toBe('15.00');
   });
 
+  it('折算系数按 6 位解析：同一个价在比价页与报价成本上必须是同一个数', () => {
+    // 桁架背景板：3200 元/套，1 套 = 18㎡ → 系数 1/18 = 0.055556（DB 是 numeric(12,6)）
+    // 按 scale4 截断会得 0.0555 → 177.60；按 6 位解析得 177.7792。
+    // 而报价成本走 SQL numeric 精确计算，两边差 0.1% 就会让人怀疑所有数字。
+    const perSqm = applyConversion(parseMoney('3200'), '0.055556');
+    expect(fmtPrice(perSqm, 4)).toBe('177.7792');
+    // 截断口径会得到 177.6000，明确写出来防止有人"优化"回去
+    expect(fmtPrice(applyConversion(parseMoney('3200'), '0.0555'), 4)).toBe('177.6000');
+  });
+
+  it('数量换算按 scale2，不放大 100 倍', () => {
+    // 买 18㎡ = 1 套（18 × 0.055556 = 1.0000）
+    expect(fmtQty(qtyToPricingUnit(parseQty('18'), '0.055556'))).toBe('1.00');
+    // 买 18㎡ 按张售（1㎡ = 2 张）= 36 张
+    expect(fmtQty(qtyToPricingUnit(parseQty('18'), '2'))).toBe('36.00');
+  });
+
   it('未填折算系数必须抛错，不能当 1 处理', () => {
     expect(() => applyConversion(parseMoney('5'), null)).toThrow();
     expect(() => qtyToPricingUnit(parseQty('1'), null)).toThrow();

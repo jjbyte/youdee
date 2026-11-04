@@ -12,7 +12,7 @@
  * 用户永远不会想起来补折算系数，也永远以为这家没报价。
  */
 import { resolveTier, derivePriceState, type TierRow } from './price-resolve';
-import { parseMoney, multiplyPriceByQty, applyConversion, qtyToPricingUnit, fmtPrice, fmtQty, divRoundHalfUp, marginRate } from './money';
+import { parseMoney, parseQty, multiplyPriceByQty, applyConversion, qtyToPricingUnit, fmtPrice, fmtQty, divRoundHalfUp, marginRate } from './money';
 import type { PricingNature, SupplierType, UnitMode } from './units';
 
 export type CompareState = 'comparable' | 'converted' | 'not_comparable';
@@ -101,8 +101,6 @@ export interface CompareInput {
 
 export function computeComparison(input: CompareInput): CompareGroup[] {
   const { rows, compareUnitCode, qtyBase, taxBasis, onDate, staleDaysThreshold, onlyNature } = input;
-
-  const qty = parseMoney(qtyBase); // scale4，qty 也用它承载，乘法里充当 scale2 时另行处理
 
   const byGroup = new Map<string, CompareRawRow[]>();
   for (const row of rows) {
@@ -216,7 +214,9 @@ function enrichRow(
   }
 
   // ② 数量换算 + 阶梯命中
-  const qtyBaseScaled = parseMoney(qtyBase);
+  // 数量必须按 scale2 解析。这里曾用 parseMoney（scale4），传入 qtyToPricingUnit 后
+  // 数量被放大 100 倍，选档位与判起订量全部落在错误的档上 —— 而且不报错，只是价不对。
+  const qtyBaseScaled = parseQty(qtyBase);
   let qtyPricedNum = Number(qtyBase);
   if (compareState === 'converted' && row.baseUnitQty) {
     try {

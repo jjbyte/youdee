@@ -1,0 +1,266 @@
+'use client';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { api, errorMessage } from '@/lib/api';
+import { cx, formatDate, formatMoney, formatRate, formatTimeRel } from '@/lib/format';
+import { PROJECT_TYPE_LABELS, PROJECT_TYPE_ORDER, QUOTE_STATUS_LABELS } from '@/lib/labels';
+import type { Page, QuoteListItem, QuoteStatus } from '@/lib/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { SearchInput, Select } from '@/components/ui/field';
+import { Table, TableWrap, Td, Th } from '@/components/ui/table';
+import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
+import { NewQuoteButton } from '@/components/new-quote-button';
+import { IconQuote } from '@/components/icons';
+
+const PAGE_SIZE = 20;
+
+/**
+ * 报价单列表（§C.8）。
+ *
+ * 状态只有三态，**「已作废」默认不列**——作废单留在默认列表里会稀释台账的可信度；
+ * 但它不能消失，筛选器里可选中，因为"这单作废了，我重报了"是需要被查证的。
+ */
+const STATUSES = ['draft', 'issued', 'void'] as const;
+
+export default function QuotesPage() {
+  const router = useRouter();
+  const [q, setQ] = useState('');
+  // 默认 draft：进列表最想看的永远是「还没做完的」。
+  // URL 上带了 status 就认它（工作台的「本月已发出」、编辑页的「复制另一张单」都靠这个跳过来）。
+  const [status, setStatus] = useState<'' | QuoteStatus>('draft');
+  /**
+   * 先等 URL 读完再发第一次请求。否则 ?status=issued 会先进来拉一遍草稿、
+   * 再切到已发出拉一遍——用户看到的是一次没必要的闪动，两次都花他的时间。
+   * 用 window.location 不用 useSearchParams：后者在构建期要求 Suspense 边界，
+   * 否则整条路由退回纯客户端渲染。
+   */
+  const [urlReady, setUrlReady] = useState(false);
+  const [projectType, setProjectType] = useState('');
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<Page<QuoteListItem> | null>(null);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [error, setError] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(async () => {
+    setState('loading');
+    try {
+      const [list, drafts, issued] = await Promise.all([
+        api.quotes({
+          q: q.trim() || undefined,
+          status: status || undefined,
+          projectType: projectType || undefined,
+          page,
+          limit: PAGE_SIZE,
+        }),
+        api.quotes({ status: 'draft', limit: 1 }).catch(() => null),
+        api.quotes({ status: 'issued', limit: 1 }).catch(() => null),
+      ]);
+      setData(list);
+      setCounts({ draft: drafts?.total ?? 0, issued: issued?.total ?? 0 });
+      setState('ready');
+    } catch (e) {
+      setError(errorMessage(e));
+      setState('error');
+    }
+  }, [q, status, projectType, page]);
+
+  // ① 先把 URL 上的筛选读进来（只读一次） ② 读完再发请求
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get('status');
+    if (s && (STATUSES as readonly string[]).includes(s)) setStatus(s as QuoteStatus);
+    setUrlReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!urlReady) return;
+    void load();
+  }, [load, urlReady]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.key === '/' && el?.tagName !== 'INPUT' && el?.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const rows = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h1 className="t-xl">报价单</h1>
+          <p className="t-sm t-3 mt-[var(--space-1)]">
+            单子只记三态：草稿、已发出、已作废。发出后不能改，只能复制重报——这样客户手里那份和系统里那份才永远一样。
+          </p>
+        </div>
+        <NewQuoteButton />
+      </div>
+
+      <div className="flex items-center gap-[var(--space-3)] flex-wrap mt-[var(--space-5)]">
+        <SearchInput
+          value={q}
+          onChange={(v) => {
+            setQ(v);
+            setPage(1);
+          }}
+          placeholder="搜单号 / 客户 / 活动名"
+          ariaLabel="搜索报价单"
+          inputRef={searchRef}
+          className="min-w-[260px]"
+        />
+        <Select
+          value={status}
+          aria-label="状态筛选"
+          style={{ width: 148 }}
+          onChange={(e) => {
+            setStatus(e.target.value as '' | QuoteStatus);
+            setPage(1);
+          }}
+        >
+          <option value="">全部状态</option>
+          <option value="draft">草稿{counts.draft ? `（${counts.draft}）` : ''}</option>
+          <option value="issued">已发出{counts.issued ? `（${counts.issued}）` : ''}</option>
+          <option value="void">已作废</option>
+        </Select>
+        <Select
+          value={projectType}
+          aria-label="项目类型筛选"
+          style={{ width: 168 }}
+          onChange={(e) => {
+            setProjectType(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">全部类型</option>
+          {PROJECT_TYPE_ORDER.map((t) => (
+            <option key={t} value={t}>
+              {PROJECT_TYPE_LABELS[t]}
+            </option>
+          ))}
+        </Select>
+
+        <span className="ml-auto t-xs t-3">
+          草稿 <span className="num">{counts.draft ?? 0}</span> · 已发出{' '}
+          <span className="num">{counts.issued ?? 0}</span>
+          {status === '' ? null : <span> · 已作废 5 张默认不列，筛选里可选</span>}
+        </span>
+      </div>
+
+      <div className="mt-[var(--space-4)]">
+        {state === 'loading' ? <TableSkeleton rows={8} cols={6} /> : null}
+        {state === 'error' ? <ErrorState message={error} onRetry={() => void load()} /> : null}
+
+        {state === 'ready' && rows.length === 0 ? (
+          <EmptyState
+            icon={<IconQuote size={24} />}
+            title={q ? `没找到「${q}」。` : '还没有报价单。'}
+            body={q ? '试试单号后三位，或者换个客户名。' : '开一张草稿单，从物料库里往里攒东西——攒的时候会自动取当天的价。'}
+          />
+        ) : null}
+
+        {state === 'ready' && rows.length > 0 ? (
+          <>
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <Th>单号</Th>
+                    <Th>客户 / 活动</Th>
+                    <Th>状态</Th>
+                    <Th align="right">对客合计</Th>
+                    <Th align="right">毛利率</Th>
+                    <Th align="right">项数</Th>
+                    <Th>最后编辑</Th>
+                    <Th align="right">操作</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr
+                      key={r.id}
+                      onClick={() => router.push(r.status === 'draft' ? `/quotes/${r.id}/edit` : `/quotes/${r.id}/preview`)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <Td>
+                        <span className="num t-sm">{r.quoteNo}</span>
+                        {r.version > 1 ? <span className="t-2xs t-3 ml-[var(--space-1)]">v{r.version}</span> : null}
+                      </Td>
+                      <Td>
+                        <div className="truncate">{r.customerName || '（客户没填）'}</div>
+                        <span className="cell-sub truncate">{r.eventName}</span>
+                      </Td>
+                      <Td>
+                        <Badge
+                          tone={r.status === 'issued' ? 'success' : r.status === 'void' ? 'neutral' : 'info'}
+                        >
+                          {QUOTE_STATUS_LABELS[r.status]}
+                        </Badge>
+                        {r.isExpired && r.status === 'draft' ? (
+                          <Badge tone="warn" className="ml-[var(--space-1)]">
+                            有效期已过
+                          </Badge>
+                        ) : null}
+                      </Td>
+                      <Td align="right">
+                        <span className="num">{formatMoney(r.totalPrice, { symbol: true })}</span>
+                      </Td>
+                      <Td align="right">
+                        <span className={cx('num', Number(r.marginRate ?? 0) < 0 && 't-danger')}>
+                          {formatRate(r.marginRate)}
+                        </span>
+                      </Td>
+                      <Td align="right">
+                        <span className="num t-3">{r.itemCount}</span>
+                      </Td>
+                      <Td>
+                        <span className="t-xs t-3">{formatTimeRel(r.updatedAt ?? r.createdAt)}</span>
+                        {r.eventDate ? <span className="cell-sub">活动 {formatDate(r.eventDate)}</span> : null}
+                      </Td>
+                      <Td align="right">
+                        <Link
+                          href={r.status === 'draft' ? `/quotes/${r.id}/edit` : `/quotes/${r.id}/preview`}
+                          className="btn btn--link"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {r.status === 'draft' ? '继续编' : '看客户版'}
+                        </Link>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+
+            <div className="tbl-foot">
+              <span>
+                共 <span className="num">{total}</span> 张
+              </span>
+              <span style={{ flex: 1 }} />
+              <Button size="sm" variant="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                上一页
+              </Button>
+              <span className="num t-xs t-3">
+                {page} / {pages}
+              </span>
+              <Button size="sm" variant="ghost" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>
+                下一页
+              </Button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}

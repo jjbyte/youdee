@@ -337,6 +337,8 @@ export interface QuoteListItem extends QuoteTotals {
   itemCount: number;
   createdByName: string | null;
   createdAt: string;
+  /** 列表接口未返回时前端退回 createdAt */
+  updatedAt?: string;
   issuedAt: string | null;
 }
 
@@ -409,13 +411,26 @@ export interface RiskCheckResult {
     lineIndexes?: number[];
   }>;
   validUntilPassed: boolean;
-  /** 兼容：服务端若给统一 findings 清单，直接渲染 */
-  findings?: Array<{
-    level: 'blocker' | 'warning';
+  /** 与 domain RiskFinding 同构。界面主要用上面四个分组数组渲染，
+   *  这两个是"原始清单"，留着是为了将来做"导出核对表"时不丢条目。 */
+  blockers: Array<{
     code: string;
-    message: string;
-    lineIndexes?: number[];
+    level: 'blocker' | 'warning';
+    title: string;
+    detail: string;
+    lineIndexes: number[];
   }>;
+  warnings: Array<{
+    code: string;
+    level: 'blocker' | 'warning';
+    title: string;
+    detail: string;
+    lineIndexes: number[];
+  }>;
+  blockerCount: number;
+  warningCount: number;
+  warnRateUsed: string;
+  warnRateSource: 'project_type' | 'global_default';
 }
 
 export interface QuoteSettings {
@@ -437,8 +452,9 @@ export interface CompanyProfile {
 
 export interface UserRecord {
   id: string;
-  email: string;
-  displayName: string;
+  /** 登录名。内部账号没有邮箱，别把它当 email 用 */
+  login: string;
+  name: string;
   role: Role;
   isActive: boolean;
   lastLoginAt: string | null;

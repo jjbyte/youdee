@@ -20,6 +20,24 @@ NAME="youdee-${VERSION}-${DATE}"
 mkdir -p "$OUT_DIR"
 OUT="$OUT_DIR/$NAME.tar.gz"
 
+# ── 门禁：lockfile 必须与 package.json 同步 ────────────────────────────
+# Dockerfile 里用的是 `npm ci`，它**不容忍**任何不一致；而开发机上 `npm install`
+# 容错更强、装完 node_modules 也就对了，于是 tsc / vitest 全绿、看起来毫无问题，
+# 一路推到构建机才在 deps 层炸掉（几十秒白等，报错还只提锁文件不提因果）。
+# 这里用同一条命令的 --dry-run 提前判定：只校验不动 node_modules。
+if command -v npm >/dev/null 2>&1; then
+  if ! npm ci --dry-run --no-audit --no-fund >/tmp/pack-npmci.log 2>&1; then
+    echo "[pack] 失败：package-lock.json 与 package.json 不同步，构建机的 npm ci 必然失败。"
+    echo "[pack] 修复：npm install --package-lock-only && npm ci --dry-run，然后重新打包。"
+    echo "[pack] 原始报错："
+    tail -20 /tmp/pack-npmci.log | sed 's/^/    /'
+    exit 1
+  fi
+  echo "[pack] lockfile 同步检查通过"
+else
+  echo "[pack] 警告：本机无 npm，跳过 lockfile 同步检查"
+fi
+
 tar -czf "$OUT" \
   --exclude=./node_modules \
   --exclude=./.next \

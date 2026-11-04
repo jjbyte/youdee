@@ -236,13 +236,45 @@ tar czf uploads-$(date +%F).tar.gz -C /opt/youdee var/uploads
 |---|---|---|
 | 容器起来又退出，日志停在 `等待数据库就绪` | 库没起来或密码错 | `docker compose logs db`；核对 `.env` 的 `PG_PASSWORD` 与卷里旧密码是否一致（改过密码但没删卷会认证失败） |
 | `getaddrinfo ENOTFOUND` / 连接串解析失败 | `PG_PASSWORD` 里有 `@ : / ? #` | 换成纯字母数字口令，重建卷 |
-| `npm ci` 报 EACCES / 路径不存在 | 仓库里的 `.npmrc` 写死了开发机的 Windows 缓存路径 | 该文件已被 `.dockerignore` 排除；裸机路径下请删除或注释 `.npmrc` 里的 `cache=` |
+| `npm ci` 报 `EUSAGE ... lock file's X does not satisfy Y` | `package-lock.json` 与 `package.json` 不同步（开发机用 `npm install` 装的，它容错更强，装完 `node_modules` 就对了，所以本地一切正常） | **不要**把 `npm ci` 改成 `npm install` 糊过去（那会让每次构建装到不同的包）。正确做法见下方「锁文件不同步」 |
+| `npm ci` 报 `npm error code EACCES` / 缓存路径不存在 | 仓库里的 `.npmrc` 写死了开发机的 Windows 缓存路径 | 该文件已被 `.dockerignore` 排除；裸机路径下请删除或注释 `.npmrc` 里的 `cache=` |
 | 构建被 Killed | 内存不足（1 GB 机器常见） | 加 swap 或换 2 GB 机器；`NODE_OPTIONS=--max-old-space-size=1536` |
 | 页面能开，登录报 500 | 迁移没跑或库连不上 | `docker compose logs app` 看首个报错；确认 `prisma migrate deploy` 有输出 |
 | 上传图片后刷新 404 | `var/uploads` 没挂卷，或目录权限不对 | 确认 compose 里有 `uploads` 卷；容器内目录属主应为 `app`(10001) |
 | 端口占用 | 3000 被别的东西占了 | `.env` 里改 `APP_PORT=8080` |
 | 中文乱码 | 库编码不是 UTF8 | 建库时指定 `ENCODING 'UTF8'`；本项目的迁移含中文默认值与注释 |
 | `prisma migrate deploy` 报 P3025 | 配置里设了 `shadowDatabaseUrl` 且与主库相同 | 本项目 `prisma.config.ts` 已移除该字段，不要加回去 |
+
+**锁文件不同步**（首次部署真实踩到过，报错只提锁文件、不提因果）：
+
+```
+Invalid: lock file's effect@3.20.0 does not satisfy effect@4.1.2
+Missing: effect@3.20.0 from lock file
+```
+
+三步定位与修复：
+
+```bash
+# 1. 先判定，不动任何文件（这一步等价于构建机的检查）
+npm ci --dry-run
+
+# 2. 看是不是某个依赖根本没人用（本项目就属于这种：
+#    清单里列了 react-hook-form，全项目零 import，却把 effect@^4 声明成 peer 依赖，
+#    与 prisma 传递依赖 @prisma/config 锁死的 effect@3.20.0 直接冲突）
+grep -rn "from 'react-hook-form'" src/ || echo "无人使用"
+
+# 3. 无用就删，然后重新生成锁文件
+npm uninstall <包名>
+npm ci --dry-run   # 通过后重新打包
+```
+
+**不要用 `--legacy-peer-deps` 或把 `npm ci` 改成 `npm install` 绕过。** 前者让 npm 无视 peer 约束，
+装出一棵"npm 认为可以、运行时未必"的树；后者让每次构建装到不同版本的包，同一份代码两次构建
+出现两种行为，且这种偏差在生产上极难复现。宁可删掉死依赖，也不要把不确定性放进构建里。
+
+从本版起 `deploy/pack.sh` 已内置这道门禁：lockfile 不同步会**拒绝出包**，不会再让你等完
+一轮镜像构建才发现。
+
 
 **纯离线服务器**：Docker 路径下在没有外网的机器上 `docker build` 会失败。两种做法：
 ① 在一台能联网的**同架构 Linux** 上 `docker compose build`，再 `docker save youdee-app | gzip > img.tar.gz`，

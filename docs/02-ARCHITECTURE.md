@@ -245,7 +245,7 @@ PRD v1.3 采纳了我 2 条加强、驳回了我 1 条，我逐条接受并已�
 | 服务端状态 | @tanstack/react-query | **5.x 线** | MIT | React 适配器无 v6（v6 仅 Svelte），不要按 v6 API 写 |
 | 数据表格 | @tanstack/react-table | **8.21.3** | MIT | v9 自 2026-06 起仍为 beta，生产锁 v8 |
 | 图表 | recharts | **3.10.1** | MIT | 2026-07-25 发布。shadcn 的 chart 组件基于 Recharts v3 |
-| 表单 | react-hook-form | **7.x** | MIT | 与 zod resolver 配合 |
+| 表单 | 不用第三方库（受控 state） | — | — | **实施时移除**：`react-hook-form` 与 `@hookform/resolvers` 全项目零 import，且后者把 `effect@^4` 作为 peer 依赖，与 `@prisma/config` 锁死的 `effect@3.20.0` 冲突，导致 `npm ci` 在 Linux 构建机上直接 EUSAGE 失败。见 `04-Spec.md` 偏差表 |
 | 校验 | zod | **4.x** | MIT | 前后端共用同一套 schema |
 | ORM | Prisma | **7.10.x**（`prisma` / `@prisma/client` / `@prisma/adapter-pg` 同锁 7 线） | Apache-2.0 | **关键坑**：npm 上 `prisma@latest` 指向 Prisma 8 **release candidate**（8.0.0-rc.x），而 `@prisma/client@latest` 仍是 7.10.x。裸 `npm i prisma` 会装出"8 的 CLI + 7 的 client"的裂开组合。**必须显式 `prisma@7`，并使用 `prisma7.config.ts`**（Prisma 7.10+ 专用文件名，避免与 8 的 `prisma.config.ts` 冲突） |
 | DB 驱动 | pg（node-postgres） | **8.x** | MIT | Prisma 7 通过 driver adapter 连接，需 `@prisma/adapter-pg` |

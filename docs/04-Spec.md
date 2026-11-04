@@ -84,7 +84,7 @@
 | 服务端状态 | @tanstack/react-query | 5.x | 无 v6 |
 | 表格 | @tanstack/react-table | 8.21.3 | 否决 AG Grid |
 | 图表 | recharts | 3.10.1 | `type="stepAfter"` |
-| 表单 | react-hook-form + zod | 7.x / 4.x | 共用 schema |
+| 表单 | 不用第三方库，受控 state | — | **已移除 react-hook-form / @hookform/resolvers**，见 §4.3 偏差 |
 | ORM | Prisma | **7.10.1（显式锁，禁用 latest）** | 见 §4.2 偏差 5（关键） |
 | DB 驱动 | @prisma/adapter-pg + pg | 8.x | — |
 | 数据库 | PostgreSQL | **18.6** | 本地用 embedded-postgres，生产 Docker |
@@ -110,6 +110,9 @@
 | 10 | access(15min) + refresh(7d) 双令牌 | 契约 53 个 path 里**没有** `/auth/refresh`。没有刷新端点时 15 分钟一过期就是把 3–10 人的内部工具每刻钟踢一次 | 单 Cookie，有效期 = `JWT_REFRESH_TTL_DAYS`，但**每次请求回库校验** `token_version` + `is_active` | 吊销仍是即时的（"退出所有设备" = token_version+1），比双令牌少一半移动部件 |
 | 11 | `users.email` / `display_name` | 内部账号没有邮箱，用登录名更贴合 | 表与 API 一律 `login` / `name`；`POST /auth/login` 额外接受 `email` 作为 `login` 的别名 | 与 openapi.yaml 的字段名有一处偏差，前端按 `login`/`name` 实现 |
 | 12 | 折算系数举例含糊（"喷绘 12 张/㎡"） | 实现时踩到：桁架背景板按「套」报价、比价基准是「㎡」，**不填系数则三家的行全部"不可比"，比价页一行最低价都标不出来**，而且不报错 | `base_unit_qty` 语义钉死为**乘法**：`基准单位价 = 本价格单位价 × base_unit_qty`，其中 `base_unit_qty` = 1 个基准单位等于几个本价格单位。1 套 = 18㎡ → `1㎡ = 1/18 套 = 0.055556` | 种子数据已按此填；这也是"存在但不可比的行必须保留并标记"那条原则的来由 |
+
+| 13 | 技术栈清单含 `react-hook-form` + `@hookform/resolvers` + `zod` | 全项目 **零 import**（表单全部是受控 state）。更麻烦的是 `@hookform/resolvers@7.0.2` 把 `effect@^4.0.0` 声明为 **peer 依赖**，而 `@prisma/config@7.10.1`（`prisma` 的传递依赖）要求 `effect` 精确 `3.20.0` —— 两者无法共存，`npm ci` 在构建机上直接 `EUSAGE: lock file's effect@3.20.0 does not satisfy effect@4.1.2` | **移除 `react-hook-form` 与 `@hookform/resolvers`**（未使用，无功能损失）。`zod` 保留未删（同样未使用，但不引发冲突，留作后续校验用） | 这一冲突**只在 `npm ci` 时暴露**：`npm install` 容错更强，本地装了能跑，推到 Linux 镜像构建才失败。另见 §4.2 偏差 14 |
+| 14 | `package-lock.json` 由谁生成 | 在 Windows 上 `npm install` 生成的 lockfile 与 `package.json` 的精确锁版本曾出现不同步，本地 `node_modules` 已是最新所以 `tsc`/`vitest` 全绿，**看不出任何异常** | `deploy/pack.sh` 增加打包前 `npm ci --dry-run` 门禁：lockfile 与 `package.json` 不同步就**拒绝出包**，而不是等 5 分钟后在构建机上失败 | `npm ci` 与 `npm install` 的容错差异是本项目最隐蔽的"本地能跑、部署就炸"来源之一；且 lockfile 必须包含 Linux 平台二进制（`@img/sharp-linux-x64`、`@next/swc-linux-x64-gnu`、`@tailwindcss/oxide-linux-x64-gnu`、`lightningcss-linux-x64-gnu`），已在交付前逐项核对 |
 
 > **偏差 5 与 7 是本次环境探测的核心产出。** 前者会让 Phase 3 第一天就卡住且报错难懂；后者会让所有依赖安装失败。
 
@@ -343,5 +346,6 @@ curl -X POST localhost:3000/api/v1/quotes -d '{customer_name:"星海科技", eve
 | 日期 | 变更 | 原因 | 影响 |
 |---|---|---|---|
 | 2026-11-04 | v1.0 生成并锁定 | 客户确认三文档 | 进入 Phase 2 |
+| 2026-11-04 | §4.2 新增偏差 13–14（lockfile 与依赖冲突） | 首次远端 Docker 构建在 `npm ci` 失败：`effect` peer 冲突 + lockfile 不同步 | 移除两个零引用的表单依赖；打包前加 lockfile 同步门禁 |
 | 2026-11-04 | §4.2 新增环境实测偏差 7 条 | 本机 Node 22 / 无 Docker / 无 pnpm / npm 缓存只读 / TypeScript 7 已是 latest | 技术栈版本重新锁定，包管理改 npm |
 | 2026-11-04 | §4.2 追加偏差 8–12 条 | 实现期真实撞上的 5 条：Prisma 7 移除 datasource.url 且不读 .env；ORM 写不了生成列、给不出 23P01 语义；契约无 refresh 端点；内部账号无邮箱；折算系数方向含糊导致比价页全不可比 | 数据层改 pg 手写 SQL；会话改单 Cookie + 回库校验；字段统一 login/name；`base_unit_qty` 语义钉死为乘法并写进种子 |

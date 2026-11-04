@@ -191,6 +191,7 @@ BASE_URL=http://1.2.3.4:3000 node deploy/verify.mjs      # 或打对外地址
 ```
 [通过] 健康检查 — db=ok
 [通过] 管理员登录 — 管理员
+[通过] 会话 Cookie 能落到浏览器 — http 目标且未带 Secure，浏览器可写入
 [通过] 物料库已初始化 — material 共 15 条
 [通过] 比价命中 1 组 — custom_made / 非时间 / 可比 2/3
 [通过] 不可比的行没有被隐藏 — 共 3 行 = 可比 2 + 不可比 1（TAX_BASIS_MISMATCH）；换口径后仍 3 行
@@ -209,17 +210,24 @@ BASE_URL=http://1.2.3.4:3000 node deploy/verify.mjs      # 或打对外地址
 [通过] 区间重叠被拦（40902） — 40902 …
 [通过] 错误响应不含数据库术语 — 干净
 
-合计 20 项，通过 20，失败 0
+合计 21 项，通过 21，失败 0
 ```
 
 **为什么不能只看"网页能打开"**：这个系统最危险的缺陷全都不报错，只是数字不对 ——
 金额标度差 100 倍、含税口径不同却被算成可比、成员能改别人的历史价。
-页面照样渲染，只是结论是错的。这 20 项就是针对这类缺陷写的。
+页面照样渲染，只是结论是错的。这 21 项就是针对这类缺陷写的。
 
 **自检里的断言不引用"现在有几家供应商"**。写成 `返回的行数 >= 4` 这种常量断言，
 种子只有 3 家时会报出"不可比的行被隐藏"——把正确行为判成缺陷，还会让人去改本来就对的代码。
 现在这类检查一律断言恒等关系：返回行数 = `total_count`、不可比行数 = 总数 − 可比数、
 每个不可比行都带 `warnings`、换一次税口径后家数不变。真正要防的是"过滤"，而不是"恰好几家"。
+
+**自检有一个天生盲区：它自己拿 Cookie，不经过浏览器。** 脚本把 `Set-Cookie` 的值塞进
+自己的变量里，所以哪怕是浏览器会丢弃的 `Secure` Cookie，它也照样"登录成功"。
+公网部署真实踩到过：21 项自检全过，浏览器里输完账号密码却立刻弹「登录已过期」。
+因此加了一项专门读 `Set-Cookie` 头：目标是 http 而 Cookie 带 `Secure` 时直接判失败。
+凡是"浏览器策略"类的缺陷（Secure、SameSite、Domain、跨域），脚本都不会自己暴露，
+要么按这个方式看响应头，要么就真的用浏览器点一遍。
 
 自检会留下 1 张客户名为「自检样例」的已发出报价单，测试完按需作废。
 
@@ -228,6 +236,22 @@ BASE_URL=http://1.2.3.4:3000 node deploy/verify.mjs      # 或打对外地址
 ## 5. 常用操作
 
 **改配置**：改 `.env` 后 `docker compose up -d`（Docker）或 `systemctl restart youdee`（裸机）。
+
+**放到 HTTPS 后面**：这本是内部工具，直接 `http://IP:3000` 也能用；要上域名/证书时，
+反向代理必须传 `X-Forwarded-Proto`，否则应用不知道自己是 https，会话 Cookie 就不会带
+`Secure`（功能正常、安全性弱一点）：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    client_max_body_size 6m;   # 附件上限 5MB
+}
+```
+
+如果代理不传这个头，就在 `.env` 里显式写 `COOKIE_SECURE=1`。
 
 **改默认账号密码**：首次登录后到「设置 → 账号」改。种子账号是
 `admin` / `xiaowang`，初始口令都是 `youdee2026`，**上线前必须改掉**。
@@ -259,6 +283,7 @@ tar czf uploads-$(date +%F).tar.gz -C /opt/youdee var/uploads
 | 构建卡在 `npm ci` 大量 `ETIMEDOUT` / `ECONNRESET` | 官方 registry 在国内网络慢或无外网 | `.env` 里加 `NPM_REGISTRY=https://registry.npmmirror.com` 后重新 `docker compose build`（Dockerfile 已支持该构建参数，留空即官方源） |
 | 构建被 Killed | 内存不足（1 GB 机器常见） | 加 swap 或换 2 GB 机器；`NODE_OPTIONS=--max-old-space-size=1536` |
 | 页面能开，登录报 500 | 迁移没跑或库连不上 | `docker compose logs app` 看首个报错；确认 `prisma migrate deploy` 有输出 |
+| 账号密码正确，登录后立刻弹 `{"code":40101,"message":"登录已过期，请重新登录。"}` | `Set-Cookie` 带了 `Secure`，但浏览器访问的是 `http://IP:3000`——带 Secure 的 Cookie 在 http 页面上被浏览器**静默丢弃**，所以登录接口 200、下一次 `/auth/me` 就没身份 | 已修：Cookie 的 `Secure` 改为按请求实际协议判断（不再看 `NODE_ENV`）。若 TLS 在反向代理上终结，让代理传 `X-Forwarded-Proto: https`（nginx：`proxy_set_header X-Forwarded-Proto $scheme;`），或显式设 `COOKIE_SECURE=1`。验证：`node deploy/verify.mjs` 的「会话 Cookie 能落到浏览器」一项 |
 | 上传图片后刷新 404 | `var/uploads` 没挂卷，或目录权限不对 | 确认 compose 里有 `uploads` 卷；容器内目录属主应为 `app`(10001) |
 | 端口占用 | 3000 被别的东西占了 | `.env` 里改 `APP_PORT=8080` |
 | 中文乱码 | 库编码不是 UTF8 | 建库时指定 `ENCODING 'UTF8'`；本项目的迁移含中文默认值与注释 |

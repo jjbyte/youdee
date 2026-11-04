@@ -51,6 +51,28 @@ async function main() {
   const login = await call('POST', '/auth/login', { body: ADMIN, as: 'admin' });
   record('管理员登录', login.json?.code === 0 && !!jar.admin, `${login.json?.data?.name ?? login.json?.message ?? ''}`);
 
+  // 2b. Cookie 能不能真的落到浏览器里。
+  // 这一项是在公网部署上吃了亏才加的：登录接口返回 200、账号密码全对，
+  // 但 Set-Cookie 带 Secure 而页面是 http://IP:3000 —— 浏览器会**静默丢弃**它，
+  // 下一次请求就没身份，前端显示「登录已过期，请重新登录」。
+  // 本脚本自己拿 Cookie，天生绕过浏览器策略，所以这里必须直接读 Set-Cookie 头，
+  // 否则这类缺陷永远测不出来（之前 20 项全过、浏览器却登不进去，就是这么来的）。
+  const setCookies = login.headers.getSetCookie?.() ?? [];
+  const sessionHeader = setCookies.find((c) => c.startsWith('rc_session=')) ?? '';
+  const httpsTarget = BASE.startsWith('https://');
+  const cookieHasSecure = /;\s*secure/i.test(sessionHeader);
+  record(
+    '会话 Cookie 能落到浏览器',
+    !!sessionHeader && (httpsTarget || !cookieHasSecure),
+    !sessionHeader
+      ? '没有 Set-Cookie: rc_session'
+      : httpsTarget
+        ? 'HTTPS 目标，Secure 已置'
+        : cookieHasSecure
+          ? 'Set-Cookie 带 Secure 但目标是 http，浏览器会丢弃它 —— 设 COOKIE_SECURE=0，或改用 HTTPS'
+          : 'http 目标且未带 Secure，浏览器可写入',
+  );
+
   // 3. 主体库有数据（种子是否灌进去了）
   const items = await call('GET', '/items?item_type=material&limit=100', { as: 'admin' });
   const total = items.json?.data?.total ?? 0;

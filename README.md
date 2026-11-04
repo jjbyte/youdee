@@ -84,7 +84,12 @@ src/app/                    # 页面
 prisma/migrations/          # 手写 DDL（EXCLUDE / 生成列 / CHECK 只能手写）
 prisma/seed.ts              # 种子：17 单位 / 8+8 分类 / 8 供应商 / 25 主体 / 48 条价格
 tests/                      # 领域层单元测试（47 条，全绿）
-scripts/db.mjs              # 本地数据库启停
+scripts/db.mjs              # 本地数据库启停（仅开发机用，部署不需要）
+
+deploy/                     # 部署：Docker 与裸机两条路径 + 部署后自检脚本
+Dockerfile                  # 生产镜像
+docker-compose.yml          # app + postgres 18
+docs/05-DEPLOY.md           # 部署手册（给操作的人看，不假设他熟悉本项目）
 ```
 
 ## 四、常用命令
@@ -112,3 +117,32 @@ npm run db:reset     # 清库重建（会丢数据）
 | 易拉宝 | 个 | 套 | 是否含画面 |
 
 不填不会崩：这些物料仍然能录价、能出单、能看到各家原价，只是**不标"最低"**，比价页会写明"未填折算系数，不可比"。填了才会出现"某某家便宜 6.25%"这类结论。
+
+## 六、部署到 Linux 服务器
+
+打包：
+
+```bash
+deploy/pack.sh          # 产出 dist/youdee-<版本>-<日期>.tar.gz 与 .sha256
+```
+
+包里只有源码和部署脚本（**不含** `node_modules` / `.next` / `.env` / 上传的附件）。
+`node_modules` 必须到目标机上重装：`sharp`、`pg` 是平台相关二进制，Windows 上装的那份
+拿到 Linux 上会在上传图片或连数据库时才崩。
+
+部署两条路径，详细步骤与故障对照见 **`docs/05-DEPLOY.md`**：
+
+| 路径 | 命令 | 适用 |
+|---|---|---|
+| A. Docker Compose | `deploy/deploy.sh root@服务器IP` | 推荐，失败面最小 |
+| B. 裸机 Node + PG | `sh deploy/manual-deploy.sh` | 不便装 Docker 时 |
+
+部署完成后**必须**跑一次自检：
+
+```bash
+node deploy/verify.mjs
+```
+
+它走完整条链路（登录、比价、同一价两个接口是否同一个数、出单、导出、成员改价被拒、
+区间重叠被拦、错误响应不含数据库术语），每项都比对具体数值。
+只看到"网页能打开"不能算部署成功 —— 这个系统最危险的缺陷全都不报错，只是数字不对。

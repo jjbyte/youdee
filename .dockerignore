@@ -1,0 +1,37 @@
+# 依赖与产物在镜像里重建，不传上下文（能省几分钟和几百兆）
+node_modules
+.next
+out
+build
+dist
+
+# 本机数据与临时物
+pgdata
+.pgtest
+.workbuddy
+# 只排除目录内容，保留 uploads 目录本身：整条排除会让 public/ 变成空目录，
+# Dockerfile 运行层的 COPY --from=builder /app/public 会报 not found。
+var/uploads/**
+
+# 环境变量：密钥绝不能进镜像层，运行期由 compose 注入
+.env
+.env.local
+.env*.local
+
+# 本机专属配置：.npmrc 里是 Windows 绝对路径，进容器会让 npm ci 失败
+.npmrc
+
+# 版本库与文档（文档不打进镜像，需要时看仓库）
+.git
+.gitignore
+docs
+# 注意：design-system/ 不能排除。src/app/layout.tsx 直接 import 了
+# design-system/design-tokens.css，排除掉 next build 会报模块找不到。
+
+# 其他
+*.log
+coverage
+tsconfig.tsbuildinfo
+Dockerfile
+.dockerignore
+docker-compose.yml

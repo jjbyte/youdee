@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { AppError } from '../http';
 
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_BYTES ?? 5_242_880);
-const UPLOAD_DIR = process.env.UPLOAD_DIR ?? 'public/uploads';
+const UPLOAD_DIR = process.env.UPLOAD_DIR ?? 'var/uploads';
 
 type Allowed = { mime: string; ext: string };
 

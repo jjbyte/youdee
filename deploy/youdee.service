@@ -1,0 +1,35 @@
+[Unit]
+Description=Youdee 有底 — 活动物料与报价系统
+Documentation=https://example.invalid/docs/05-DEPLOY.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 建议不用 root 跑。先 useradd -r -s /sbin/nologin youdee 并 chown -R youdee:youdee /opt/youdee
+User=youdee
+Group=youdee
+WorkingDirectory=/opt/youdee
+EnvironmentFile=/opt/youdee/.env
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+# 用 env 找 node：nvm 装的 node 在 /usr/local/bin 之外，写死路径换机器就失效
+ExecStart=/usr/bin/env npx --no-install next start -H 0.0.0.0 -p 3000
+Restart=always
+RestartSec=3
+# next start 收到 SIGTERM 会等在途请求结束；给 20 秒再 SIGKILL
+KillSignal=SIGTERM
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=youdee
+
+# 基本加固：只允许写自己的目录与 /tmp
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/youdee/public/uploads /opt/youdee/.next/cache
+
+[Install]
+WantedBy=multi-user.target

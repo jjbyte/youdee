@@ -8,8 +8,9 @@ dist/
 pgdata/
 .pgtest/
 
-# 附件上传目录
+# 附件上传目录（旧位置，运行时已改到 var/uploads）
 public/uploads/
+var/uploads/
 
 # 环境变量
 .env

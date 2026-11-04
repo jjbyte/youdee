@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-youdee}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?compose 需要 PG_PASSWORD，请在 .env 里设置}
+      POSTGRES_DB: ${PG_DB:-youdee}
+      TZ: Asia/Shanghai
+    volumes:
+      # 挂父目录而不是 /var/lib/postgresql/data：postgres:18 起 PGDATA 改成了
+      # /var/lib/postgresql/18/docker，挂 data 子目录会得到一个空库的假象。
+      - dbdata:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${PG_USER:-youdee} -d ${PG_DB:-youdee}']
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${PG_USER:-youdee}:${PG_PASSWORD}@db:5432/${PG_DB:-youdee}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?compose 需要 JWT_SECRET，请在 .env 里设置}
+      JWT_ACCESS_TTL_MIN: ${JWT_ACCESS_TTL_MIN:-15}
+      JWT_REFRESH_TTL_DAYS: ${JWT_REFRESH_TTL_DAYS:-7}
+      NODE_ENV: production
+      TZ: Asia/Shanghai
+      UPLOAD_DIR: var/uploads
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-5242880}
+      SEED_ON_BOOT: ${SEED_ON_BOOT:-1}
+    ports:
+      - '${APP_PORT:-3000}:3000'
+    volumes:
+      # 附件是写本地磁盘的（server/services/upload.service.ts），
+      # 不挂卷的话每次 docker compose up --build 图片和 PDF 就全没了。
+      - uploads:/app/var/uploads
+
+volumes:
+  dbdata:
+  uploads:

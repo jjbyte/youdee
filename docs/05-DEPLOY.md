@@ -258,10 +258,31 @@ tar czf uploads-$(date +%F).tar.gz -C /opt/youdee var/uploads
 | 端口占用 | 3000 被别的东西占了 | `.env` 里改 `APP_PORT=8080` |
 | 中文乱码 | 库编码不是 UTF8 | 建库时指定 `ENCODING 'UTF8'`；本项目的迁移含中文默认值与注释 |
 | `prisma migrate deploy` 报 P3025 | 配置里设了 `shadowDatabaseUrl` 且与主库相同 | 本项目 `prisma.config.ts` 已移除该字段，不要加回去 |
-| 构建报 `Cannot find module '@tailwindcss/postcss'`（还可能连带 `typescript`、`tailwindcss`） | `.env` 里的 `NODE_ENV=production` 被 `manual-deploy.sh` 导出后，npm 会走 `omit=dev` 跳过 **devDependencies**，而 PostCSS 插件、TypeScript 全在 devDeps 里。线索是 `npm ci` 的 `added 404 packages`（含 devDeps 应为 554） | 已修：脚本第 1 步改成 `NODE_ENV=development npm ci --include=dev`，并在装完立刻校验这 5 个包。手工补救：`rm -rf node_modules && NODE_ENV=development npm ci --include=dev` |
+| 构建报 `Cannot find module '@tailwindcss/postcss'`（还可能连带 `typescript`、`tailwindcss`） | 两种：① `.env` 的 `NODE_ENV=production` 让 npm 走 `omit=dev`，devDependencies 整包没装（线索：`npm ci` 报 `added 404 packages`，含 devDeps 应为 463）；② 包装了但安装残缺，或 `.next` 里存着上一次失败时的 Turbopack 缓存 | 已修：第 1 步 `NODE_ENV=development npm ci --include=dev`，装完按**文件**校验并用 `require.resolve` 真实解析一遍；构建前 `rm -rf .next`；解析失败会自动单包补装。手工版见下方「PostCSS 插件解析失败」 |
 | 构建告警 `Dynamic filesystem access causes tracing of the whole project` | `path.resolve(process.cwd(), process.env.UPLOAD_DIR …)` 这类动态路径让 Turbopack 把整个工程追踪进 server 产物 | 已在上传/读取两处标 `/*turbopackIgnore: true*/`。是告警不是错误，但会拖慢构建、放大产物 |
 | `prisma generate` 报 **P1012**：`Error parsing attribute "@relation": The relation field X on Model Y is missing an opposite relation field` | `schema.prisma` 里某条关系只写了一半（有 `@relation` 的一侧，没有另一侧的反向字段）。0.1.0 首包就有两处：`User.pricesCreated` 缺 `Price.createdByUser`，`Price.unit` 缺 `Unit.prices` | 已修复。以后改关系必须两侧同改；本地先 `npx prisma validate` 再打包（`pack.sh` 已把这条设为门禁） |
 | `npm ci` 刷出成片 `EBADENGINE ... required: {"node":"^22.12.0"}` | Node 低于 22.12，而 `vitest`、`@prisma/streams-local` 声明要 22 | **是警告，不是失败**，`npm ci` 仍会继续并成功。主链路在 20.19+ 可用，只是 `npm test` 跑不了。想彻底消掉就升级 Node 22（见「路径 B」里的升级命令） |
+
+**PostCSS 插件解析失败**（`next build` 报 `Cannot find module '@tailwindcss/postcss'`）：
+
+先分清是"没装"还是"装了但解析不到"，三条命令：
+
+```bash
+cd /opt/youdee
+ls -la node_modules/@tailwindcss/
+node -p "require('./node_modules/@tailwindcss/postcss/package.json').version"
+node -e "console.log(require.resolve('@tailwindcss/postcss'))"
+```
+
+- 前两条就失败 → 没装或装残：`rm -rf node_modules && NODE_ENV=development npm ci --include=dev`
+- 前两条正常、第三条正常，但 `next build` 仍报同一句 → 多半是 `.next` 里的 Turbopack 缓存：`rm -rf .next` 再编
+- 还不行 → 用 webpack 编一次（产物等价，同一份源码同一套运行时）：
+
+```bash
+NODE_ENV=production npx next build --webpack
+```
+
+`manual-deploy.sh` 已经把这三步自动化了：清 `.next` → Turbopack → 失败自动换 webpack → 两个都失败才打现场信息（解析结果、目录列表、`npm ls`）并退出。
 
 **锁文件不同步**（首次部署真实踩到过，报错只提锁文件、不提因果）：
 

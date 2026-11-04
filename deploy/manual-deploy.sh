@@ -31,6 +31,9 @@ node_ge() {
 }
 
 echo "[manual] Node $NODE_VER / npm $(npm -v)"
+# 带一个脚本指纹：远程排障时最怕"跑的到底是不是新脚本"说不清（本轮就吃过这个亏，
+# 只能靠 npm 装的包数反推）。这一行不同，说明解包没覆盖成功。
+echo "[manual] 脚本 build 2026-11-04-d / 包版本 $(node -p "require('./package.json').version" 2>/dev/null || echo '未知')"
 
 # 硬底线 20.19：next 16 要 >=20.9，prisma 7 的 engines 明确写了 ^20.19 || ^22.12 || >=24。
 if ! node_ge 20 19; then
@@ -110,23 +113,101 @@ echo "[manual] 1/6 安装依赖"
 # 再补一个 --include=dev 做兜底（与 omit 冲突时 include 优先）。
 NODE_ENV=development npm ci --include=dev --no-audit --no-fund
 
-# 装完立刻验一遍构建必需的包，缺了就在第 1 步失败，而不是等到第 3 步猜报错
+# 装完不是验"目录在不在"—— 目录存在但里面没有 package.json（解包不完整、npm 中途失败）
+# 时，[ -d ] 一样为真，构建却照样报 Cannot find module。必须验到文件与真实解析。
 MISSING=""
 for p in @tailwindcss/postcss tailwindcss typescript prisma tsx; do
-  [ -d "node_modules/$p" ] || MISSING="$MISSING $p"
+  # typescript / prisma / tsx 的包名就是目录名；@tailwindcss/* 也一致
+  [ -f "node_modules/$p/package.json" ] || MISSING="$MISSING $p"
 done
 if [ -n "$MISSING" ]; then
-  echo "[manual] 失败：devDependencies 没装上，缺:$MISSING" >&2
-  echo "[manual] 原因几乎总是 NODE_ENV=production 让 npm 走了 omit=dev。" >&2
-  echo "[manual] 处理：确认本脚本第 1 步没有被改回裸的 npm ci，然后 rm -rf node_modules 重跑。" >&2
+  echo "[manual] 失败：devDependencies 没装上或装残了，缺 package.json 的包:$MISSING" >&2
+  echo "[manual] 常见原因：① NODE_ENV=production 让 npm 走了 omit=dev；② 解包不完整。" >&2
+  echo "[manual] 当前 node_modules/@tailwindcss 内容：" >&2
+  ls -la node_modules/@tailwindcss 2>&1 | sed 's/^/    /' >&2 || true
+  echo "[manual] 处理：rm -rf node_modules .next && 重跑本脚本。" >&2
   exit 1
+fi
+
+# 真实解析一次。Turbopack 的 PostCSS 转换用的是 Node 的解析规则，
+# 这里解析不了，构建阶段一定报同一句话 —— 提前在这里失败，报错才指得到根因。
+resolve_tailwind_postcss() {
+  node -e '
+    try {
+      const resolved = require.resolve("@tailwindcss/postcss");
+      const v = require("@tailwindcss/postcss/package.json").version;
+      console.log("[manual] @tailwindcss/postcss " + v + " -> " + resolved);
+      process.exit(0);
+    } catch (e) {
+      console.error("[manual] 解析失败：" + (e.code || "") + " " + e.message);
+      process.exit(1);
+    }
+  '
+}
+
+if ! resolve_tailwind_postcss; then
+  # 目录在、能解析失败，说明这份安装是残的（解包中断、缓存坏了都可能）。
+  # 单包补装比整棵树重装快得多，先试这条；不行再让人删 node_modules。
+  echo "[manual] 检测到 PostCSS 插件安装不完整，尝试单独补装"
+  TW_VER="$(node -p "require('./package.json').devDependencies['@tailwindcss/postcss']" 2>/dev/null || echo '')"
+  if [ -z "$TW_VER" ]; then
+    echo "[manual] 读不到 package.json 里的版本号，无法补装" >&2
+    exit 1
+  fi
+  # --no-save + --no-package-lock：只修 node_modules，不动 package.json 与锁文件。
+  # 部署机上改锁文件是最不能接受的副作用 —— 下次 npm ci 会与这里不一致。
+  if ! NODE_ENV=development npm i --no-save --no-package-lock --no-audit --no-fund "@tailwindcss/postcss@$TW_VER"; then
+    echo "[manual] 补装失败" >&2
+    exit 1
+  fi
+  if ! resolve_tailwind_postcss; then
+    echo "[manual] 补装后仍解析失败，请删掉 node_modules 重跑本脚本：" >&2
+    echo "  rm -rf node_modules .next && sh deploy/manual-deploy.sh" >&2
+    ls -la node_modules/@tailwindcss 2>&1 | sed 's/^/    /' >&2
+    exit 1
+  fi
 fi
 
 echo "[manual] 2/6 生成 Prisma 客户端"
 npx --no-install prisma generate
 
 echo "[manual] 3/6 构建"
-NEXT_TELEMETRY_DISABLED=1 npx --no-install next build
+# 先清 .next。上一次失败的产物没有任何复用价值，而且 Turbopack 会从里面读构建缓存，
+# 那种"依赖早就装好了、它还在报第一次的 Cannot find module"的假故障，很难与真故障区分。
+rm -rf .next
+BUILD_LOG=/tmp/youdee-build.log
+
+# Turbopack 与 webpack 产出的应用是等价的（同一份源码、同一套 Next 运行时），
+# 所以这里不把编译器当成"必须论证清楚"的问题：Turbopack 失败就换 webpack 再编一次，
+# 能出可用产物就继续部署。把失败留给一道编译器，等于让一次发包卡在一个与业务无关的点上。
+if NEXT_TELEMETRY_DISABLED=1 npx --no-install next build 2>&1 | tee "$BUILD_LOG"; then
+  :
+else
+  set +e
+  echo >&2
+  echo "[manual] Turbopack 构建失败，改用 webpack 重编一次" >&2
+  rm -rf .next
+  if NEXT_TELEMETRY_DISABLED=1 npx --no-install next build --webpack 2>&1 | tee -a "$BUILD_LOG"; then
+    echo "[manual] webpack 构建通过，本次部署继续（编译器差异已记入 docs/05-DEPLOY.md）"
+    set -e  # 上面为跑诊断信息关了 errexit，这里必须打开：否则后面 migrate / seed 失败会被吞掉
+  else
+    echo >&2
+    echo "[manual] 两个编译器都失败。以下是定位用的现场信息（完整日志：$BUILD_LOG）：" >&2
+    echo "[manual] --- PostCSS 插件解析 ---" >&2
+    node -e '
+      for (const spec of ["postcss", "@tailwindcss/postcss", "@tailwindcss/node", "tailwindcss"]) {
+        try { console.log("  " + spec + " -> " + require.resolve(spec)); }
+        catch (e) { console.log("  " + spec + " -> 解析失败: " + e.code); }
+      }
+    ' >&2
+    echo "[manual] --- node_modules/@tailwindcss ---" >&2
+    ls -la node_modules/@tailwindcss 2>&1 | sed 's/^/  /' >&2
+    echo "[manual] --- npm 视角 ---" >&2
+    NODE_ENV=development npm ls @tailwindcss/postcss --depth=0 2>&1 | sed 's/^/  /' >&2
+    echo "[manual] 把上面三块发出来即可定位；不要凭猜测改文件。" >&2
+    exit 1
+  fi
+fi
 
 echo "[manual] 4/6 应用数据库迁移"
 npx --no-install prisma migrate deploy

@@ -129,43 +129,46 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
-# 真实解析一次。Turbopack 的 PostCSS 转换用的是 Node 的解析规则，
-# 这里解析不了，构建阶段一定报同一句话 —— 提前在这里失败，报错才指得到根因。
+# 真实解析一次：Turbopack 的 PostCSS 转换走 Node 的解析规则，这里解析不了，构建就必然报同一句。
+#
+# 两个写错过的细节，都记在这儿免得再犯：
+#   1) 版本号不能用 require("@tailwindcss/postcss/package.json") 读 —— 该包的 exports
+#      只暴露了 "."，子路径 ./package.json 没有导出，require 它会抛
+#      ERR_PACKAGE_PATH_NOT_EXPORTED。这不是"包坏了"，但误判成坏包会去补装、
+#      反而把好树改坏（实测过：added 1 removed 1）。所以版本号从磁盘读。
+#   2) 判断"装没装"不能只看目录存在，要真的 resolve 一次。
 resolve_tailwind_postcss() {
   node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    let entry;
     try {
-      const resolved = require.resolve("@tailwindcss/postcss");
-      const v = require("@tailwindcss/postcss/package.json").version;
-      console.log("[manual] @tailwindcss/postcss " + v + " -> " + resolved);
-      process.exit(0);
+      entry = require.resolve("@tailwindcss/postcss");
     } catch (e) {
-      console.error("[manual] 解析失败：" + (e.code || "") + " " + e.message);
+      console.error("[manual] 无法解析 @tailwindcss/postcss：" + (e.code || "") + " " + e.message);
       process.exit(1);
     }
+    // 从入口文件向上找包根，读磁盘上的 package.json（不经 exports）
+    let dir = path.dirname(entry);
+    let version = "未知版本";
+    while (dir !== path.dirname(dir)) {
+      const pj = path.join(dir, "package.json");
+      if (fs.existsSync(pj)) {
+        try { version = JSON.parse(fs.readFileSync(pj, "utf8")).version || version; } catch {}
+        break;
+      }
+      dir = path.dirname(dir);
+    }
+    console.log("[manual] @tailwindcss/postcss " + version + " -> " + entry);
   '
 }
 
 if ! resolve_tailwind_postcss; then
-  # 目录在、能解析失败，说明这份安装是残的（解包中断、缓存坏了都可能）。
-  # 单包补装比整棵树重装快得多，先试这条；不行再让人删 node_modules。
-  echo "[manual] 检测到 PostCSS 插件安装不完整，尝试单独补装"
-  TW_VER="$(node -p "require('./package.json').devDependencies['@tailwindcss/postcss']" 2>/dev/null || echo '')"
-  if [ -z "$TW_VER" ]; then
-    echo "[manual] 读不到 package.json 里的版本号，无法补装" >&2
-    exit 1
-  fi
-  # --no-save + --no-package-lock：只修 node_modules，不动 package.json 与锁文件。
-  # 部署机上改锁文件是最不能接受的副作用 —— 下次 npm ci 会与这里不一致。
-  if ! NODE_ENV=development npm i --no-save --no-package-lock --no-audit --no-fund "@tailwindcss/postcss@$TW_VER"; then
-    echo "[manual] 补装失败" >&2
-    exit 1
-  fi
-  if ! resolve_tailwind_postcss; then
-    echo "[manual] 补装后仍解析失败，请删掉 node_modules 重跑本脚本：" >&2
-    echo "  rm -rf node_modules .next && sh deploy/manual-deploy.sh" >&2
-    ls -la node_modules/@tailwindcss 2>&1 | sed 's/^/    /' >&2
-    exit 1
-  fi
+  echo "[manual] PostCSS 插件在当前 node_modules 里解析不到，构建一定会失败，先在这里停下。" >&2
+  echo "[manual] 目录现状（目录在 ≠ 包可用，看有没有 package.json）：" >&2
+  ls -la node_modules/@tailwindcss 2>&1 | sed 's/^/    /' >&2
+  echo "[manual] 处理：rm -rf node_modules .next && sh deploy/manual-deploy.sh" >&2
+  exit 1
 fi
 
 echo "[manual] 2/6 生成 Prisma 客户端"
@@ -176,35 +179,66 @@ echo "[manual] 3/6 构建"
 # 那种"依赖早就装好了、它还在报第一次的 Cannot find module"的假故障，很难与真故障区分。
 rm -rf .next
 BUILD_LOG=/tmp/youdee-build.log
+# 一旦 Turbopack 在某台机器上编不过，下次就别再浪费两分钟试它：留个记号，以后直接走 webpack。
+# 想重新让 Turbopack 试一次，删掉这个文件即可（BUILDER=turbopack 可强制单次）。
+BUILDER="${BUILDER:-auto}"
+if [ "$BUILDER" = "auto" ] && [ -f .build-via-webpack ]; then
+  BUILDER=webpack
+fi
 
-# Turbopack 与 webpack 产出的应用是等价的（同一份源码、同一套 Next 运行时），
-# 所以这里不把编译器当成"必须论证清楚"的问题：Turbopack 失败就换 webpack 再编一次，
-# 能出可用产物就继续部署。把失败留给一道编译器，等于让一次发包卡在一个与业务无关的点上。
-if NEXT_TELEMETRY_DISABLED=1 npx --no-install next build 2>&1 | tee "$BUILD_LOG"; then
+build_next() { NEXT_TELEMETRY_DISABLED=1 npx --no-install next build "$@"; }
+
+dump_build_failure() {
+  echo >&2
+  echo "[manual] 构建失败。以下是定位用的现场信息（完整日志：$BUILD_LOG）：" >&2
+  echo "[manual] --- PostCSS 插件解析（项目根 / .next 内的转换上下文各一次） ---" >&2
+  node -e '
+    const path = require("node:path");
+    const Module = require("node:module");
+    const specs = ["postcss", "@tailwindcss/postcss", "@tailwindcss/node", "tailwindcss"];
+    console.log("  从项目根解析：");
+    for (const s of specs) {
+      try { console.log("    " + s + " -> " + require.resolve(s)); }
+      catch (e) { console.log("    " + s + " -> 失败 " + e.code); }
+    }
+    // Turbopack 的转换代码实际是从 .next/build/chunks 里 require 的。
+    // 两处结论不同，就能确定是"解析根"的问题，而不是依赖缺失。
+    console.log("  从 .next/build/chunks 解析：");
+    const req = Module.createRequire(path.join(process.cwd(), ".next", "build", "chunks", "probe.js"));
+    for (const s of specs) {
+      try { console.log("    " + s + " -> " + req.resolve(s)); }
+      catch (e) { console.log("    " + s + " -> 失败 " + e.code); }
+    }
+  ' >&2
+  echo "[manual] --- node_modules/@tailwindcss ---" >&2
+  ls -la node_modules/@tailwindcss 2>&1 | sed 's/^/  /' >&2
+  echo "[manual] --- npm 视角 ---" >&2
+  NODE_ENV=development npm ls @tailwindcss/postcss --depth=0 2>&1 | sed 's/^/  /' >&2
+  echo "[manual] 把上面三块发出来即可定位；不要凭猜测改文件。" >&2
+}
+
+# Turbopack 与 webpack 产出等价（同一份源码、同一套 Next 运行时）。
+# 部署脚本的职责是"把应用跑起来"，不是"论证某个编译器为何失败"——
+# 卡在编译器上等于让一次发包停在与业务无关的点上。两个都失败才算真失败。
+if [ "$BUILDER" = "webpack" ]; then
+  echo "[manual] 使用 webpack 构建（之前 Turbopack 失败过，记号在 .build-via-webpack）"
+  if build_next --webpack 2>&1 | tee "$BUILD_LOG"; then
+    :
+  else
+    dump_build_failure
+    exit 1
+  fi
+elif build_next 2>&1 | tee "$BUILD_LOG"; then
   :
 else
-  set +e
   echo >&2
   echo "[manual] Turbopack 构建失败，改用 webpack 重编一次" >&2
   rm -rf .next
-  if NEXT_TELEMETRY_DISABLED=1 npx --no-install next build --webpack 2>&1 | tee -a "$BUILD_LOG"; then
-    echo "[manual] webpack 构建通过，本次部署继续（编译器差异已记入 docs/05-DEPLOY.md）"
-    set -e  # 上面为跑诊断信息关了 errexit，这里必须打开：否则后面 migrate / seed 失败会被吞掉
+  if build_next --webpack 2>&1 | tee -a "$BUILD_LOG"; then
+    echo "[manual] webpack 构建通过，本次部署继续；已写 .build-via-webpack，下次直接用 webpack"
+    date '+%Y-%m-%d %H:%M:%S Turbopack 失败过，此后回退 webpack' > .build-via-webpack
   else
-    echo >&2
-    echo "[manual] 两个编译器都失败。以下是定位用的现场信息（完整日志：$BUILD_LOG）：" >&2
-    echo "[manual] --- PostCSS 插件解析 ---" >&2
-    node -e '
-      for (const spec of ["postcss", "@tailwindcss/postcss", "@tailwindcss/node", "tailwindcss"]) {
-        try { console.log("  " + spec + " -> " + require.resolve(spec)); }
-        catch (e) { console.log("  " + spec + " -> 解析失败: " + e.code); }
-      }
-    ' >&2
-    echo "[manual] --- node_modules/@tailwindcss ---" >&2
-    ls -la node_modules/@tailwindcss 2>&1 | sed 's/^/  /' >&2
-    echo "[manual] --- npm 视角 ---" >&2
-    NODE_ENV=development npm ls @tailwindcss/postcss --depth=0 2>&1 | sed 's/^/  /' >&2
-    echo "[manual] 把上面三块发出来即可定位；不要凭猜测改文件。" >&2
+    dump_build_failure
     exit 1
   fi
 fi

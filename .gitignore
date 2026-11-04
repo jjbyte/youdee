@@ -17,6 +17,9 @@ var/uploads/
 .env.local
 .env*.local
 
+# 部署脚本在目标机上留的记号（Turbopack 编不过就回退 webpack，别带回仓库）
+.build-via-webpack
+
 # 日志
 *.log
 npm-debug.log*

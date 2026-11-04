@@ -282,7 +282,16 @@ node -e "console.log(require.resolve('@tailwindcss/postcss'))"
 NODE_ENV=production npx next build --webpack
 ```
 
-`manual-deploy.sh` 已经把这三步自动化了：清 `.next` → Turbopack → 失败自动换 webpack → 两个都失败才打现场信息（解析结果、目录列表、`npm ls`）并退出。
+`manual-deploy.sh` 已经把这几步自动化了：清 `.next` → Turbopack → 失败自动换 webpack → 两个都失败才打现场信息（项目根与 `.next/build/chunks` 两处解析结果、目录列表、`npm ls`）并退出。
+
+一旦回退过一次，工程根下会留一个 `.build-via-webpack` 记号，之后直接走 webpack，不再每次白试两分钟。想让 Turbopack 再试一次：
+
+```bash
+rm -f .build-via-webpack          # 以后重新尝试 Turbopack
+BUILDER=webpack sh deploy/manual-deploy.sh   # 或本次强制 webpack
+```
+
+**别用 `require("pkg/package.json")` 判断版本**：`@tailwindcss/postcss` 的 `exports` 只暴露了 `"."`，读子路径必然抛 `ERR_PACKAGE_PATH_NOT_EXPORTED`。这看起来像"包坏了"，实际包是好的 —— 本项目踩过一次，误判后去补装，反而把好树改坏。
 
 **锁文件不同步**（首次部署真实踩到过，报错只提锁文件、不提因果）：
 

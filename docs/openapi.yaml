@@ -170,18 +170,24 @@ paths:
     post:
       tags: [users]
       summary: 新建用户（仅 admin）
+      description: |
+        `login` 是台账里的署名，建好之后不能改（没有改登录名的接口）。
+        `email` 是本字段的旧名，服务端按 `login ?? email` 读取，只为兼容老调用方。
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [email, display_name, password, role]
+              required: [login, name, password, role]
               properties:
-                email: { type: string, format: email }
-                display_name: { type: string, minLength: 1, maxLength: 40 }
+                login: { type: string, minLength: 2, maxLength: 40 }
+                name: { type: string, minLength: 1, maxLength: 40 }
                 password: { type: string, minLength: 10 }
                 role: { type: string, enum: [admin, member] }
+                # 兼容别名（0.1.0 契约里的旧键名）
+                email: { type: string, format: email }
+                display_name: { type: string, minLength: 1, maxLength: 40 }
       responses:
         '201':
           description: 已创建
@@ -203,6 +209,10 @@ paths:
     patch:
       tags: [users]
       summary: 修改用户（资料 / 角色 / 停用 / 重置密码）
+      description: |
+        角色是每次请求回库读的，改完立刻生效，不需要对方重新登录。
+        两条 409：不能把自己降权或停用（40904），系统至少保留一个启用的管理员（40904）。
+        带 `password` 时 `token_version + 1`，对方已签发的会话立即失效。
       requestBody:
         required: true
         content:
@@ -211,6 +221,7 @@ paths:
               type: object
               properties:
                 display_name: { type: string, minLength: 1, maxLength: 40 }
+                name: { type: string, minLength: 1, maxLength: 40 }
                 role: { type: string, enum: [admin, member] }
                 is_active: { type: boolean }
                 password: { type: string, minLength: 10 }
@@ -228,6 +239,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
     delete:
       tags: [users]
       summary: 停用用户（软删除）
@@ -286,7 +298,14 @@ paths:
                             properties:
                               items:
                                 type: array
-                                items: { $ref: '#/components/schemas/Supplier' }
+                                items:
+                                  allOf:
+                                    - $ref: '#/components/schemas/Supplier'
+                                    - type: object
+                                      properties:
+                                        price_count:
+                                          type: integer
+                                          description: 该供应商的报价条数（列表一次算出，前端「报价数」列直接用；不要逐行再请求详情）
     post:
       tags: [suppliers]
       summary: 新建供应商（仅 admin）

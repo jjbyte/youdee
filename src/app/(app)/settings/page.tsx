@@ -46,12 +46,11 @@ export default function SettingsPage() {
       </div>
 
       <div className="settings mt-[var(--space-5)]">
-        <nav className="flex flex-col gap-[var(--space-1)]" aria-label="设置导航">
+        <nav className="settings__nav" aria-label="设置导航">
           {visible.map((n) => (
             <button
               key={n.key}
               type="button"
-              className="nav-item text-left"
               aria-current={active === n.key ? 'page' : undefined}
               onClick={() => setSection(n.key)}
             >

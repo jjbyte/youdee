@@ -4,12 +4,9 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { api, errorMessage, isUnauthorized } from '@/lib/api';
 import type { CurrentUser } from '@/lib/types';
-import { cx } from '@/lib/format';
 import {
-  IconBell,
   IconCollapse,
   IconDensity,
-  IconGuest,
   IconLogout,
   IconMaterial,
   IconQuote,
@@ -27,6 +24,8 @@ function crumbs(pathname: string): string[] {
     return pathname === '/materials' ? ['物料库'] : ['物料库', '比价'];
   }
   if (pathname.startsWith('/staff')) return pathname === '/staff' ? ['人员库'] : ['人员库', '人员比价'];
+  // 嘉宾价不是独立模块，是人员库的一个预置筛选视图，面包屑挂在人员库下面
+  if (pathname.startsWith('/guests')) return ['人员库', '嘉宾价'];
   if (pathname.startsWith('/vendors')) return ['供应商'];
   if (pathname.startsWith('/quotes')) {
     if (pathname === '/quotes') return ['攒单', '报价单'];
@@ -46,7 +45,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string>('');
   const [collapsed, setCollapsed] = useState(false);
   const [density, setDensity] = useState<'compact' | 'standard' | 'comfortable'>('standard');
-  const [unread, setUnread] = useState(0);
 
   const load = useCallback(async () => {
     setStatus('loading');
@@ -87,20 +85,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       /* 同上 */
     }
   }, [density]);
-
-  useEffect(() => {
-    if (!user) return;
-    let alive = true;
-    api
-      .unreadCount()
-      .then((r) => alive && setUnread(r?.unread ?? 0))
-      .catch(() => {
-        /* 未读数是次要信息，失败静默 */
-      });
-    return () => {
-      alive = false;
-    };
-  }, [user]);
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed((c) => {
@@ -178,17 +162,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           href="/staff"
           label="人员库"
           collapsed={collapsed}
-          active={isActive('/staff') && !pathname.includes('guest')}
+          // 嘉宾价是人员库的视图，不是第二个模块：老书签打开 /guests 时高亮「人员库」
+          active={isActive('/staff') || isActive('/guests')}
           icon={<IconStaff size={20} />}
         />
-        <NavLink
-          href="/staff?category=guest"
-          label="嘉宾价"
-          collapsed={collapsed}
-          active={false}
-          icon={<IconGuest size={20} />}
-          sub
-        />
+        {/* 「嘉宾价」不再挂侧栏：它是人员库的一个预置筛选视图（分类锁「专业嘉宾」），
+            两个入口并存只会让人以为这是两个模块。路由 `/guests` 保留，老书签仍能用。 */}
         <NavLink
           href="/vendors"
           label="供应商"
@@ -252,19 +231,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             <IconDensity size={16} />
           </IconButton>
-          <div className="relative flex items-center">
-            <IconButton label={`通知${unread > 0 ? `，${unread} 条未读` : ''}`}>
-              <IconBell size={16} />
-            </IconButton>
-            {unread > 0 ? (
-              <span
-                className="badge badge--danger absolute -top-[2px] -right-[2px] !px-[3px]"
-                aria-hidden="true"
-              >
-                {unread > 9 ? '9+' : unread}
-              </span>
-            ) : null}
-          </div>
           <div className="flex items-center gap-[var(--space-3)]">
             <span className="t-sm t-2">{user?.name ?? ''}</span>
             <span className="badge badge--neutral">{user?.role === 'admin' ? '管理员' : '成员'}</span>
@@ -285,19 +251,17 @@ function NavLink({
   icon,
   active,
   collapsed,
-  sub = false,
 }: {
   href: string;
   label: string;
   icon: ReactNode;
   active: boolean;
   collapsed: boolean;
-  sub?: boolean;
 }) {
   return (
     <Link
       href={href}
-      className={cx('nav-item', sub && !collapsed && '!pl-[var(--space-8)]')}
+      className="nav-item"
       aria-current={active ? 'page' : undefined}
       title={collapsed ? label : undefined}
     >

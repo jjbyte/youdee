@@ -308,6 +308,14 @@ export const api = {
     request<CompanyProfile>('/settings/company', { method: 'PATCH', body }),
   users: (params: { q?: string; role?: string; page?: number; limit?: number } = {}) =>
     request<Page<UserRecord>>(`/users${qs(params)}`),
+  createUser: (body: { login: string; name: string; password: string; role: string }) =>
+    request<UserRecord>('/users', { method: 'POST', body }),
+  /** 改姓名 / 角色 / 启用状态 / 重设密码。角色是每次请求回库读的，改完立刻生效 */
+  updateUser: (id: string, body: { name?: string; role?: string; isActive?: boolean; password?: string }) =>
+    request<UserRecord>(`/users/${id}`, { method: 'PATCH', body }),
+  /** 停用（不删）。报价单里的 created_by 要能一直解析出是谁出的单 */
+  deactivateUser: (id: string) => request<{ isActive: boolean }>(`/users/${id}`, { method: 'DELETE' }),
+  /** 0.1.11 起顶栏不再有铃铛（没有列表页，点了没反应）；接口留着，接回界面时不用改后端 */
   unreadCount: () => request<{ unread: number }>('/notifications/unread-count'),
 
   exportXlsxUrl: (id: string, view: 'customer' | 'internal' = 'customer') =>

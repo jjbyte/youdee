@@ -105,11 +105,17 @@ export async function patchUser(
     throw new AppError(40001, 'role 只能是 admin 或 member。', 400, { field: 'role' });
   }
   // 把自己降权/停用会让系统失去最后一个管理员入口，这类"把自己锁在门外"的操作直接拒
-  const losingAdmin = current.role === 'admin' && (input.role === 'member' || input.is_active === false);
-  if (losingAdmin && current.id === actor.id) {
+  //
+  // 判的是「**正在生效**的管理员会不会少一个」：目标账号本来就已停用时，
+  // 把它降成成员不会让任何启用的管理员消失，不该被拦。
+  // 0.1.11 加了权限编辑界面后这个错判立刻显形：停用过的管理员改不回成员，
+  // 提示还是「系统至少要保留一个启用状态的管理员」——和用户在做的事毫无关系。
+  const losingEnabledAdmin =
+    current.role === 'admin' && current.is_active && (input.role === 'member' || input.is_active === false);
+  if (losingEnabledAdmin && current.id === actor.id) {
     throw new AppError(40904, '不能把自己降权或停用，请让另一个管理员来操作。', 409);
   }
-  if (losingAdmin) {
+  if (losingEnabledAdmin) {
     const admins = await one<{ n: string }>(
       "SELECT count(*)::text AS n FROM users WHERE role='admin' AND is_active",
       [],
@@ -148,7 +154,8 @@ export async function deactivateUser(id: string, actor: CurrentUser) {
   if (current.id === actor.id) {
     throw new AppError(40904, '不能停用自己。', 409);
   }
-  if (current.role === 'admin') {
+  // 同上：只有「停掉一个正在生效的管理员」才可能让系统失去管理员入口
+  if (current.role === 'admin' && current.is_active) {
     const admins = await one<{ n: string }>(
       "SELECT count(*)::text AS n FROM users WHERE role='admin' AND is_active",
       [],

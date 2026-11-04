@@ -43,6 +43,40 @@ export function canManageCatalog(role: Role): boolean {
 }
 
 /**
+ * 能力清单（给界面用的**展示**数据，不放判定逻辑）。
+ *
+ * 放在这个文件里是故意的：判定函数和这张表必须逐行对得上，
+ * 分两个文件放早晚会漂移——界面上写着「成员可覆盖旧价」，代码里却返回 false。
+ * 改任何一个函数，都要顺手看这张表。
+ */
+export interface RoleCapability {
+  label: string;
+  admin: boolean;
+  member: boolean;
+}
+
+export const ROLE_CAPABILITIES: RoleCapability[] = [
+  { label: '查价 · 比价 · 看趋势', admin: true, member: true },
+  { label: '新建报价单 · 出单', admin: true, member: true },
+  { label: '屏幕上看成本与毛利', admin: true, member: true },
+  { label: '手填成本（只影响本单）', admin: true, member: true },
+  { label: '新建一条价（含版本化复制）', admin: true, member: true },
+  { label: '覆盖 / 停用已有价', admin: true, member: false },
+  { label: '改交易性质 / 折算系数', admin: true, member: false },
+  { label: '导出客户版', admin: true, member: true },
+  { label: '导出内部版（含成本）', admin: true, member: false },
+  { label: '供应商档案 / 分类字典', admin: true, member: false },
+  { label: '设置项 / 账号管理', admin: true, member: false },
+];
+
+export const ROLE_LABEL: Record<Role, string> = { admin: '管理员', member: '成员' };
+
+/** 这个角色做不到的事（编辑权限时最该被看见的就是这一列） */
+export function deniedCapabilities(role: Role): string[] {
+  return ROLE_CAPABILITIES.filter((c) => !c[role]).map((c) => c.label);
+}
+
+/**
  * 成员走「新建一条价」时，这四个字段不得与上一条版本不一致 ——
  * 服务端 422 拒绝，不能只靠界面灰显（Spec §5.2 红线 3）。
  * 理由：这四个字段换了任何一个，等于换掉了一个被比较的对象。

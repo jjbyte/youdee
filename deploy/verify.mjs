@@ -73,6 +73,57 @@ async function main() {
           : 'http 目标且未带 Secure，浏览器可写入',
   );
 
+  // 2c. 页面路由在不在。「嘉宾价」曾经指向 /staff?category=guest，
+  //     同一 pathname 换 query 不会重挂载组件，点了等于没反应；后来改成独立路由 /guests。
+  //     0.1.11 侧栏不再挂这个入口（人员库自己就能按分类筛），但路由必须还在——
+  //     老书签、别人发过的地址打开不能 404。
+  //     静态页在 SSR 时只吐骨架，所以只断言 HTTP 200，不在 HTML 里找文案。
+  const guestPage = await fetch(`${BASE}/guests`, { headers: { Cookie: jar.admin ?? '' } });
+  record('「嘉宾价」老链接仍可打开', guestPage.status === 200, `HTTP ${guestPage.status}`);
+
+  // 2d. 权限编辑：三个用户接口 0.1.0 就在，但界面上只有一张只读表，等于管理员开不了权限。
+  //     这里建一个临时账号走一遍「新建 → 升管理员 → 降回成员 → 停用」，全程可逆。
+  //     留一条 is_active=false 的「自检临时账号」在库里，属正常现象（停用是软删，台账要留署名）。
+  const adminId = login.json?.data?.id;
+  const tmpLogin = `selfcheck_${Date.now().toString(36)}`;
+  const created = await call('POST', '/users', {
+    as: 'admin',
+    body: { login: tmpLogin, name: '自检临时账号', password: 'selfcheck-2026', role: 'member' },
+  });
+  const tmpId = created.json?.data?.id;
+  record('管理员能新建账号', created.json?.code === 0 && !!tmpId, `${created.json?.code} ${created.json?.message ?? tmpLogin}`);
+  if (tmpId) {
+    const promote = await call('PATCH', `/users/${tmpId}`, { as: 'admin', body: { role: 'admin' } });
+    record(
+      '管理员能把成员提成管理员',
+      promote.json?.code === 0 && promote.json?.data?.role === 'admin',
+      `${promote.json?.code} role=${promote.json?.data?.role ?? promote.json?.message ?? ''}`,
+    );
+    const demote = await call('PATCH', `/users/${tmpId}`, { as: 'admin', body: { role: 'member' } });
+    record(
+      '管理员能把管理员降回成员',
+      demote.json?.code === 0 && demote.json?.data?.role === 'member',
+      `${demote.json?.code} role=${demote.json?.data?.role ?? demote.json?.message ?? ''}`,
+    );
+    const selfDemote = await call('PATCH', `/users/${adminId}`, { as: 'admin', body: { role: 'member' } });
+    record(
+      '不能把自己降权（40904）',
+      selfDemote.json?.code === 40904,
+      `${selfDemote.json?.code} ${selfDemote.json?.message ?? ''}`,
+    );
+    const bye = await call('DELETE', `/users/${tmpId}`, { as: 'admin' });
+    record(
+      '停用临时账号',
+      bye.json?.code === 0 && bye.json?.data?.is_active === false,
+      `${bye.json?.code} ${bye.json?.message ?? ''}`,
+    );
+  } else {
+    record('管理员能把成员提成管理员', false, '账号没建出来，后续权限检查跳过');
+    record('管理员能把管理员降回成员', false, '同上');
+    record('不能把自己降权（40904）', false, '同上');
+    record('停用临时账号', false, '同上');
+  }
+
   // 3. 主体库有数据（种子是否灌进去了）
   const items = await call('GET', '/items?item_type=material&limit=100', { as: 'admin' });
   const total = items.json?.data?.total ?? 0;
@@ -96,6 +147,44 @@ async function main() {
       ? `已写回：${selfPatch.json?.data?.name ?? ''}`
       : `${selfPatch.json?.code} ${selfPatch.json?.message ?? ''}`,
   );
+
+  // 3c. 供应商档案：同一个坑换了个页面。
+  //     「admin 只能看不能改」第二次出现是在供应商页——PATCH /suppliers/:id 一直是通的，
+  //     但界面只给了「删除供应商」，没有编辑入口。这里从接口层钉住能力，
+  //     以后再退化成只读，这一项会先报警。
+  const supList = await call('GET', '/suppliers?limit=1', { as: 'admin' });
+  const firstSupplier = supList.json?.data?.items?.[0];
+  if (firstSupplier) {
+    const supPatch = await call('PATCH', `/suppliers/${firstSupplier.id}`, {
+      as: 'admin',
+      body: {
+        name: firstSupplier.name,
+        contact_name: firstSupplier.contact_name ?? null,
+        default_lead_time_days: firstSupplier.default_lead_time_days ?? null,
+      },
+    });
+    record(
+      '管理员能改供应商档案',
+      supPatch.json?.code === 0 && supPatch.json?.data?.id === firstSupplier.id,
+      supPatch.json?.code === 0
+        ? `已写回：${supPatch.json?.data?.name ?? ''}`
+        : `${supPatch.json?.code} ${supPatch.json?.message ?? ''}`,
+    );
+
+    // 列表的「报价数」列必须和详情一致。
+    // 这条是为一个"不报错的错数"加的：列表 SQL 只做了 SELECT *，没带统计，
+    // 前端又写 `priceCount ?? 0` 兜底 —— 结果每一家都显示 0，看着像"这家没报过价"。
+    const supDetail = await call('GET', `/suppliers/${firstSupplier.id}`, { as: 'admin' });
+    const listCount = firstSupplier.price_count;
+    const detailCount = supDetail.json?.data?.price_count;
+    record(
+      '供应商列表的报价数 = 详情报价数',
+      typeof listCount === 'number' && listCount === detailCount,
+      `列表 ${listCount ?? '缺字段'} / 详情 ${detailCount ?? '-'}`,
+    );
+  } else {
+    record('管理员能改供应商档案', false, '供应商表是空的，连一条都没读到');
+  }
 
   // 4. 比价：所有价必须都在（含不可比的），最低价必须标出来
   const cmp = await call('GET', `/items/${truss.id}/compare?qty_base=18&tax_basis=inclusive`, { as: 'admin' });
@@ -193,6 +282,63 @@ async function main() {
   });
   record('加行：手填成本', line2.json?.code === 0, line2.json?.message ?? '');
 
+  // 6b. 攒单的对客价从哪来。
+  //     真实反馈：勾了物料点「攒进报价单」，提示成功、右侧列表还是空的。
+  //     根因不是取价失败，而是**对客价是成本按单头毛利率反推的**——新建单没有毛利率，
+  //     服务端整批 40001 拒绝，前端却在请求发出前就弹了「已攒进 N 项」。
+  //     这里把服务端这一条契约钉死：没毛利率 → 明确拒绝；补上 → 同一批立刻能进。
+  //     （原来建单时随手给了 sale_unit_price，所以这条路径从来没被走过。）
+  const noMargin = await call('POST', '/quotes', {
+    as: 'admin',
+    body: { customer_name: '自检样例', event_name: '无毛利率单，跑完即删', valid_until: validUntil },
+  });
+  const nmId = noMargin.json?.data?.id;
+  if (nmId) {
+    const bareLine = {
+      line_kind: 'material',
+      item_id: truss.id,
+      item_name_snapshot: truss.name,
+      unit_snapshot: '套',
+      qty: '1',
+      cost_source: 'price_book',
+      pricing_nature: 'custom_made',
+    };
+    const rejected = await call('POST', `/quotes/${nmId}/items/bulk`, { as: 'admin', body: { items: [bareLine] } });
+    record(
+      '攒单：没有目标毛利率时明确拒绝（不是静默失败）',
+      rejected.json?.code === 40001 && String(rejected.json?.message ?? '').includes('毛利率'),
+      `${rejected.status} ${rejected.json?.code} ${rejected.json?.message ?? ''}`,
+    );
+
+    await call('PATCH', `/quotes/${nmId}`, { as: 'admin', body: { target_margin_rate: '0.4' } });
+    const accepted = await call('POST', `/quotes/${nmId}/items/bulk`, { as: 'admin', body: { items: [bareLine] } });
+    const first = accepted.json?.data?.items?.[0];
+    const cost = Number(first?.cost_unit_price ?? 0);
+    const sale = Number(first?.sale_unit_price ?? 0);
+    record(
+      '攒单：设了毛利率后同一行能进单，且对客价按毛利率反推',
+      accepted.json?.code === 0 && cost > 0 && Math.abs(sale - cost / 0.6) < 0.01,
+      accepted.json?.code === 0
+        ? `成本 ${cost} → 对客 ${sale}（毛利率 40% 应为 ${(cost / 0.6).toFixed(4)}）`
+        : `${accepted.json?.code} ${accepted.json?.message ?? ''}`,
+    );
+
+    // 改毛利率只影响之后攒进来的行，已有行要靠「按毛利率重算」——这条接口必须真的会改数
+    await call('PATCH', `/quotes/${nmId}`, { as: 'admin', body: { target_margin_rate: '0.5' } });
+    const recalc = await call('POST', `/quotes/${nmId}/apply-target-margin`, { as: 'admin', body: {} });
+    const nextSale = Number(recalc.json?.data?.updated?.[0]?.new_sale_unit_price ?? 0);
+    record(
+      '改毛利率后「按毛利率重算」把已有行的对客价改掉',
+      recalc.json?.code === 0 && nextSale > 0 && Math.abs(nextSale - cost / 0.5) < 0.01,
+      `40% → 对客 ${sale}，改成 50% 重算后 → ${nextSale || '没变'}（应为 ${(cost / 0.5).toFixed(4)}）`,
+    );
+    await call('DELETE', `/quotes/${nmId}`, { as: 'admin' });
+  } else {
+    record('攒单：没有目标毛利率时明确拒绝（不是静默失败）', false, '建不出第二张草稿单');
+    record('攒单：设了毛利率后同一行能进单，且对客价按毛利率反推', false, '同上');
+    record('改毛利率后「按毛利率重算」把已有行的对客价改掉', false, '同上');
+  }
+
   // 7. 自检：手填成本只应是 warning，绝不能拦住出单
   const risk = await call('GET', `/quotes/${qid}/risk-check`, { as: 'admin' });
   const rd = risk.json?.data ?? {};
@@ -224,6 +370,30 @@ async function main() {
     memberPatch.json?.code === 40301,
     `${memberPatch.json?.code} ${memberPatch.json?.message ?? ''}`,
   );
+
+  // 权限一旦能被编辑，就必须能被别人编辑不了：成员不能给自己升管理员
+  const memberRoleEscalation = await call('PATCH', `/users/${mlogin.json?.data?.id ?? adminId}`, {
+    as: 'member',
+    body: { role: 'admin' },
+  });
+  record(
+    '成员不能改权限（40301）',
+    memberRoleEscalation.json?.code === 40301,
+    `${memberRoleEscalation.json?.code} ${memberRoleEscalation.json?.message ?? ''}`,
+  );
+  if (firstSupplier) {
+    const memberSupPatch = await call('PATCH', `/suppliers/${firstSupplier.id}`, {
+      as: 'member',
+      body: { name: firstSupplier.name },
+    });
+    record(
+      '成员改供应商被拒绝（40301）',
+      memberSupPatch.json?.code === 40301,
+      `${memberSupPatch.json?.code} ${memberSupPatch.json?.message ?? ''}`,
+    );
+  } else {
+    record('成员改供应商被拒绝（40301）', false, '没有可用的供应商 id，跳过');
+  }
   const priceList = await call('GET', `/prices?item_id=${truss.id}&limit=1`, { as: 'admin' });
   const priceId = priceList.json?.data?.items?.[0]?.id;
   if (priceId) {

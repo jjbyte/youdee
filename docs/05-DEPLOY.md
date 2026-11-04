@@ -8,7 +8,7 @@
 ## 0. 包里有什么
 
 ```
-youdee-0.1.0-YYYYMMDD.tar.gz
+youdee-0.1.1-20261104.tar.gz
 ├── src/                 应用源码（前端页面 + API）
 ├── prisma/              数据库 schema、迁移 SQL、种子数据
 ├── public/              静态资源（构建期就固定的那些）
@@ -56,7 +56,7 @@ youdee-0.1.0-YYYYMMDD.tar.gz
 在**你的电脑**上（包里已带脚本，一条命令搞定）：
 
 ```bash
-tar -xzf youdee-0.1.0-YYYYMMDD.tar.gz -C youdee-src
+tar -xzf youdee-0.1.1-20261104.tar.gz -C youdee-src
 cd youdee-src
 deploy/deploy.sh root@1.2.3.4          # 口令登录：SSH_PASS='密码' deploy/deploy.sh root@1.2.3.4
 ```
@@ -67,7 +67,7 @@ deploy/deploy.sh root@1.2.3.4          # 口令登录：SSH_PASS='密码' deploy
 如果服务器不能直连、只能手动传文件，那就用 `scp` 传包上去，然后在**服务器**上：
 
 ```bash
-mkdir -p /opt/youdee && tar -xzf youdee-0.1.0-YYYYMMDD.tar.gz -C /opt/youdee
+mkdir -p /opt/youdee && tar -xzf youdee-0.1.1-20261104.tar.gz -C /opt/youdee
 cd /opt/youdee && chmod +x deploy/*.sh
 ```
 
@@ -145,7 +145,7 @@ node -v      # 要 v22.x
 
 ```bash
 sudo mkdir -p /opt/youdee && sudo chown $USER /opt/youdee
-tar -xzf youdee-0.1.0-YYYYMMDD.tar.gz -C /opt/youdee
+tar -xzf youdee-0.1.1-20261104.tar.gz -C /opt/youdee
 cd /opt/youdee
 cp deploy/env.example .env
 vi .env      # DATABASE_URL 改成 postgresql://youdee:口令@127.0.0.1:5432/youdee?schema=public

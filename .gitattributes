@@ -1,0 +1,26 @@
+# 换行符一律 LF。
+#
+# 这不是风格洁癖：部署目标是 Linux，而 CRLF 会造成两类很难排查的故障——
+# 1) shell 脚本 shebang 带 \r，执行时只报 "no such file or directory"，
+#    看不出是换行符问题；
+# 2) Dockerfile 的 RUN 用反斜杠续行时 \r 会跟着进去，命令变成
+#    "mkdir -p var/uploads \r"，报错信息与真因完全对不上。
+# 3) .dockerignore 的规则末尾带 \r 会导致匹配不上，node_modules 被塞进构建上下文。
+#
+# 开发机是 Windows 时，编辑器存成 CRLF 是默认行为，所以用 eol=lf 在检出时强制纠正。
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.mjs   text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+Dockerfile text eol=lf
+
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.ico   binary
+*.pdf   binary
+*.xlsx  binary
+*.gz    binary

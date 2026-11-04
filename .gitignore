@@ -27,3 +27,7 @@ Thumbs.db
 # 测试
 coverage/
 .vitest/
+
+# 构建/联调期间的临时脚本（agent 产出，非交付物；文件保留在本地但不入库）
+.workbuddy/*.mjs
+.workbuddy/*.out.txt

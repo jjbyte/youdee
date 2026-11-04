@@ -38,6 +38,25 @@ else
   echo "[pack] 警告：本机无 npm，跳过 lockfile 同步检查"
 fi
 
+# ── 门禁：Prisma schema 必须能过 validate ─────────────────────────────
+# 这个坑比 lockfile 那个更晚才发现：P1012（"is missing an opposite relation field"）
+# 只在 `prisma generate` 时才炸，而 generate 发生在目标机的第 2/6 步 —— 也就是说
+# schema 有缺陷这件事，要等对方把包传上去、装完依赖才暴露，白折腾一轮。
+# validate 不连库，所以 .env 缺失时塞一个占位连接串即可（prisma.config.ts 只是要求它非空）。
+if [ -f prisma/schema.prisma ] && command -v node >/dev/null 2>&1; then
+  if [ -z "${DATABASE_URL:-}" ] && [ ! -f .env ]; then
+    export DATABASE_URL='postgresql://pack:pack@127.0.0.1:5432/pack?schema=public'
+  fi
+  if ! npx --no-install prisma validate >/tmp/pack-prisma.log 2>&1; then
+    echo "[pack] 失败：prisma/schema.prisma 校验不通过，目标机的 prisma generate 必然失败。"
+    echo "[pack] 常见是 P1012：关系只写了一侧（有 @relation 的一侧，没写反向字段）。"
+    echo "[pack] 原始输出："
+    tail -25 /tmp/pack-prisma.log | sed 's/^/    /'
+    exit 1
+  fi
+  echo "[pack] Prisma schema 校验通过"
+fi
+
 # ── 门禁：脚本与 Dockerfile 必须是 LF ────────────────────────────────
 # 这个坑在本项目踩过两次：Windows 下的文本模式写入会把 \n 变成 \r\n。
 # 后果在 Linux 上表现为 "no such file or directory"（CRLF 的 shebang 找不到解释器）

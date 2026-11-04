@@ -128,6 +128,19 @@ CREATE DATABASE youdee OWNER youdee;
 SQL
 ```
 
+**Node 版本怎么选。** 主链路（`prisma generate` / `next build` / `migrate deploy` / `next start`）在
+Node 20.19 及以上都能跑通；但 `vitest` 与 `@prisma/streams-local` 声明要 22，所以在 20.x 上
+`npm ci` 会刷一串 `EBADENGINE`。**那是警告不是失败**，安装会继续，部署不受影响，代价只是
+`npm test` 不能在生产机上跑。脚本会检测并在低于 22.12 时把这段话直接打出来，避免误判。
+
+想让日志干净（也推荐，省得下次自己或同事再怀疑一次）：
+
+```bash
+curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo yum install -y nodejs   # RHEL 系
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs # Debian 系
+node -v      # 要 v22.x
+```
+
 然后：
 
 ```bash
@@ -245,6 +258,8 @@ tar czf uploads-$(date +%F).tar.gz -C /opt/youdee var/uploads
 | 端口占用 | 3000 被别的东西占了 | `.env` 里改 `APP_PORT=8080` |
 | 中文乱码 | 库编码不是 UTF8 | 建库时指定 `ENCODING 'UTF8'`；本项目的迁移含中文默认值与注释 |
 | `prisma migrate deploy` 报 P3025 | 配置里设了 `shadowDatabaseUrl` 且与主库相同 | 本项目 `prisma.config.ts` 已移除该字段，不要加回去 |
+| `prisma generate` 报 **P1012**：`Error parsing attribute "@relation": The relation field X on Model Y is missing an opposite relation field` | `schema.prisma` 里某条关系只写了一半（有 `@relation` 的一侧，没有另一侧的反向字段）。0.1.0 首包就有两处：`User.pricesCreated` 缺 `Price.createdByUser`，`Price.unit` 缺 `Unit.prices` | 已修复。以后改关系必须两侧同改；本地先 `npx prisma validate` 再打包（`pack.sh` 已把这条设为门禁） |
+| `npm ci` 刷出成片 `EBADENGINE ... required: {"node":"^22.12.0"}` | Node 低于 22.12，而 `vitest`、`@prisma/streams-local` 声明要 22 | **是警告，不是失败**，`npm ci` 仍会继续并成功。主链路在 20.19+ 可用，只是 `npm test` 跑不了。想彻底消掉就升级 Node 22（见「路径 B」里的升级命令） |
 
 **锁文件不同步**（首次部署真实踩到过，报错只提锁文件、不提因果）：
 

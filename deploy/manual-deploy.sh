@@ -5,7 +5,7 @@
 #   用法：cd /opt/youdee && sudo sh deploy/manual-deploy.sh
 #
 # 前置条件（本脚本不代为安装，装了会污染系统且各发行版差异大）：
-#   - Node.js >= 20.19   （node -v 自查）
+#   - Node.js >= 20.19   （node -v 自查；建议 22 LTS，脚本会检查并在低于 22.12 时给出说明）
 #   - PostgreSQL >= 14   （本机或远端都可，连接串写在 .env 的 DATABASE_URL）
 #   - 能访问 npm registry（要装依赖、要构建）
 #
@@ -20,11 +20,43 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "[manual] 缺少 $1，请先�
 need node
 need npm
 
+NODE_VER="$(node -v)"
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 NODE_MINOR="$(node -p 'process.versions.node.split(".")[1]')"
-if [ "$NODE_MAJOR" -lt 20 ] || { [ "$NODE_MAJOR" -eq 20 ] && [ "$NODE_MINOR" -lt 19 ]; }; then
-  echo "[manual] Node 版本过低：$(node -v)，需要 >= 20.19" >&2
+
+# node_ge MAJOR MINOR：当前 Node 是否 >= 指定版本
+node_ge() {
+  [ "$NODE_MAJOR" -gt "$1" ] && return 0
+  [ "$NODE_MAJOR" -eq "$1" ] && [ "$NODE_MINOR" -ge "$2" ]
+}
+
+echo "[manual] Node $NODE_VER / npm $(npm -v)"
+
+# 硬底线 20.19：next 16 要 >=20.9，prisma 7 的 engines 明确写了 ^20.19 || ^22.12 || >=24。
+if ! node_ge 20 19; then
+  echo "[manual] Node 版本过低：$NODE_VER，需要 >= 20.19（建议直接上 22 LTS）" >&2
+  echo "[manual] 升级命令：" >&2
+  echo "  RHEL 系： curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo yum install -y nodejs" >&2
+  echo "  Debian 系：curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs" >&2
   exit 1
+fi
+
+# 软底线 22.12：vitest 5 声明 ^22.12，@prisma/streams-local 声明 >=22（它是 prisma 的间接依赖）。
+# 这两个都**不在部署主链路**上 —— 主链路是 generate / build / migrate deploy / start，
+# prisma 自己的 engines 允许 ^20.19，所以在 20.19~22.11 上部署是能跑通的，
+# 代价只有两个：npm ci 会刷 EBADENGINE 警告（警告不是失败，install 照样成功），
+# 以及 npm test 在本机跑不起来（测试在 CI/开发机跑，不需要在生产机上跑）。
+# 因此这里只提示、不中止：把话讲明白，比让人对着满屏红色警告猜"是不是装坏了"要好。
+if ! node_ge 22 12; then
+  cat >&2 <<EOF
+[manual] ────────────────────────────────────────────────────────────────
+[manual] 提示：Node $NODE_VER 低于 22.12。
+[manual] 接下来的 npm ci 会输出若干条 EBADENGINE（vitest、@prisma/streams-local）。
+[manual] 那是声明版本不匹配的**警告**，npm 会继续安装，不影响本次部署；请勿中断。
+[manual] 影响面：仅 npm test 无法在本机执行。部署主链路不受影响。
+[manual] 想让日志干净：升级到 Node 22 LTS 后重跑本脚本。
+[manual] ────────────────────────────────────────────────────────────────
+EOF
 fi
 
 if [ ! -f .env ]; then

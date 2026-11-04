@@ -28,6 +28,7 @@ model Unit {
 
   items       Item[] @relation("ItemBaseUnit")
   itemsCompare Item[] @relation("ItemCompareUnit")
+  prices      Price[]
 
   @@map("units")
 }
@@ -184,6 +185,9 @@ model Price {
   item     Item     @relation(fields: [itemId], references: [id], onDelete: Restrict)
   supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   unit     Unit     @relation(fields: [unitCode], references: [code], onDelete: Restrict)
+  // 与 Quote 的写法保持一致（见 Quote.createdByUser）：裸列 + 显式关系字段。
+  // 少了这一行，User.pricesCreated 就找不到反向字段，prisma generate 直接 P1012 失败。
+  createdByUser User? @relation("PriceCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
 
   tiers       PriceTier[]
   attachments PriceAttachment[]

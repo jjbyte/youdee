@@ -14,7 +14,8 @@ import { LowestSummaryView } from '@/components/lowest-summary';
 import { AddToQuoteModal } from '@/components/add-to-quote-modal';
 import { NewItemButton } from '@/components/new-item-button';
 import { PriceEntryDrawer } from '@/components/price-entry-drawer';
-import { IconMore, IconPencil, IconPlus, IconQuote } from '@/components/icons';
+import { ItemEditDrawer } from '@/components/item-edit-drawer';
+import { IconPencil, IconPlus, IconQuote } from '@/components/icons';
 
 const PAGE_SIZE = 20;
 
@@ -33,6 +34,7 @@ export default function MaterialsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [entryFor, setEntryFor] = useState<ItemListItem | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const initialized = useRef(false);
@@ -44,8 +46,11 @@ export default function MaterialsPage() {
     const sp = new URLSearchParams(window.location.search);
     const qq = sp.get('q');
     const cc = sp.get('category');
+    // ?edit=<id> 直接打开档案编辑：从别处（比价页、通知）跳过来时不用再找一遍哪一行
+    const ee = sp.get('edit');
     if (qq) setQ(qq);
     if (cc) setCategoryId(cc);
+    if (ee) setEditId(ee);
   }, []);
 
   useEffect(() => {
@@ -325,11 +330,8 @@ export default function MaterialsPage() {
                           <IconButton label={`给 ${r.name} 新增报价`} onClick={() => setEntryFor(r)}>
                             <IconPlus size={16} />
                           </IconButton>
-                          <IconButton label={`编辑 ${r.name}`} onClick={() => router.push(`/materials/${r.id}`)}>
+                          <IconButton label={`编辑 ${r.name} 的档案`} onClick={() => setEditId(r.id)}>
                             <IconPencil size={16} />
-                          </IconButton>
-                          <IconButton label={`更多操作 ${r.name}`}>
-                            <IconMore size={16} />
                           </IconButton>
                         </div>
                       </Td>
@@ -420,6 +422,17 @@ export default function MaterialsPage() {
           onSaved={() => void load(page)}
         />
       ) : null}
+
+      <ItemEditDrawer
+        open={Boolean(editId)}
+        itemId={editId}
+        itemType="material"
+        onClose={() => setEditId(null)}
+        onSaved={(it) => {
+          setToast(`已保存「${it.name}」`);
+          void load(page);
+        }}
+      />
 
       {toast ? (
         <div className="fixed right-[var(--space-7)] bottom-[var(--space-8)] z-[var(--z-toast)] panel">

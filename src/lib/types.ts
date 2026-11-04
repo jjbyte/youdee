@@ -108,6 +108,7 @@ export interface ItemListItem {
 
 export interface ItemDetail extends ItemListItem {
   code: string | null;
+  aliases: string[];
   compareUnitCode: string | null;
   compareUnitName: string | null;
   pricingMode: UnitMode | null;

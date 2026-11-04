@@ -12,6 +12,10 @@ import { SearchInput } from '@/components/ui/field';
 import { Table, TableWrap, Td, Th } from '@/components/ui/table';
 import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
 import { NewItemButton } from '@/components/new-item-button';
+import { ItemEditDrawer } from '@/components/item-edit-drawer';
+import { useMe } from '@/lib/use-me';
+import { canManageCatalog } from '@/domain/permissions';
+import { IconPencil } from '@/components/icons';
 import { AddToQuoteModal } from '@/components/add-to-quote-modal';
 import { Toast } from '@/components/ui/overlay';
 import { IconSearch, IconStaff } from '@/components/icons';
@@ -54,6 +58,9 @@ export default function StaffPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const { user } = useMe();
+  const isAdmin = user ? canManageCatalog(user.role) : false;
   const searchRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -282,13 +289,28 @@ export default function StaffPage() {
                           )}
                         </Td>
                         <Td align="right">
-                          <Link
-                            href={`/staff/${it.id}`}
-                            className="btn btn--link"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            比价
-                          </Link>
+                          <div className="flex items-center justify-end gap-[var(--space-3)]">
+                            {isAdmin ? (
+                              <button
+                                type="button"
+                                className="btn btn--link"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditId(it.id);
+                                }}
+                              >
+                                <IconPencil size={14} />
+                                编辑
+                              </button>
+                            ) : null}
+                            <Link
+                              href={`/staff/${it.id}`}
+                              className="btn btn--link"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              比价
+                            </Link>
+                          </div>
                         </Td>
                       </tr>
                     );
@@ -338,6 +360,17 @@ export default function StaffPage() {
           setAddOpen(false);
           setSelected(new Set());
           setToast(message);
+        }}
+      />
+
+      <ItemEditDrawer
+        open={Boolean(editId)}
+        itemId={editId}
+        itemType="personnel"
+        onClose={() => setEditId(null)}
+        onSaved={(it) => {
+          setToast(`已保存「${it.name}」`);
+          void load();
         }}
       />
 

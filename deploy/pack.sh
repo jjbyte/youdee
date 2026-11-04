@@ -57,29 +57,41 @@ if [ -f prisma/schema.prisma ] && command -v node >/dev/null 2>&1; then
   echo "[pack] Prisma schema 校验通过"
 fi
 
-# ── 门禁：脚本与 Dockerfile 必须是 LF ────────────────────────────────
-# 这个坑在本项目踩过两次：Windows 下的文本模式写入会把 \n 变成 \r\n。
+# ── 门禁：所有进包的文本文件必须是 LF ─────────────────────────────────
+# 这个坑在本项目踩过三次：Windows 下的文本模式写入会把 \n 变成 \r\n。
 # 后果在 Linux 上表现为 "no such file or directory"（CRLF 的 shebang 找不到解释器）
 # 或 Dockerfile 的 \ 续行带上 \r —— 报错完全指不到真正原因。
+# 前两次只查了脚本与 Dockerfile，第三次栽在 src 的 .tsx 上，所以改成**递归扫全包**：
+# 只查少数几个文件等于给其余文件留后门。
 # 用字节判断而不是 grep $'\r'：Git Bash 下空模式会匹配所有文件，误报过一轮。
 if command -v node >/dev/null 2>&1; then
   node -e '
     const fs = require("fs");
-    const listed = ["Dockerfile", ".dockerignore", ".gitattributes", "docker-compose.yml"];
-    if (fs.existsSync("deploy")) {
-      for (const f of fs.readdirSync("deploy")) {
-        if (/\.(sh|mjs)$/.test(f)) listed.push("deploy/" + f);
+    const path = require("path");
+    const SKIP = new Set(["node_modules", ".next", ".git", "pgdata", ".pgtest", ".workbuddy", "dist", "var"]);
+    const EXT = /\.(sh|mjs|js|cjs|ts|tsx|jsx|css|json|md|yml|yaml|prisma|sql|example|gitattributes|dockerignore)$/i;
+    const NAMES = new Set(["Dockerfile", ".dockerignore", ".gitattributes", "docker-compose.yml"]);
+    const bad = [];
+    const walk = (dir) => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (SKIP.has(ent.name)) continue;
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) { walk(full); continue; }
+        if (!(NAMES.has(ent.name) || EXT.test(ent.name))) continue;
+        const buf = fs.readFileSync(full);
+        if (buf.includes(13)) bad.push(full);
       }
-    }
-    const bad = listed.filter((f) => fs.existsSync(f) && fs.readFileSync(f).includes(13));
+    };
+    walk(".");
     if (bad.length) {
       console.error("[pack] 失败：以下文件含 CR(\\r)，在 Linux 上会以无意义报错失败：");
-      for (const f of bad) console.error("    " + f);
+      for (const f of bad.slice(0, 20)) console.error("    " + f.replace(/^\.[\\/]/, ""));
+      if (bad.length > 20) console.error("    …… 还有 " + (bad.length - 20) + " 个");
       console.error("[pack] 修复：以字节模式把 \\r\\n 换成 \\n（不要用文本模式，会再转回去）。");
       process.exit(1);
     }
   ' || exit 1
-  echo "[pack] 换行符检查通过（全部 LF）"
+  echo "[pack] 换行符检查通过（全包 LF）"
 fi
 
 tar -czf "$OUT" \

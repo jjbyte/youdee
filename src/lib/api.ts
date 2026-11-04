@@ -202,6 +202,10 @@ export const api = {
   }) => request<Page<ItemListItem>>(`/items${qs(params)}`),
   item: (id: string) => request<ItemDetail>(`/items/${id}`),
   createItem: (body: Record<string, unknown>) => request<{ id: string }>('/items', { method: 'POST', body }),
+  updateItem: (id: string, body: Record<string, unknown>) =>
+    request<ItemDetail>(`/items/${id}`, { method: 'PATCH', body }),
+  /** 停用而不是删除：历史报价单引用的主体名必须还能解析出来 */
+  deactivateItem: (id: string) => request<ItemDetail>(`/items/${id}`, { method: 'DELETE' }),
   searchLite: (q: string, itemType?: 'material' | 'personnel', limit = 20) =>
     request<ItemListItem[]>(`/items/search-lite${qs({ q, itemType, limit })}`),
 

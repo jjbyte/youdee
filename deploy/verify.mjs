@@ -82,6 +82,21 @@ async function main() {
   record('找到示例主体「桁架背景板」', !!truss, truss ? truss.id : '未找到，后续比价与取价检查会跳过');
   if (!truss) return;
 
+  // 3b. 档案写权限：管理员能改。
+  //     真实反馈过"admin 登录后只能看不能改"，根因是前端压根没有编辑入口（不是权限）。
+  //     这里从接口层把权限钉住：以后哪怕前端再退化成只读，这一项仍能证明后端是通的。
+  const selfPatch = await call('PATCH', `/items/${truss.id}`, {
+    as: 'admin',
+    body: { name: truss.name, spec: truss.spec ?? null },
+  });
+  record(
+    '管理员能改档案',
+    selfPatch.json?.code === 0 && selfPatch.json?.data?.id === truss.id,
+    selfPatch.json?.code === 0
+      ? `已写回：${selfPatch.json?.data?.name ?? ''}`
+      : `${selfPatch.json?.code} ${selfPatch.json?.message ?? ''}`,
+  );
+
   // 4. 比价：所有价必须都在（含不可比的），最低价必须标出来
   const cmp = await call('GET', `/items/${truss.id}/compare?qty_base=18&tax_basis=inclusive`, { as: 'admin' });
   const group = (cmp.json?.data?.groups ?? [])[0];
@@ -202,6 +217,13 @@ async function main() {
   // 10. 权限：成员改旧价必须被挡
   const mlogin = await call('POST', '/auth/login', { body: MEMBER, as: 'member' });
   record('成员登录', mlogin.json?.code === 0, mlogin.json?.data?.name ?? mlogin.json?.message ?? '');
+
+  const memberPatch = await call('PATCH', `/items/${truss.id}`, { as: 'member', body: { name: truss.name } });
+  record(
+    '成员改档案被拒绝（40301）',
+    memberPatch.json?.code === 40301,
+    `${memberPatch.json?.code} ${memberPatch.json?.message ?? ''}`,
+  );
   const priceList = await call('GET', `/prices?item_id=${truss.id}&limit=1`, { as: 'admin' });
   const priceId = priceList.json?.data?.items?.[0]?.id;
   if (priceId) {

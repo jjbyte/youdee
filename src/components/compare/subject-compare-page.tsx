@@ -11,6 +11,9 @@ import { Button } from '@/components/ui/button';
 import { ErrorState, InlineLoading, Note } from '@/components/ui/states';
 import { Toast } from '@/components/ui/overlay';
 import { PriceEntryDrawer } from '@/components/price-entry-drawer';
+import { ItemEditDrawer } from '@/components/item-edit-drawer';
+import { useMe } from '@/lib/use-me';
+import { canManageCatalog } from '@/domain/permissions';
 import { CompareWorkbench } from '@/components/compare/compare-workbench';
 import { IconExternal, IconPaperclip, IconPencil, IconPlus, IconRuler } from '@/components/icons';
 
@@ -38,6 +41,9 @@ export function SubjectComparePage({ kind }: { kind: ItemType }) {
   const [taxBasis, setTaxBasis] = useState<TaxBasis>('inclusive');
   const [taxReady, setTaxReady] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const { user } = useMe();
+  const canEdit = user ? canManageCatalog(user.role) : false;
   const [toast, setToast] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const itemRef = useRef<ItemDetail | null>(null);
@@ -152,7 +158,14 @@ export function SubjectComparePage({ kind }: { kind: ItemType }) {
         </div>
 
         <div className="flex items-center gap-[var(--space-3)]">
-          <Button variant="secondary" size="sm" icon={<IconPencil size={16} />} disabled title="档案编辑在列表页做">
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<IconPencil size={16} />}
+            disabled={!canEdit}
+            title={canEdit ? '编辑档案（名称、分类、单位、别名）' : '档案只有管理员能改'}
+            onClick={() => setEditOpen(true)}
+          >
             编辑
           </Button>
           <Button variant="primary" icon={<IconPlus size={16} />} onClick={() => setDrawerOpen(true)}>
@@ -224,13 +237,30 @@ export function SubjectComparePage({ kind }: { kind: ItemType }) {
         onSaved={() => setReloadKey((k) => k + 1)}
       />
 
+      <ItemEditDrawer
+        open={editOpen}
+        itemId={item.id}
+        itemType={item.itemType}
+        onClose={() => setEditOpen(false)}
+        onSaved={(next) => {
+          setToast(`已保存「${next.name}」`);
+          setReloadKey((k) => k + 1);
+        }}
+      />
+
       <Toast message={toast} onClose={() => setToast(null)} />
 
       <div className="t-2xs t-3 mt-[var(--space-4)]">
         需要改档案？
-        <Link href={`${listHref}?q=${encodeURIComponent(item.name)}`} className="btn btn--link">
-          回{kind === 'personnel' ? '人员库' : '物料库'}找它
-        </Link>
+        {canEdit ? (
+          <button type="button" className="btn btn--link" onClick={() => setEditOpen(true)}>
+            在这儿直接改
+          </button>
+        ) : (
+          <Link href={`${listHref}?q=${encodeURIComponent(item.name)}`} className="btn btn--link">
+            找管理员改
+          </Link>
+        )}
       </div>
     </div>
   );

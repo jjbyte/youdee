@@ -82,6 +82,9 @@ button {
 .sidebar {
   background: var(--sidebar-bg);
   color: var(--sidebar-fg);
+  /* 全局 body 用了 antialiased（浅底深字更细腻），但它在深底浅字上会把笔画削细，
+     中文小字号因此显得发灰。侧栏单独退回系统默认渲染。 */
+  -webkit-font-smoothing: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -117,21 +120,30 @@ button {
   height: 32px;
   padding: 0 var(--space-3);
   border-radius: var(--radius-md);
-  color: var(--sidebar-fg);
+  /* 未选中项比 --sidebar-fg 再亮一档：导航靠"底色 + 左侧竖条"表达选中，
+     不靠"把其余项调灰"。灰化之后 14px 中文在深底上就是一坨发虚的笔画。 */
+  color: var(--fg-on-ink);
   font-size: var(--text-base);
+  /* 深底浅字按 400 渲染时字形边界立不住（Windows 上尤其明显）：
+     字重抬半档 + 轻微字距，小字号中文才不糊。 */
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.015em;
   position: relative;
   transition: background-color var(--motion-fast) var(--ease-standard);
   white-space: nowrap;
 }
+/* 图标是 flex 项，默认可收缩：一旦被压到 19px 就整体重采样，看着像糊了一层 */
+.nav-item > svg {
+  flex: none;
+}
 .nav-item:hover {
   background: var(--sidebar-item-hover);
-  color: var(--sidebar-fg);
+  color: var(--fg-on-ink);
   text-decoration: none;
 }
 .nav-item[aria-current="page"] {
   background: var(--sidebar-item-active);
-  color: var(--fg-on-ink);
-  font-weight: var(--fw-medium);
+  color: var(--white);
 }
 .nav-item[aria-current="page"]::before {
   content: "";

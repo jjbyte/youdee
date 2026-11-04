@@ -53,10 +53,13 @@ export async function saveUpload(file: File, subdir: string): Promise<SavedFile>
   if (!allowed) {
     throw new AppError(41501, '只支持 JPG / PNG / WEBP 图片与 PDF。', 415, { field: 'file' });
   }
-  const dir = path.join(process.cwd(), UPLOAD_DIR, subdir);
+  // 三处 turbopackIgnore：上传目录来自 UPLOAD_DIR，构建期是动态路径。
+  // 不标的话 Turbopack 会把整工程都追踪进 server 产物（构建慢、体积大），
+  // 而这里读写的都是运行期才存在的文件，构建期追踪没有意义。
+  const dir = path.join(/*turbopackIgnore: true*/ process.cwd(), UPLOAD_DIR, subdir);
   await mkdir(dir, { recursive: true });
   const name = `${randomUUID()}.${allowed.ext}`;
-  await writeFile(path.join(dir, name), buf);
+  await writeFile(path.join(/*turbopackIgnore: true*/ dir, name), buf);
   return {
     storageKey: `${subdir}/${name}`,
     url: `/uploads/${subdir}/${name}`,

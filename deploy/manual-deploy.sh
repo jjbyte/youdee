@@ -98,7 +98,29 @@ if [ -f .npmrc ] && grep -qE '^cache=[A-Za-z]:' .npmrc 2>/dev/null; then
 fi
 
 echo "[manual] 1/6 安装依赖"
-npm ci --no-audit --no-fund
+# 上面 set -a 已经把 .env 里的 NODE_ENV=production 导出了。npm 看到它就会走
+# omit=dev，把 devDependencies 整个跳过 —— 而构建恰恰离不开它们：
+#   @tailwindcss/postcss、tailwindcss  → PostCSS 处理 globals.css
+#   typescript                        → next build 的类型检查
+#   tsx                               → 第 5 步灌种子
+# 表现是构建到 CSS 阶段才报 "Cannot find module '@tailwindcss/postcss'"，
+# 从报错完全看不出是装包时就少了东西（首次部署真实踩到，日志里 "added 404 packages"
+# 就是线索：含 devDeps 应是 554 个）。
+# 只在这一步把 NODE_ENV 还原成 development，运行期的 production 不受影响；
+# 再补一个 --include=dev 做兜底（与 omit 冲突时 include 优先）。
+NODE_ENV=development npm ci --include=dev --no-audit --no-fund
+
+# 装完立刻验一遍构建必需的包，缺了就在第 1 步失败，而不是等到第 3 步猜报错
+MISSING=""
+for p in @tailwindcss/postcss tailwindcss typescript prisma tsx; do
+  [ -d "node_modules/$p" ] || MISSING="$MISSING $p"
+done
+if [ -n "$MISSING" ]; then
+  echo "[manual] 失败：devDependencies 没装上，缺:$MISSING" >&2
+  echo "[manual] 原因几乎总是 NODE_ENV=production 让 npm 走了 omit=dev。" >&2
+  echo "[manual] 处理：确认本脚本第 1 步没有被改回裸的 npm ci，然后 rm -rf node_modules 重跑。" >&2
+  exit 1
+fi
 
 echo "[manual] 2/6 生成 Prisma 客户端"
 npx --no-install prisma generate

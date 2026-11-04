@@ -16,7 +16,10 @@ export const runtime = 'nodejs';
 // 每次都要看盘：缓存了这个响应，新上传的文件就永远拿不到
 export const dynamic = 'force-dynamic';
 
-const ROOT = path.resolve(process.cwd(), process.env.UPLOAD_DIR ?? 'var/uploads');
+// turbopackIgnore：这行会让静态分析认为"路径是动态的"，于是把整个工程（含 public/）
+// 都算进 server 产物的依赖里，构建变慢、体积膨胀。而这里读的是运行期上传的文件，
+// 构建期一个都不存在，追不追无所谓 —— 显式退出追踪。
+const ROOT = path.resolve(/*turbopackIgnore: true*/ process.cwd(), process.env.UPLOAD_DIR ?? 'var/uploads');
 
 /** 与 upload.service 的白名单一致。不在表里的扩展名一律不读盘。 */
 const MIME: Record<string, string> = {
@@ -42,7 +45,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ path?: string[
   if (segs.some((s) => s === '' || s === '.' || s === '..' || s.includes('/') || s.includes('\\'))) {
     return notFound();
   }
-  const target = path.resolve(ROOT, segs.join(path.sep));
+  const target = path.resolve(/*turbopackIgnore: true*/ ROOT, segs.join(path.sep));
   if (target !== ROOT && !target.startsWith(ROOT + path.sep)) return notFound();
 
   try {

@@ -26,8 +26,11 @@ COPY package.json package-lock.json ./
 # 可选镜像源：国内机器拉 500+ 个包走官方源容易超时。留空即用官方源，
 # 行为与不带这个开关完全一致。用法见 deploy/env.example 的 NPM_REGISTRY。
 ARG NPM_REGISTRY=
+# --include=dev 是防呆而非必需：deps 层没有设 NODE_ENV=production，默认就会装 devDeps。
+# 但只要有人在这之前加了 ENV NODE_ENV=production，PostCSS（@tailwindcss/postcss 是 devDep）
+# 就会缺，构建在 CSS 阶段报 "Cannot find module"。
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && npm ci --no-audit --no-fund
+ && npm ci --include=dev --no-audit --no-fund
 
 # ── 构建层 ────────────────────────────────────────────────────
 FROM base AS builder

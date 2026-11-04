@@ -38,6 +38,31 @@ else
   echo "[pack] 警告：本机无 npm，跳过 lockfile 同步检查"
 fi
 
+# ── 门禁：脚本与 Dockerfile 必须是 LF ────────────────────────────────
+# 这个坑在本项目踩过两次：Windows 下的文本模式写入会把 \n 变成 \r\n。
+# 后果在 Linux 上表现为 "no such file or directory"（CRLF 的 shebang 找不到解释器）
+# 或 Dockerfile 的 \ 续行带上 \r —— 报错完全指不到真正原因。
+# 用字节判断而不是 grep $'\r'：Git Bash 下空模式会匹配所有文件，误报过一轮。
+if command -v node >/dev/null 2>&1; then
+  node -e '
+    const fs = require("fs");
+    const listed = ["Dockerfile", ".dockerignore", ".gitattributes", "docker-compose.yml"];
+    if (fs.existsSync("deploy")) {
+      for (const f of fs.readdirSync("deploy")) {
+        if (/\.(sh|mjs)$/.test(f)) listed.push("deploy/" + f);
+      }
+    }
+    const bad = listed.filter((f) => fs.existsSync(f) && fs.readFileSync(f).includes(13));
+    if (bad.length) {
+      console.error("[pack] 失败：以下文件含 CR(\\r)，在 Linux 上会以无意义报错失败：");
+      for (const f of bad) console.error("    " + f);
+      console.error("[pack] 修复：以字节模式把 \\r\\n 换成 \\n（不要用文本模式，会再转回去）。");
+      process.exit(1);
+    }
+  ' || exit 1
+  echo "[pack] 换行符检查通过（全部 LF）"
+fi
+
 tar -czf "$OUT" \
   --exclude=./node_modules \
   --exclude=./.next \

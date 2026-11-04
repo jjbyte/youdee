@@ -238,6 +238,7 @@ tar czf uploads-$(date +%F).tar.gz -C /opt/youdee var/uploads
 | `getaddrinfo ENOTFOUND` / 连接串解析失败 | `PG_PASSWORD` 里有 `@ : / ? #` | 换成纯字母数字口令，重建卷 |
 | `npm ci` 报 `EUSAGE ... lock file's X does not satisfy Y` | `package-lock.json` 与 `package.json` 不同步（开发机用 `npm install` 装的，它容错更强，装完 `node_modules` 就对了，所以本地一切正常） | **不要**把 `npm ci` 改成 `npm install` 糊过去（那会让每次构建装到不同的包）。正确做法见下方「锁文件不同步」 |
 | `npm ci` 报 `npm error code EACCES` / 缓存路径不存在 | 仓库里的 `.npmrc` 写死了开发机的 Windows 缓存路径 | 该文件已被 `.dockerignore` 排除；裸机路径下请删除或注释 `.npmrc` 里的 `cache=` |
+| 构建卡在 `npm ci` 大量 `ETIMEDOUT` / `ECONNRESET` | 官方 registry 在国内网络慢或无外网 | `.env` 里加 `NPM_REGISTRY=https://registry.npmmirror.com` 后重新 `docker compose build`（Dockerfile 已支持该构建参数，留空即官方源） |
 | 构建被 Killed | 内存不足（1 GB 机器常见） | 加 swap 或换 2 GB 机器；`NODE_OPTIONS=--max-old-space-size=1536` |
 | 页面能开，登录报 500 | 迁移没跑或库连不上 | `docker compose logs app` 看首个报错；确认 `prisma migrate deploy` 有输出 |
 | 上传图片后刷新 404 | `var/uploads` 没挂卷，或目录权限不对 | 确认 compose 里有 `uploads` 卷；容器内目录属主应为 `app`(10001) |

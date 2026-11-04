@@ -23,7 +23,11 @@ WORKDIR /app
 # 注意：不 COPY .npmrc。仓库里那份写的是本机 Windows 缓存路径
 # （cache=C:/Users/...），进了 Linux 容器会让 npm 直接报 EACCES。
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# 可选镜像源：国内机器拉 500+ 个包走官方源容易超时。留空即用官方源，
+# 行为与不带这个开关完全一致。用法见 deploy/env.example 的 NPM_REGISTRY。
+ARG NPM_REGISTRY=
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && npm ci --no-audit --no-fund
 
 # ── 构建层 ────────────────────────────────────────────────────
 FROM base AS builder

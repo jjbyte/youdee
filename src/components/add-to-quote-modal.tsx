@@ -29,6 +29,7 @@ export function AddToQuoteModal({
   const [quotes, setQuotes] = useState<QuoteListItem[]>([]);
   const [quoteId, setQuoteId] = useState('');
   const [qty, setQty] = useState('1');
+  const [marginRate, setMarginRate] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<string[]>([]);
@@ -60,6 +61,22 @@ export function AddToQuoteModal({
       // 本单口径只能从这张单自己身上读（quotes.tax_statement），不从设置页、不从第一行价推
       const detail = await api.quote(quote.id);
       const taxBasis = detail.taxStatement;
+
+      // 对客价 = 成本 ÷ (1 − 毛利率)。单头没毛利率，服务端会整批 40001 拒绝，
+      // 所以要么用单头已有的，要么在这一步填一个——不能发出去等它报错。
+      const rateTyped = Number(marginRate.replace(/[%％\s]/g, '')) / 100;
+      const rate = marginRate.trim() === '' ? null : rateTyped;
+      if (rate !== null && !(rate > 0 && rate < 1)) {
+        setError('毛利率要填 1–99 之间的数。');
+        return;
+      }
+      if (detail.targetMarginRate === null && rate === null) {
+        setError('这张单还没设目标毛利率，对客价反推不出来。填一个，或者先改单头。');
+        return;
+      }
+      if (rate !== null && Number(detail.targetMarginRate) !== rate) {
+        await api.updateQuote(quote.id, { targetMarginRate: String(rate) });
+      }
       for (const it of items) {
         const groups = it.lowestSummary?.groups ?? [];
         if (groups.length !== 1) {
@@ -155,6 +172,21 @@ export function AddToQuoteModal({
             className="num"
             value={qty}
             onChange={(e) => setQty(e.target.value)}
+            style={{ width: '120px' }}
+          />
+        </Field>
+        <Field
+          label="目标毛利率（%）"
+          htmlFor="aq-margin"
+          hint="对客价按它反推。留空则用单头已设的值。"
+        >
+          <Input
+            id="aq-margin"
+            inputMode="decimal"
+            className="num"
+            value={marginRate}
+            onChange={(e) => setMarginRate(e.target.value)}
+            placeholder="40"
             style={{ width: '120px' }}
           />
         </Field>

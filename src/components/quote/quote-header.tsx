@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { cx, formatRate } from '@/lib/format';
 import { PROJECT_TYPE_LABELS, PROJECT_TYPE_ORDER } from '@/lib/labels';
@@ -39,6 +39,8 @@ export function QuoteHeader({
   onPreview,
   onExport,
   onNewVersion,
+  onApplyMargin,
+  applyingMargin,
 }: {
   quote: QuoteDetail;
   saveState: 'idle' | 'saving' | 'error';
@@ -51,6 +53,9 @@ export function QuoteHeader({
   onExport: (view: 'customer-pdf' | 'customer-xlsx' | 'internal') => void;
   /** 已发出的单唯一能走的路。放在只读横幅里——规则说在哪，按钮就在哪。 */
   onNewVersion?: () => void;
+  /** 把已有行的对客价按毛利率整体重算（改毛利率只影响之后攒进来的行） */
+  onApplyMargin?: () => void;
+  applyingMargin?: boolean;
 }) {
   const [customer, setCustomer] = useState(quote.customerName);
   const [eventName, setEventName] = useState(quote.eventName);
@@ -58,6 +63,14 @@ export function QuoteHeader({
   const [marginDraft, setMarginDraft] = useState(
     quote.targetMarginRate ? String(Math.round(Number(quote.targetMarginRate) * 1000) / 10) : '',
   );
+  /**
+   * 毛利率可能被别处改掉（选品面板里就能填，攒单时顺手落库）。
+   * 单头是同一个数的第二个显示位，不同步就会出现"库里 40%、屏幕上空着"。
+   * 依赖只有这个字段：用户正在输入时它不变，所以不会把光标下的内容抹掉。
+   */
+  useEffect(() => {
+    setMarginDraft(quote.targetMarginRate ? String(Math.round(Number(quote.targetMarginRate) * 1000) / 10) : '');
+  }, [quote.targetMarginRate]);
   const [exportOpen, setExportOpen] = useState(false);
 
   const marginRate = Number(quote.targetMarginRate ?? 0);
@@ -300,6 +313,24 @@ export function QuoteHeader({
           {/* 常驻，不藏弹层：这一行让「毛利率」和「我该收多少」当场对上 */}
           <span className="t-2xs t-3">(≈成本 × {marginToMultiplier(marginRate)})</span>
         </label>
+
+        {/* 改毛利率只影响「之后」攒进来的行，已有行不会自己动——所以给一个明说的动作。
+            没有它，报价员会以为改了毛利率全单就跟着变了，直到客户看到一份没变价的单。 */}
+        {quote.items.length > 0 && onApplyMargin ? (
+          <button
+            type="button"
+            className="btn btn--link"
+            disabled={locked || !quote.targetMarginRate || applyingMargin}
+            onClick={onApplyMargin}
+            title={
+              quote.targetMarginRate
+                ? `把全部 ${quote.items.length} 行的对客价按 ${Math.round(marginRate * 1000) / 10}% 毛利率重算`
+                : '先在左边填一个毛利率，才能反推对客价'
+            }
+          >
+            {applyingMargin ? '正在重算…' : '按毛利率重算'}
+          </button>
+        ) : null}
 
         <span style={{ flex: 1 }} />
 

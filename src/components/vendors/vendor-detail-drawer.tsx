@@ -19,6 +19,7 @@ export function VendorDetailDrawer({
   loading,
   isAdmin,
   onClose,
+  onEdit,
   onDelete,
 }: {
   detail: Supplier | null;
@@ -26,6 +27,7 @@ export function VendorDetailDrawer({
   loading: boolean;
   isAdmin: boolean;
   onClose: () => void;
+  onEdit: (s: Supplier) => void;
   onDelete: (s: Supplier) => void;
 }) {
   return (
@@ -53,6 +55,11 @@ export function VendorDetailDrawer({
           <Button variant="secondary" onClick={onClose}>
             关掉
           </Button>
+          {isAdmin && detail ? (
+            <Button variant="primary" onClick={() => onEdit(detail)}>
+              编辑档案
+            </Button>
+          ) : null}
         </>
       }
     >

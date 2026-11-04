@@ -35,6 +35,8 @@ interface SupplierRow {
   is_active: boolean;
   created_at: Date;
   updated_at: Date;
+  /** 只有列表查询带（一次算好，别让前端逐行再请求）；详情走 getSupplier 自己的统计 */
+  price_count?: string | null;
 }
 
 function supplierDto(r: SupplierRow) {
@@ -51,6 +53,9 @@ function supplierDto(r: SupplierRow) {
     is_active: r.is_active,
     created_at: r.created_at.toISOString(),
     updated_at: r.updated_at.toISOString(),
+    // 列表里的「报价数」列靠这个。以前 SELECT * 不带统计，前端又用 `?? 0` 兜底，
+    // 于是每一家都显示 0 —— 数字是错的，比空白更糟：看起来像"这家没报过价"。
+    price_count: r.price_count == null ? undefined : Number(r.price_count),
   };
 }
 
@@ -76,7 +81,9 @@ export async function listSuppliers(query: SupplierListQuery) {
   const where = parts.length ? `WHERE ${parts.join(' AND ')}` : '';
   const total = await q<{ n: string }>(`SELECT count(*)::text AS n FROM suppliers ${where}`, params);
   const rows = await q<SupplierRow>(
-    `SELECT * FROM suppliers ${where} ORDER BY ${query.orderBy} LIMIT ${query.limit} OFFSET ${query.offset}`,
+    `SELECT s.*, (SELECT count(*)::text FROM prices p WHERE p.supplier_id = s.id) AS price_count
+       FROM suppliers s ${where}
+      ORDER BY ${query.orderBy} LIMIT ${query.limit} OFFSET ${query.offset}`,
     params,
   );
   return {

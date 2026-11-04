@@ -7,13 +7,14 @@ import type { Price, Supplier, SupplierType } from '@/lib/types';
 import { useMe } from '@/lib/use-me';
 import { canManageCatalog } from '@/domain/permissions';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, IconButton } from '@/components/ui/button';
 import { SearchInput } from '@/components/ui/field';
 import { Toast } from '@/components/ui/overlay';
 import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
 import { Table, TableWrap, Td, Th } from '@/components/ui/table';
-import { IconPlus, IconRisk, IconSupplierFactory } from '@/components/icons';
+import { IconPencil, IconPlus, IconRisk, IconSupplierFactory } from '@/components/icons';
 import { VendorDetailDrawer } from '@/components/vendors/vendor-detail-drawer';
+import { VendorEditDrawer } from '@/components/vendors/vendor-edit-drawer';
 import { NewVendorModal } from '@/components/vendors/new-vendor-modal';
 import { VendorDeleteModal } from '@/components/vendors/vendor-delete-modal';
 
@@ -51,6 +52,7 @@ export default function VendorsPage() {
   const [detailPrices, setDetailPrices] = useState<Price[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Supplier | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -111,9 +113,15 @@ export default function VendorsPage() {
             所以「外聘 vs 自有」的成本对比，天然就是同一个人主体下两条价并列。
           </p>
         </div>
-        <Button variant="primary" icon={<IconPlus size={16} />} onClick={() => setCreating(true)}>
-          新建供应商
-        </Button>
+        {isAdmin ? (
+          <Button variant="primary" icon={<IconPlus size={16} />} onClick={() => setCreating(true)}>
+            新建供应商
+          </Button>
+        ) : (
+          <span className="t-xs t-3 max-w-[280px]">
+            供应商档案只有管理员能改；你可以录价、比价、出单。
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-[var(--space-3)] flex-wrap mt-[var(--space-5)]">
@@ -172,7 +180,7 @@ export default function VendorsPage() {
                 ? '换个关键词，或者把类型筛选清掉。'
                 : '录价的时候可以直接新建供应商，不用先来这里登记。'
             }
-            primary={{ label: '新建供应商', onClick: () => setCreating(true) }}
+            primary={isAdmin ? { label: '新建供应商', onClick: () => setCreating(true) } : undefined}
           />
         ) : null}
 
@@ -231,16 +239,29 @@ export default function VendorsPage() {
                           </span>
                         </Td>
                         <Td align="right">
-                          <button
-                            type="button"
-                            className="btn btn--link"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void openDetail(s);
-                            }}
-                          >
-                            看报价
-                          </button>
+                          <div className="flex items-center gap-[var(--space-1)] justify-end">
+                            {isAdmin ? (
+                              <IconButton
+                                label={`编辑 ${s.name} 的档案`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditId(s.id);
+                                }}
+                              >
+                                <IconPencil size={16} />
+                              </IconButton>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="btn btn--link"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void openDetail(s);
+                              }}
+                            >
+                              看报价
+                            </button>
+                          </div>
                         </Td>
                       </tr>
                     );
@@ -274,7 +295,21 @@ export default function VendorsPage() {
         loading={detailLoading}
         isAdmin={isAdmin}
         onClose={() => setDetail(null)}
+        onEdit={(v) => setEditId(v.id)}
         onDelete={(v) => setConfirmDelete(v)}
+      />
+
+      <VendorEditDrawer
+        open={Boolean(editId)}
+        supplierId={editId}
+        seed={detail}
+        onClose={() => setEditId(null)}
+        onSaved={(s) => {
+          setToast(`已保存「${s.name}」`);
+          // 详情抽屉开着就地更新：不然刚改完的联系人还停在旧值上，用户会再存一次
+          setDetail((d) => (d && d.id === s.id ? { ...d, ...s, priceCount: d.priceCount } : d));
+          void load();
+        }}
       />
 
       <NewVendorModal

@@ -996,6 +996,9 @@ button {
 .editor {
   display: grid;
   grid-template-columns: var(--editor-drawer-w) minmax(0, 1fr);
+  /* 只有一行，且必须吃掉容器给的高度：行高若按内容算，左栏的列表就不会滚动，
+     而是把「攒进报价单」顶到可视区之外。 */
+  grid-template-rows: minmax(0, 1fr);
   gap: 0;
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-lg);
@@ -1011,6 +1014,9 @@ button {
   flex-direction: column;
   gap: var(--space-4);
   min-width: 0;
+  /* 让中间的列表成为唯一的滚动区，底部「已勾选 / 攒进报价单」永远贴在这栏下面 */
+  min-height: 0;
+  overflow: hidden;
 }
 .editor__body { min-width: 0; overflow: auto; }
 .editor__footbar {
@@ -1098,14 +1104,31 @@ button {
 .row-actions { display: flex; gap: var(--space-1); justify-content: center; }
 
 /* ── 设置页 ───────────────────────────────────────────────── */
+/*
+ * 这一列是**浅底二级导航**，不能复用侧栏的 .nav-item。
+ * .nav-item 是给深色侧栏写的：未选中项 color 用 --fg-on-ink（近白）——那在深底上是"亮"，
+ * 搬到白底上就是白字白底，笔画边缘全糊，看着像渲染没完成。
+ * 这里单独给一套浅底令牌：未选中 --fg-2（深灰），选中靠"淡底 + 左侧竖条 + 半档字重"，
+ * 和侧栏同一套语义，但颜色各用各的底。
+ */
 .settings {
   display: grid;
   grid-template-columns: var(--settings-nav-w) minmax(0, 1fr);
   gap: var(--space-7);
   align-items: start;
 }
-.settings__nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: calc(var(--topbar-h) + var(--space-6)); }
+.settings__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: calc(var(--topbar-h) + var(--space-5));
+  align-self: start;
+}
 .settings__nav button {
+  position: relative;
+  display: flex;
+  align-items: center;
   text-align: left;
   height: 32px;
   padding: 0 var(--space-3);
@@ -1114,13 +1137,35 @@ button {
   background: transparent;
   color: var(--fg-2);
   font-size: var(--text-base);
+  font-weight: var(--fw-regular);
+  letter-spacing: 0.01em;
   cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
 }
-.settings__nav button:hover { background: var(--gray-100); }
-.settings__nav button[aria-current="true"] {
+.settings__nav button:hover {
+  background: var(--gray-100);
+  color: var(--fg);
+}
+.settings__nav button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.settings__nav button[aria-current] {
   background: var(--accent-subtle);
   color: var(--fg);
   font-weight: var(--fw-medium);
+}
+.settings__nav button[aria-current]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
 }
 
 /* ── 登录页 ───────────────────────────────────────────────── */
@@ -1170,6 +1215,10 @@ button {
 @media (max-width: 900px) {
   .login { grid-template-columns: 1fr; }
   .login__left { display: none; }
+  /* 窄屏放不下 200px 的左栏：导航折成一行，标题仍然可读 */
+  .settings { grid-template-columns: 1fr; gap: var(--space-5); }
+  .settings__nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .settings__nav button[aria-current]::before { display: none; }
 }
 
 /* ── 打印（报价单预览 / 客户版） ──────────────────────────── */

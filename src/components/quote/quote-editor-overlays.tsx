@@ -44,7 +44,7 @@ export function QuoteEditorOverlays({
 }: {
   quote: QuoteDetail;
   risk: RiskCheckResult | null;
-  mutate: (fn: () => Promise<unknown>) => Promise<void>;
+  mutate: (fn: () => Promise<unknown>) => Promise<{ ok: boolean; message?: string }>;
   reload: () => Promise<void>;
   say: (message: string, tone?: Tone, action?: ToastAction) => void;
   supplierFor: QuoteItem | null;

@@ -9,7 +9,16 @@ import type { LineFlags } from './quote-line-row';
 type Tone = 'success' | 'warn' | 'danger';
 type ToastAction = { label: string; onClick: () => void };
 type Say = (message: string, tone?: Tone, action?: ToastAction) => void;
-type Mutate = (fn: () => Promise<unknown>) => Promise<void>;
+/**
+ * 执行一次写操作。
+ *
+ * **必须把成败交回调用方**：原来它 catch 住错误只 setError，调用方拿不到结果，
+ * 于是"攒单"的按钮在自己的请求发出之前就弹了「已攒进 3 项」——
+ * 服务端 400、一条都没进去，用户看到的是成功提示加一个原地不动的空列表。
+ * 把结果 return 出去，UI 才有资格说"成功"。
+ */
+type Mutate = (fn: () => Promise<unknown>) => Promise<{ ok: boolean; message?: string }>;
+export type AddResult = { added: number; message?: string };
 
 /**
  * 报价单的行级操作（唯一出口）。
@@ -75,10 +84,25 @@ export function useQuoteLines({
    *   - 42205（本口径下没有有效价）→ **也进单**，但缺成本（行变红 + 手填入口）
    *     绝不静默拿旧价顶上，也绝不自动换口径——那两种"聪明"都会让报价员
    *     拿着一份看起来正常、实际错了的单子去见客户。
+   *
+   * `marginRate`（百分数，如 "40"）：单头还没有目标毛利率时由选品面板带上。
+   * 对客价是成本按毛利率反推出来的，服务端拿不到毛利率就**整批拒绝**
+   * （40001「无法反推」）——不先落这一笔，攒单在新单上一律失败。
    */
   const addItems = useCallback(
-    async (items: ItemListItem[]) => {
-      if (!quote) return;
+    async (items: ItemListItem[], marginRate?: string): Promise<AddResult> => {
+      if (!quote) return { added: 0, message: '报价单还没打开。' };
+
+      // 单头的目标毛利率是反推对客价的唯一依据：先落库，再攒行
+      if (marginRate) {
+        const current = quote.targetMarginRate === null ? null : Number(quote.targetMarginRate);
+        const want = Number(marginRate) / 100;
+        if (current === null || Math.abs(current - want) > 1e-9) {
+          const saved = await mutate(() => api.updateQuote(quote.id, { targetMarginRate: String(want) }));
+          if (!saved.ok) return { added: 0, message: saved.message };
+        }
+      }
+
       const lines: Array<Record<string, unknown>> = [];
       const problems: string[] = [];
       for (const it of items) {
@@ -86,7 +110,13 @@ export function useQuoteLines({
         const nature =
           groups.length === 1 ? groups[0]!.pricingNature : it.itemType === 'personnel' ? 'service' : null;
         if (!nature) {
-          problems.push(`${it.name} 有 ${groups.length} 种交易性质，去比价页选一种再攒`);
+          // 0 组 = 一条价都没录；>1 组 = 同一主体有两种交易性质（租赁 / 买断），价格不能混。
+          // 这两种都不猜：猜错的成本会被当成真的写进客户版。
+          problems.push(
+            groups.length === 0
+              ? `${it.name} 还没有任何一条价，先去比价页录一条（或在那里手填成本）`
+              : `${it.name} 有 ${groups.length} 种交易性质，去比价页选一种再攒`,
+          );
           continue;
         }
         const base = {
@@ -130,8 +160,23 @@ export function useQuoteLines({
           }
         }
       }
-      if (lines.length > 0) await mutate(() => api.addQuoteItemsBulk(quote.id, lines));
-      if (problems.length > 0) say(problems.join('；'), 'warn');
+
+      if (lines.length === 0) {
+        const message = problems.join('；') || '一项都没攒进去。';
+        say(message, 'danger');
+        return { added: 0, message };
+      }
+
+      const res = await mutate(() => api.addQuoteItemsBulk(quote.id, lines));
+      if (!res.ok) return { added: 0, message: res.message };
+
+      if (problems.length > 0) {
+        // 进了一部分：说清进了几行、哪几项没进，别只说"成功"
+        const message = `${problems.length} 项没进去：${problems.join('；')}`;
+        say(`攒了 ${lines.length} 行，${message}`, 'warn');
+        return { added: lines.length, message };
+      }
+      return { added: lines.length };
     },
     [quote, mutate, say],
   );

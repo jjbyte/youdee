@@ -5,6 +5,8 @@ import { api, errorMessage, isUnauthorized } from '@/lib/api';
 import type { QuoteDetail, QuoteItem, RiskCheckResult, TaxBasis } from '@/lib/types';
 import { useMe } from '@/lib/use-me';
 import { canExportInternal } from '@/domain/permissions';
+import { Modal } from '@/components/ui/overlay';
+import { Button } from '@/components/ui/button';
 import { ErrorState, InlineLoading, Note } from '@/components/ui/states';
 import { QuoteHeader } from '@/components/quote/quote-header';
 import { QuoteLinesPanel } from '@/components/quote/quote-lines-panel';
@@ -94,9 +96,12 @@ export default function QuoteEditPage() {
         await fn();
         await reload();
         setSaveState('idle');
+        return { ok: true as const };
       } catch (e) {
+        const message = errorMessage(e);
         setSaveState('error');
-        setError(errorMessage(e));
+        setError(message);
+        return { ok: false as const, message };
       }
     },
     [reload],
@@ -118,6 +123,21 @@ export default function QuoteEditPage() {
     afterRecreated,
   } = useQuoteLines({ quote, risk, mutate, reload, say, undoMs: UNDO_MS });
 
+
+  /** 按毛利率重算：手改过对客价的行会被一起覆盖，所以有手改行时先确认 */
+  const [confirmMargin, setConfirmMargin] = useState(false);
+  const [applyingMargin, setApplyingMargin] = useState(false);
+
+  const runApplyMargin = useCallback(async () => {
+    if (!quote) return;
+    setConfirmMargin(false);
+    setApplyingMargin(true);
+    const rate = quote.targetMarginRate ? Math.round(Number(quote.targetMarginRate) * 1000) / 10 : null;
+    const lineCount = quote.items.length;
+    const res = await mutate(() => api.applyTargetMargin(quote.id));
+    setApplyingMargin(false);
+    if (res.ok) say(`已按 ${rate}% 重算对客价（共 ${lineCount} 行）。`);
+  }, [quote, mutate, say]);
 
   async function issue() {
     if (!quote) return;
@@ -180,7 +200,17 @@ export default function QuoteEditPage() {
   if (!quote) return null;
 
   return (
-    <div className="page flex flex-col gap-[var(--space-4)]" style={{ minHeight: 'calc(100dvh - var(--topbar-h))' }}>
+    <div
+      className="page flex flex-col gap-[var(--space-4)]"
+      /**
+       * 高度必须**定死**，不能只给 min-height：编辑器里的选品面板要靠"父级有确定高度"
+       * 才肯把列表内部滚动、把「攒进报价单」按在底部。给 min-height 时面板只会一直长高，
+       * 按钮被推到首屏之外——用户的第一动作就在折叠线下面，等于没有按钮。
+       * `flex: none` 也是必须的：`.page` 自带 `flex: 1`（basis 0 + 长），
+       * 父级高度又是内容撑出来的，于是 flex 分配会覆盖掉这里的 height，写多少都不生效。
+       */
+      style={{ flex: '0 0 auto', height: 'calc(100dvh - var(--topbar-h))', minHeight: 640, overflow: 'hidden' }}
+    >
       <QuoteHeader
         quote={quote}
         saveState={saveState}
@@ -190,6 +220,12 @@ export default function QuoteEditPage() {
         onPatch={(body) => void mutate(() => api.updateQuote(quote.id, body))}
         onTaxBasis={(b) => setTaxTarget(b)}
         onPreview={() => router.push(`/quotes/${quote.id}/preview`)}
+        onApplyMargin={() => {
+          // 手改过对客价的行会被一起覆盖：先问一句，别把人调好的价悄悄抹掉
+          if (manualCount > 0) setConfirmMargin(true);
+          else void runApplyMargin();
+        }}
+        applyingMargin={applyingMargin}
         onNewVersion={() =>
           void mutate(async () => {
             const next = await api.newVersion(quote.id, true);
@@ -215,8 +251,9 @@ export default function QuoteEditPage() {
       <div className="editor flex-1">
         <PickerPanel
           disabled={locked}
-          onAdd={(items) => void addItems(items)}
-          onToast={(m) => say(m, 'warn')}
+          marginRate={quote.targetMarginRate === null ? null : Number(quote.targetMarginRate)}
+          onAdd={(items, marginRate) => addItems(items, marginRate)}
+          onToast={(m, tone) => say(m, tone)}
         />
 
         <QuoteLinesPanel
@@ -260,6 +297,34 @@ export default function QuoteEditPage() {
         onDiscount={(amount) => void mutate(() => api.updateQuote(quote.id, { discountAmount: amount }))}
         onIssue={() => setRiskOpen(true)}
       />
+
+      <Modal
+        open={confirmMargin}
+        onClose={() => setConfirmMargin(false)}
+        title="重算会覆盖手改过的对客价"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirmMargin(false)}>
+              先不动
+            </Button>
+            <Button variant="primary" loading={applyingMargin} onClick={() => void runApplyMargin()}>
+              一起重算
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-[var(--space-3)]">
+          <p className="t-sm">
+            这张单有 <span className="num">{manualCount}</span> 行是手填成本 / 手改过对客价的。
+            重算会把全部 {quote.items.length} 行改成「成本 ÷ (1 −{' '}
+            {quote.targetMarginRate ? Math.round(Number(quote.targetMarginRate) * 1000) / 10 : 0}%)」，
+            手改的数字不保留。
+          </p>
+          <p className="t-xs t-3">
+            只想改其中几行的话，先点「先不动」，在行上单独改对客价。
+          </p>
+        </div>
+      </Modal>
 
       <QuoteEditorOverlays
         quote={quote}

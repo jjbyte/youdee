@@ -1,0 +1,385 @@
+// 有底 — Prisma Schema
+// 契约来源：docs/04-Spec.md §6 + docs/02-ARCHITECTURE.md §7.3
+//
+// 重要说明：
+// 1) `prices.unit_mode` 是数据库 GENERATED ALWAYS AS ... STORED 生成列，
+//    此处**故意不定义**（Prisma 无法表达生成列，写入会冲突）。
+//    需要它的查询一律走 server/repositories 里的原生 SQL。
+// 2) EXCLUDE / CHECK / 部分索引 / 生成列 均写入手写迁移，见 prisma/migrations。
+// 3) 业务语义列一律不使用 @default —— 写库必须显式传值（Spec §5.2 红线 10）。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Prisma 7 起 url 写在 prisma.config.ts（本文件不再接受 datasource.url）
+datasource db {
+  provider = "postgresql"
+}
+
+/// 单位字典（17 条种子）。kind: material / personnel / time
+model Unit {
+  code      String @id @db.VarChar(20)
+  nameZh    String @map("name_zh") @db.VarChar(20)
+  kind      String @db.VarChar(20)
+  isTime    Boolean @map("is_time")
+  sortOrder Int    @map("sort_order")
+  note      String? @db.Text
+
+  items       Item[] @relation("ItemBaseUnit")
+  itemsCompare Item[] @relation("ItemCompareUnit")
+
+  @@map("units")
+}
+
+/// 内部账号，不开放注册，由管理员创建
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  login        String   @unique @db.VarChar(40)
+  passwordHash String   @map("password_hash") @db.VarChar(200)
+  name         String   @db.VarChar(40)
+  role         String   @db.VarChar(20) /// admin | member
+  isActive     Boolean  @map("is_active")
+  tokenVersion Int      @map("token_version")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  pricesCreated  Price[]          @relation("PriceCreatedBy")
+  quotesCreated  Quote[]          @relation("QuoteCreatedBy")
+  logs           PriceChangeLog[]
+  notifications  Notification[]
+
+  @@map("users")
+}
+
+/// 供应商。type 五值：online / factory / rental / freelancer / internal
+model Supplier {
+  id                 String   @id @default(uuid()) @db.Uuid
+  name               String   @unique @db.VarChar(80)
+  type               String   @db.VarChar(20)
+  contactName        String?  @map("contact_name") @db.VarChar(30)
+  contactPhone       String?  @map("contact_phone") @db.VarChar(30)
+  shopUrl            String?  @map("shop_url") @db.VarChar(500)
+  region             String?  @db.VarChar(50)
+  defaultLeadTimeDays Int?    @map("default_lead_time_days")
+  note               String?  @db.Text
+  isActive           Boolean  @map("is_active")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  prices Price[]
+  quoteItems QuoteItem[]
+
+  @@index([type])
+  @@index([isActive])
+  @@map("suppliers")
+}
+
+/// 分类。domain 两棵树：material / personnel。最多两级。
+model Category {
+  id                   String   @id @default(uuid()) @db.Uuid
+  domain               String   @db.VarChar(20)
+  name                 String   @db.VarChar(30)
+  parentId             String?  @map("parent_id") @db.Uuid
+  sortOrder            Int      @map("sort_order")
+  /// 录价表单的默认交易性质（只预填，不进唯一键，不进 resolvePrice）
+  defaultPricingNature String?  @map("default_pricing_nature") @db.VarChar(20)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Category[] @relation("CategoryTree")
+  items    Item[]
+
+  @@index([domain, parentId, sortOrder])
+  @@map("categories")
+}
+
+/// 计价主体：物料与人员统一表（item_type 判别）
+model Item {
+  id              String   @id @default(uuid()) @db.Uuid
+  itemType        String   @map("item_type") @db.VarChar(20) /// material | personnel
+  categoryId      String   @map("category_id") @db.Uuid
+  name            String   @db.VarChar(80)
+  aliases         String[] @db.Text
+  spec            String?  @db.VarChar(200)
+  baseUnitCode    String   @map("base_unit_code") @db.VarChar(20)
+  compareUnitCode String?  @map("compare_unit_code") @db.VarChar(20)
+  /// 仅 personnel：单价是否含差旅
+  includesTravel  Boolean? @map("includes_travel")
+  isActive        Boolean  @map("is_active")
+  createdBy       String?  @map("created_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  category     Category       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  baseUnit     Unit           @relation("ItemBaseUnit", fields: [baseUnitCode], references: [code], onDelete: Restrict)
+  compareUnit  Unit?          @relation("ItemCompareUnit", fields: [compareUnitCode], references: [code], onDelete: Restrict)
+  prices       Price[]
+  images       ItemImage[]
+  links        ItemLink[]
+  quoteItems   QuoteItem[]
+
+  @@index([itemType, isActive])
+  @@index([categoryId])
+  @@index([name])
+  @@map("items")
+}
+
+model ItemImage {
+  id         String   @id @default(uuid()) @db.Uuid
+  itemId     String   @map("item_id") @db.Uuid
+  storageKey String   @map("storage_key") @db.VarChar(300)
+  url        String   @db.VarChar(1000)
+  label      String?  @db.VarChar(60)
+  width      Int?
+  height     Int?
+  sortOrder  Int      @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, sortOrder])
+  @@map("item_images")
+}
+
+model ItemLink {
+  id        String   @id @default(uuid()) @db.Uuid
+  itemId    String   @map("item_id") @db.Uuid
+  url       String   @db.VarChar(1000)
+  label     String?  @db.VarChar(60)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+  @@map("item_links")
+}
+
+/// 价格记录（版本化核心）。改价 = 新增，禁止原地 UPDATE unit_price。
+/// unit_mode 为生成列，不在此定义（见文件头说明）。
+model Price {
+  id             String    @id @default(uuid()) @db.Uuid
+  itemId         String    @map("item_id") @db.Uuid
+  supplierId     String    @map("supplier_id") @db.Uuid
+  unitCode       String    @map("unit_code") @db.VarChar(20)
+  /// 1 个比价基准单位 = N 个本价格单位（乘法口径）。NULL = 未填 = 不可比。
+  baseUnitQty    Decimal?  @map("base_unit_qty") @db.Decimal(12, 6)
+  /// 基准档单价（无阶梯时即唯一价）
+  unitPrice      Decimal   @map("unit_price") @db.Decimal(12, 4)
+  currency       String    @db.VarChar(3)
+  taxIncluded    Boolean   @map("tax_included")
+  pricingNature  String    @map("pricing_nature") @db.VarChar(20)
+  /// 税率，MVP 不采集，P1 使用
+  taxRate        Decimal?  @map("tax_rate") @db.Decimal(6, 4)
+  moq            Decimal?  @db.Decimal(10, 2)
+  effectiveFrom  DateTime  @map("effective_from") @db.Date
+  effectiveTo    DateTime? @map("effective_to") @db.Date
+  status         String    @db.VarChar(20) /// active | superseded | archived
+  sourceNote     String?   @map("source_note") @db.VarChar(200)
+  lastUsedAt     DateTime? @map("last_used_at") @db.Timestamptz(3)
+  createdBy      String?   @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  unit     Unit     @relation(fields: [unitCode], references: [code], onDelete: Restrict)
+
+  tiers       PriceTier[]
+  attachments PriceAttachment[]
+  logs        PriceChangeLog[]
+  quoteItems  QuoteItem[]
+
+  @@index([itemId, status])
+  @@index([supplierId])
+  @@index([effectiveFrom])
+  @@index([lastUsedAt])
+  @@map("prices")
+}
+
+/// 数量阶梯。max_qty 不落库，由下一档 min_qty 派生。
+model PriceTier {
+  priceId   String  @map("price_id") @db.Uuid
+  minQty    Decimal @map("min_qty") @db.Decimal(10, 2)
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 4)
+
+  price Price @relation(fields: [priceId], references: [id], onDelete: Cascade)
+
+  @@id([priceId, minQty])
+  @@map("price_tiers")
+}
+
+model PriceAttachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  priceId      String   @map("price_id") @db.Uuid
+  kind         String   @db.VarChar(20) /// image | file
+  storageKey   String   @map("storage_key") @db.VarChar(300)
+  url          String   @db.VarChar(1000)
+  originalName String?  @map("original_name") @db.VarChar(200)
+  mime         String?  @db.VarChar(60)
+  sizeBytes    Int?     @map("size_bytes")
+  label        String?  @db.VarChar(60)
+  note         String?  @db.Text
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  price Price @relation(fields: [priceId], references: [id], onDelete: Cascade)
+
+  @@index([priceId])
+  @@map("price_attachments")
+}
+
+/// 价格变更日志（append-only，应用账号只有 INSERT/SELECT 权限）
+model PriceChangeLog {
+  id           BigInt   @id @default(autoincrement())
+  priceId      String   @map("price_id") @db.Uuid
+  action       String   @db.VarChar(30)
+  snapshot     Json     @db.JsonB
+  prevSnapshot Json?    @map("prev_snapshot") @db.JsonB
+  changedBy    String?  @map("changed_by") @db.Uuid
+  changedAt    DateTime @default(now()) @map("changed_at") @db.Timestamptz(3)
+  note         String?  @db.Text
+
+  price Price @relation(fields: [priceId], references: [id], onDelete: Restrict)
+  user  User? @relation(fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@index([priceId, changedAt(sort: Desc)])
+  @@index([changedAt(sort: Desc)])
+  @@map("price_change_logs")
+}
+
+/// 报价单。三态：draft / issued / void。expired 由 valid_until 派生，不落库。
+model Quote {
+  id                 String    @id @default(uuid()) @db.Uuid
+  quoteNo            String    @map("quote_no") @db.VarChar(30)
+  version            Int
+  derivedFromQuoteId String?   @map("derived_from_quote_id") @db.Uuid
+  customerName       String    @map("customer_name") @db.VarChar(80)
+  eventName          String    @map("event_name") @db.VarChar(120)
+  eventDate          DateTime? @map("event_date") @db.Date
+  validUntil         DateTime  @map("valid_until") @db.Date
+  status             String    @db.VarChar(20)
+  /// 年会/庆典、品牌发布会、展台特装、路演、框架客户；空 = 回退全局默认阈值
+  projectType        String?   @map("project_type") @db.VarChar(30)
+  currency           String    @db.VarChar(3)
+  targetMarginRate   Decimal?  @map("target_margin_rate") @db.Decimal(5, 4)
+  discountAmount     Decimal   @map("discount_amount") @db.Decimal(14, 2)
+  totalCost          Decimal   @map("total_cost") @db.Decimal(14, 2)
+  totalPrice         Decimal   @map("total_price") @db.Decimal(14, 2)
+  totalProfit        Decimal   @map("total_profit") @db.Decimal(14, 2)
+  marginRate         Decimal   @map("margin_rate") @db.Decimal(6, 4)
+  minLineMargin      Decimal?  @map("min_line_margin") @db.Decimal(6, 4)
+  /// 口径声明（快照）：inclusive | exclusive
+  taxStatement       String    @map("tax_statement") @db.VarChar(20)
+  note               String?   @db.Text
+  createdBy          String?   @map("created_by") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  issuedAt           DateTime? @map("issued_at") @db.Timestamptz(3)
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  createdByUser User?        @relation("QuoteCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  derivedFrom   Quote?       @relation("QuoteVersion", fields: [derivedFromQuoteId], references: [id], onDelete: SetNull)
+  versions      Quote[]      @relation("QuoteVersion")
+  items         QuoteItem[]
+  notifications Notification[]
+
+  @@unique([quoteNo, version])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([projectType])
+  @@index([createdAt(sort: Desc)])
+  @@map("quotes")
+}
+
+/// 报价单明细（快照实体）。金额列 NOT NULL 且无默认值 —— 让"忘记快照"在类型层不可能。
+model QuoteItem {
+  id               String  @id @default(uuid()) @db.Uuid
+  quoteId          String  @map("quote_id") @db.Uuid
+  sortOrder        Int     @map("sort_order")
+  lineKind         String  @map("line_kind") @db.VarChar(20) /// material | personnel | custom
+  pricingNature    String? @map("pricing_nature") @db.VarChar(20)
+
+  // ── 展示快照 ──
+  itemNameSnapshot     String  @map("item_name_snapshot") @db.VarChar(200)
+  specSnapshot         String? @map("spec_snapshot") @db.VarChar(200)
+  categorySnapshot     String? @map("category_snapshot") @db.VarChar(60)
+  unitSnapshot         String  @map("unit_snapshot") @db.VarChar(20)
+  supplierNameSnapshot String? @map("supplier_name_snapshot") @db.VarChar(80)
+
+  // ── 数量与金额快照 ──
+  qty            Decimal @db.Decimal(10, 2)
+  costUnitPrice  Decimal @map("cost_unit_price") @db.Decimal(12, 4)
+  saleUnitPrice  Decimal @map("sale_unit_price") @db.Decimal(12, 4)
+  lineCost       Decimal @map("line_cost") @db.Decimal(14, 2)
+  linePrice      Decimal @map("line_price") @db.Decimal(14, 2)
+  lineProfit     Decimal @map("line_profit") @db.Decimal(14, 2)
+  lineMargin     Decimal @map("line_margin") @db.Decimal(6, 4)
+
+  // ── 取价溯源 ──
+  costSource              String  @map("cost_source") @db.VarChar(20) /// price_book | manual
+  priceMissing            Boolean @map("price_missing")
+  referenceLowestPrice    Decimal? @map("reference_lowest_price") @db.Decimal(12, 4)
+  referenceLowestSupplierId String? @map("reference_lowest_supplier_id") @db.Uuid
+  taxIncluded             Boolean @map("tax_included")
+
+  // ── 弱关联（价格/主体删除不影响历史单）──
+  itemId     String? @map("item_id") @db.Uuid
+  priceId    String? @map("price_id") @db.Uuid
+  supplierId String? @map("supplier_id") @db.Uuid
+
+  isVisibleToCustomer Boolean  @map("is_visible_to_customer")
+  note                String?  @db.Text
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  quote    Quote     @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  item     Item?     @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  price    Price?    @relation(fields: [priceId], references: [id], onDelete: SetNull)
+  supplier Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId, sortOrder])
+  @@index([itemId])
+  @@map("quote_items")
+}
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  type      String    @db.VarChar(40)
+  title     String    @db.VarChar(120)
+  body      String?   @db.Text
+  quoteId   String?   @map("quote_id") @db.Uuid
+  readAt    DateTime? @map("read_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quote Quote? @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+/// 系统设置（key → jsonb）。阈值、口径声明默认值等。
+model AppSetting {
+  key       String   @id @db.VarChar(60)
+  value     Json     @db.JsonB
+  updatedBy String?  @map("updated_by") @db.Uuid
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("app_settings")
+}
+
+/// 单号计数器（报价单号原子生成）
+model Counter {
+  key   String @id @db.VarChar(40)
+  value Int
+}
+
+/// 项目类型 → 毛利预警阈值。只影响提醒颜色与自检 R1，永不拦截出单。
+model MarginThreshold {
+  projectType String   @id @map("project_type") @db.VarChar(30)
+  warnRate    Decimal  @map("warn_rate") @db.Decimal(5, 4)
+  label       String   @db.VarChar(30)
+  sortOrder   Int      @map("sort_order")
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("margin_thresholds")
+}

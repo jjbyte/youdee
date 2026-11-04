@@ -1,0 +1,770 @@
+{
+  "$schema": "https://design-tokens.org/draft",
+  "$description": "「有底」价格底账系统 · Design Tokens v1.1 · 真源见 docs/03-UIUX.md 第 B 节 · 设计师 颜好看",
+  "color": {
+    "gray": {
+      "50": {
+        "value": "#F7F8FA",
+        "type": "color"
+      },
+      "100": {
+        "value": "#F1F3F5",
+        "type": "color"
+      },
+      "200": {
+        "value": "#E3E6EB",
+        "type": "color"
+      },
+      "300": {
+        "value": "#CDD3DB",
+        "type": "color"
+      },
+      "400": {
+        "value": "#A8B0BC",
+        "type": "color"
+      },
+      "500": {
+        "value": "#7A8493",
+        "type": "color"
+      },
+      "600": {
+        "value": "#5A6473",
+        "type": "color"
+      },
+      "700": {
+        "value": "#3B4453",
+        "type": "color"
+      },
+      "800": {
+        "value": "#262D38",
+        "type": "color"
+      },
+      "900": {
+        "value": "#14181D",
+        "type": "color"
+      }
+    },
+    "surface": {
+      "bg": {
+        "value": "#F7F8FA",
+        "type": "color"
+      },
+      "default": {
+        "value": "#FFFFFF",
+        "type": "color"
+      },
+      "sunken": {
+        "value": "#F1F3F5",
+        "type": "color"
+      },
+      "warm": {
+        "value": "#FAF9F7",
+        "type": "color"
+      },
+      "sidebar": {
+        "value": "#14181D",
+        "type": "color"
+      }
+    },
+    "fg": {
+      "default": {
+        "value": "#14181D",
+        "type": "color"
+      },
+      "secondary": {
+        "value": "#3B4453",
+        "type": "color"
+      },
+      "tertiary": {
+        "value": "#5A6473",
+        "type": "color"
+      },
+      "meta": {
+        "value": "#7A8493",
+        "type": "color"
+      },
+      "placeholder": {
+        "value": "#A8B0BC",
+        "type": "color"
+      },
+      "onInk": {
+        "value": "#F2F4F6",
+        "type": "color"
+      },
+      "onAccent": {
+        "value": "#FFFFFF",
+        "type": "color"
+      }
+    },
+    "border": {
+      "default": {
+        "value": "#E3E6EB",
+        "type": "color"
+      },
+      "soft": {
+        "value": "#EBEEF1",
+        "type": "color"
+      },
+      "strong": {
+        "value": "#CDD3DB",
+        "type": "color"
+      }
+    },
+    "brand": {
+      "ink": {
+        "value": "#14181D",
+        "type": "color"
+      },
+      "inkHover": {
+        "value": "#272A31",
+        "type": "color"
+      },
+      "accent": {
+        "value": "#D2431F",
+        "type": "color"
+      },
+      "accentHover": {
+        "value": "#B8371A",
+        "type": "color"
+      },
+      "accentActive": {
+        "value": "#9C2D14",
+        "type": "color"
+      },
+      "accentSubtle": {
+        "value": "#FDF1ED",
+        "type": "color"
+      },
+      "accentBorder": {
+        "value": "#F3C9BC",
+        "type": "color"
+      },
+      "accentOn": {
+        "value": "#FFFFFF",
+        "type": "color"
+      }
+    },
+    "semantic": {
+      "success": {
+        "value": "#15803D",
+        "type": "color"
+      },
+      "successSubtle": {
+        "value": "#F0FDF4",
+        "type": "color"
+      },
+      "successBorder": {
+        "value": "#BBF7D0",
+        "type": "color"
+      },
+      "danger": {
+        "$description": "危险红 · 仅用于文字/图标/细描边/角标（L*30.29，与朱砂 L*49.27 差 18.98）",
+        "value": "#8C1A11",
+        "type": "color"
+      },
+      "dangerFill": {
+        "$description": "唯一允许的红色填充：删除/作废按钮底；白字 9.25:1",
+        "value": "#8C1A11",
+        "type": "color"
+      },
+      "dangerOn": {
+        "value": "#FFFFFF",
+        "type": "color"
+      },
+      "dangerSubtle": {
+        "value": "#FEF3F2",
+        "type": "color"
+      },
+      "dangerBorder": {
+        "value": "#FECDCA",
+        "type": "color"
+      },
+      "warning": {
+        "value": "#A16207",
+        "type": "color"
+      },
+      "warningSubtle": {
+        "value": "#FEFCE8",
+        "type": "color"
+      },
+      "warningBorder": {
+        "value": "#FDE68A",
+        "type": "color"
+      },
+      "info": {
+        "value": "#0E7490",
+        "type": "color"
+      },
+      "infoSubtle": {
+        "value": "#ECFEFF",
+        "type": "color"
+      },
+      "infoBorder": {
+        "value": "#A5F3FC",
+        "type": "color"
+      },
+      "dangerHover": {
+        "value": "#73150D",
+        "type": "color"
+      },
+      "dangerActive": {
+        "value": "#5C110A",
+        "type": "color"
+      },
+      "linkFg": {
+        "$description": "链接色。朱砂是行动色不是文字色，链接一律走 info 系",
+        "value": "#0E7490",
+        "type": "color"
+      },
+      "badgeInternalFg": {
+        "$description": "「自有」徽章描边与文字色（supplier.type = internal）。用 info 系而非绿/红：自有不是更好也不是更差，是口径不同。深色层随 --info 一起提亮",
+        "value": "#0E7490",
+        "type": "color"
+      },
+      "badgeInternalBg": {
+        "$description": "「自有」徽章底",
+        "value": "#ECFEFF",
+        "type": "color"
+      }
+    },
+    "money": {
+      "save": {
+        "value": "#15803D",
+        "type": "color"
+      },
+      "saveBg": {
+        "value": "#F0FDF4",
+        "type": "color"
+      },
+      "loss": {
+        "value": "#8C1A11",
+        "type": "color"
+      },
+      "lossBg": {
+        "value": "#FEF3F2",
+        "type": "color"
+      },
+      "lowest": {
+        "value": "#15803D",
+        "type": "color"
+      },
+      "lowestBg": {
+        "value": "#F0FDF4",
+        "type": "color"
+      },
+      "lowestBorder": {
+        "value": "#BBF7D0",
+        "type": "color"
+      },
+      "risk": {
+        "value": "#A16207",
+        "type": "color"
+      },
+      "riskBg": {
+        "value": "#FEFCE8",
+        "type": "color"
+      },
+      "invalid": {
+        "value": "#B42318",
+        "type": "color"
+      },
+      "invalidBg": {
+        "value": "#FEF3F2",
+        "type": "color"
+      },
+      "invalidBorder": {
+        "value": "#FECDCA",
+        "type": "color"
+      },
+      "stale": {
+        "value": "#A16207",
+        "type": "color"
+      },
+      "staleBg": {
+        "value": "#FEFCE8",
+        "type": "color"
+      },
+      "manual": {
+        "value": "#5A6473",
+        "type": "color"
+      },
+      "manualBg": {
+        "value": "#F1F3F5",
+        "type": "color"
+      }
+    },
+    "chart": {
+      "1": {
+        "value": "#14181D",
+        "type": "color"
+      },
+      "2": {
+        "value": "#D2431F",
+        "type": "color"
+      },
+      "3": {
+        "value": "#0E7490",
+        "type": "color"
+      },
+      "4": {
+        "value": "#A16207",
+        "type": "color"
+      },
+      "5": {
+        "value": "#7A8493",
+        "type": "color"
+      },
+      "grid": {
+        "value": "#EBEEF1",
+        "type": "color"
+      },
+      "axisFg": {
+        "value": "#7A8493",
+        "type": "color"
+      },
+      "reference": {
+        "value": "#CDD3DB",
+        "type": "color"
+      }
+    }
+  },
+  "font": {
+    "family": {
+      "sans": {
+        "value": "Inter, \"Noto Sans SC\", -apple-system, \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+        "type": "fontFamily"
+      },
+      "num": {
+        "value": "Inter, \"Noto Sans SC\", sans-serif",
+        "type": "fontFamily"
+      },
+      "mono": {
+        "value": "\"JetBrains Mono\", \"SF Mono\", Consolas, monospace",
+        "type": "fontFamily"
+      }
+    },
+    "size": {
+      "2xs": {
+        "value": "11px",
+        "type": "dimension"
+      },
+      "xs": {
+        "value": "12px",
+        "type": "dimension"
+      },
+      "sm": {
+        "value": "13px",
+        "type": "dimension"
+      },
+      "base": {
+        "value": "14px",
+        "type": "dimension"
+      },
+      "md": {
+        "value": "16px",
+        "type": "dimension"
+      },
+      "lg": {
+        "value": "18px",
+        "type": "dimension"
+      },
+      "xl": {
+        "value": "22px",
+        "type": "dimension"
+      },
+      "2xl": {
+        "value": "28px",
+        "type": "dimension"
+      }
+    },
+    "lineHeight": {
+      "2xs": "14px",
+      "xs": "16px",
+      "sm": "20px",
+      "base": "22px",
+      "md": "24px",
+      "lg": "26px",
+      "xl": "28px",
+      "2xl": "34px"
+    },
+    "weight": {
+      "regular": {
+        "value": 400,
+        "type": "fontWeight"
+      },
+      "medium": {
+        "value": 510,
+        "type": "fontWeight"
+      },
+      "semibold": {
+        "value": 590,
+        "type": "fontWeight"
+      },
+      "bold": {
+        "value": 700,
+        "type": "fontWeight"
+      }
+    },
+    "tracking": {
+      "tight": {
+        "value": "-0.01em",
+        "type": "dimension"
+      },
+      "tighter": {
+        "value": "-0.02em",
+        "type": "dimension"
+      },
+      "normal": {
+        "value": "0",
+        "type": "dimension"
+      },
+      "wide": {
+        "value": "0.02em",
+        "type": "dimension"
+      },
+      "wider": {
+        "value": "0.08em",
+        "type": "dimension"
+      }
+    }
+  },
+  "space": {
+    "1": {
+      "value": "2px",
+      "type": "dimension"
+    },
+    "2": {
+      "value": "4px",
+      "type": "dimension"
+    },
+    "3": {
+      "value": "8px",
+      "type": "dimension"
+    },
+    "4": {
+      "value": "12px",
+      "type": "dimension"
+    },
+    "5": {
+      "value": "16px",
+      "type": "dimension"
+    },
+    "6": {
+      "value": "20px",
+      "type": "dimension"
+    },
+    "7": {
+      "value": "24px",
+      "type": "dimension"
+    },
+    "8": {
+      "value": "32px",
+      "type": "dimension"
+    },
+    "9": {
+      "value": "40px",
+      "type": "dimension"
+    },
+    "10": {
+      "value": "48px",
+      "type": "dimension"
+    },
+    "11": {
+      "value": "64px",
+      "type": "dimension"
+    }
+  },
+  "radius": {
+    "xs": {
+      "value": "2px",
+      "type": "dimension"
+    },
+    "sm": {
+      "value": "4px",
+      "type": "dimension"
+    },
+    "md": {
+      "value": "6px",
+      "type": "dimension"
+    },
+    "lg": {
+      "value": "8px",
+      "type": "dimension"
+    },
+    "xl": {
+      "value": "12px",
+      "type": "dimension"
+    },
+    "full": {
+      "value": "9999px",
+      "type": "dimension"
+    }
+  },
+  "shadow": {
+    "1": {
+      "value": "0 1px 2px rgba(20,24,29,.06)",
+      "type": "boxShadow"
+    },
+    "2": {
+      "value": "0 2px 8px rgba(20,24,29,.08)",
+      "type": "boxShadow"
+    },
+    "3": {
+      "value": "0 12px 32px rgba(20,24,29,.12)",
+      "type": "boxShadow"
+    },
+    "focus": {
+      "value": "0 0 0 2px #FFFFFF, 0 0 0 4px rgba(210,67,31,.45)",
+      "type": "boxShadow"
+    }
+  },
+  "motion": {
+    "instant": {
+      "value": "80ms",
+      "type": "duration"
+    },
+    "fast": {
+      "value": "150ms",
+      "type": "duration"
+    },
+    "base": {
+      "value": "200ms",
+      "type": "duration"
+    },
+    "slow": {
+      "value": "260ms",
+      "type": "duration"
+    },
+    "easeStandard": {
+      "value": "cubic-bezier(.2,0,0,1)",
+      "type": "cubicBezier"
+    },
+    "easeOut": {
+      "value": "cubic-bezier(.16,1,.3,1)",
+      "type": "cubicBezier"
+    }
+  },
+  "layout": {
+    "sidebarWidth": {
+      "value": "216px",
+      "type": "dimension"
+    },
+    "sidebarCollapsed": {
+      "value": "56px",
+      "type": "dimension"
+    },
+    "topbarHeight": {
+      "value": "52px",
+      "type": "dimension"
+    },
+    "pagePadX": {
+      "value": "24px",
+      "type": "dimension"
+    },
+    "pagePadXWide": {
+      "value": "32px",
+      "type": "dimension"
+    },
+    "containerMax": {
+      "value": "1600px",
+      "type": "dimension"
+    },
+    "editorDrawerWidth": {
+      "value": "320px",
+      "type": "dimension"
+    },
+    "editorFootbarHeight": {
+      "value": "60px",
+      "type": "dimension"
+    },
+    "settingsNavWidth": {
+      "value": "200px",
+      "type": "dimension"
+    },
+    "vendorDrawerWidth": {
+      "value": "480px",
+      "type": "dimension"
+    },
+    "commandPaletteWidth": {
+      "value": "560px",
+      "type": "dimension"
+    },
+    "priceEntryDrawerWidth": {
+      "value": "480px",
+      "type": "dimension"
+    },
+    "trendDrawerWidth": {
+      "value": "400px",
+      "type": "dimension"
+    }
+  },
+  "table": {
+    "headerBg": {
+      "value": "#F1F3F5",
+      "type": "color"
+    },
+    "headerFg": {
+      "value": "#5A6473",
+      "type": "color"
+    },
+    "headerBorder": {
+      "value": "#E3E6EB",
+      "type": "color"
+    },
+    "headerHeight": {
+      "value": "36px",
+      "type": "dimension"
+    },
+    "rowHeight": {
+      "value": "36px",
+      "type": "dimension"
+    },
+    "rowHeightCompact": {
+      "value": "32px",
+      "type": "dimension"
+    },
+    "rowHeightComfortable": {
+      "value": "44px",
+      "type": "dimension"
+    },
+    "rowBorder": {
+      "value": "#EBEEF1",
+      "type": "color"
+    },
+    "rowHover": {
+      "value": "#F7F8FA",
+      "type": "color"
+    },
+    "rowSelected": {
+      "value": "#FDF1ED",
+      "type": "color"
+    },
+    "rowSelectedBorder": {
+      "value": "#F3C9BC",
+      "type": "color"
+    },
+    "zebra": {
+      "value": "#FBFBFC",
+      "type": "color"
+    },
+    "cellPadX": {
+      "value": "12px",
+      "type": "dimension"
+    },
+    "numFg": {
+      "value": "#14181D",
+      "type": "color"
+    },
+    "numMuted": {
+      "value": "#A8B0BC",
+      "type": "color"
+    },
+    "stickyColBg": {
+      "value": "#FFFFFF",
+      "type": "color"
+    },
+    "stickyColShadow": {
+      "value": "inset -8px 0 8px -8px rgba(20,24,29,.10)",
+      "type": "boxShadow"
+    },
+    "stickyHeaderShadow": {
+      "value": "0 4px 8px -4px rgba(20,24,29,.10)",
+      "type": "boxShadow"
+    }
+  },
+  "icon": {
+    "library": {
+      "value": "lucide",
+      "type": "string"
+    },
+    "version": {
+      "value": "1.64.0",
+      "type": "string"
+    },
+    "package": {
+      "value": "lucide-react",
+      "type": "string"
+    },
+    "strokeWidth": {
+      "value": 1.75,
+      "type": "number"
+    },
+    "sizes": {
+      "inline": {
+        "value": "16px",
+        "type": "dimension"
+      },
+      "button": {
+        "value": "20px",
+        "type": "dimension"
+      },
+      "standalone": {
+        "value": "24px",
+        "type": "dimension"
+      }
+    }
+  },
+  "compareCard": {
+    "gridMin": {
+      "value": "248px",
+      "type": "dimension"
+    },
+    "gap": {
+      "value": "16px",
+      "type": "dimension"
+    },
+    "height": {
+      "value": "208px",
+      "type": "dimension"
+    },
+    "heightExpanded": {
+      "value": "328px",
+      "type": "dimension"
+    },
+    "priceSize": {
+      "value": "22px",
+      "type": "dimension"
+    },
+    "priceSizeLowest": {
+      "value": "26px",
+      "type": "dimension"
+    },
+    "summaryHeight": {
+      "value": "44px",
+      "type": "dimension"
+    },
+    "natureTabHeight": {
+      "$description": "交易性质 Tab（>1 种性质时才出现，必须位于摘要条之上）",
+      "value": "40px",
+      "type": "dimension"
+    },
+    "toolbarHeight": {
+      "value": "48px",
+      "type": "dimension"
+    },
+    "footbarHeight": {
+      "value": "64px",
+      "type": "dimension"
+    },
+    "qtySegHeight": {
+      "value": "36px",
+      "type": "dimension"
+    },
+    "qtyInputWidth": {
+      "value": "72px",
+      "type": "dimension"
+    },
+    "radius": {
+      "value": "8px",
+      "type": "dimension"
+    },
+    "borderWidth": {
+      "value": "1px",
+      "type": "dimension"
+    },
+    "borderWidthLowest": {
+      "value": "2px",
+      "type": "dimension"
+    }
+  }
+}

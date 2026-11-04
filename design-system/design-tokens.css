@@ -1,0 +1,401 @@
+/* ============================================================================
+   design-tokens.css — 「有底」价格底账系统 v1.2
+   v1.2 新增：危险色「填充/文字」双 token（把形态隔离写进 token 层）、
+              交易性质 Tab 高度、按旧价重新录价标记色、深色皮肤重算危险色
+   设计师：颜好看 · 全量真源：docs/03-UIUX.md 第 B 节
+   前端 import 方式：在入口处 `import '@/design-system/design-tokens.css'`
+   铁律：组件样式禁止出现裸 hex，一律 var(--token)
+   ============================================================================ */
+
+:root,
+[data-theme="light"] {
+  /* ---------- A1-identity · 中性灰阶（9 档 + 白） ---------- */
+  --gray-50: #F7F8FA;
+  --gray-100: #F1F3F5;
+  --gray-200: #E3E6EB;
+  --gray-300: #CDD3DB;
+  --gray-400: #A8B0BC;
+  --gray-500: #7A8493;
+  --gray-600: #5A6473;
+  --gray-700: #3B4453;
+  --gray-800: #262D38;
+  --gray-900: #14181D;
+  --white: #FFFFFF;
+
+  /* ---------- A1-identity · 表面 ---------- */
+  --bg: var(--gray-50);
+  --surface: var(--white);
+  --surface-raised: var(--white);
+  --surface-sunken: var(--gray-100);
+  --surface-warm: #FAF9F7;
+  --sidebar-bg: var(--ink);
+  --sidebar-fg: #E8EBEF;
+  --sidebar-fg-muted: #8A93A1;
+  --sidebar-item-hover: #22262D;
+  --sidebar-item-active: #2C3138;
+
+  /* ---------- A1-identity · 前景 ---------- */
+  --fg: var(--gray-900);
+  --fg-2: var(--gray-700);
+  --fg-3: var(--gray-600);
+  --fg-meta: var(--gray-500);
+  --fg-placeholder: var(--gray-400);
+  --fg-on-ink: #F2F4F6;
+
+  /* ---------- A1-identity · 边框 ---------- */
+  --border: var(--gray-200);
+  --border-soft: #EBEEF1;
+  --border-strong: var(--gray-300);
+  --border-width: 1px;
+
+  /* ---------- A1-identity · 品牌（墨 + 朱砂） ---------- */
+  --ink: #14181D;
+  --ink-hover: #272A31;
+  --accent: #D2431F;
+  --accent-hover: #B8371A;
+  --accent-active: #9C2D14;
+  --accent-subtle: #FDF1ED;
+  --accent-border: #F3C9BC;
+  --accent-on: #FFFFFF;
+
+  /* ---------- A2 · 语义 ---------- */
+  --success: #15803D;
+  --success-subtle: #F0FDF4;
+  --success-border: #BBF7D0;
+  /* 危险红：#8C1A11 是「文字/图标/细描边/角标」用色，L* = 30.29
+     与朱砂 #D2431F（L* = 49.27）明度差 18.98 —— 满足 PM 硬约束 ≥18
+     × 不得把 --danger 用成大面积填充；填充只走 --danger-fill（仅删除/作废按钮） */
+  --danger: #8C1A11;
+  --danger-hover: #73150D;
+  --danger-active: #5C110A;
+  --danger-fill: var(--danger);        /* 唯一允许的红色填充：危险按钮底 */
+  --danger-fill-hover: var(--danger-hover);
+  --danger-on: #FFFFFF;                /* 白字于危险填充：9.25:1 */
+  --danger-subtle: #FEF3F2;
+  --danger-border: #FECDCA;
+  --warning: #A16207;
+  --warning-subtle: #FEFCE8;
+  --warning-border: #FDE68A;
+  --info: #0E7490;
+  --info-subtle: #ECFEFF;
+  --info-border: #A5F3FC;
+  /* 「自有」（supplier.type = internal）徽章。走 info 系：自有不是更好也不是更差，是口径不同 */
+  --badge-internal-fg: var(--info);
+  --badge-internal-bg: var(--info-subtle);
+
+  /* ---------- C-extension · 资金语义别名（业务直读） ---------- */
+  --money-save: var(--success);
+  --money-save-bg: var(--success-subtle);
+  --money-loss: var(--danger);
+  --money-loss-bg: var(--danger-subtle);
+  --price-lowest: var(--success);
+  --price-lowest-bg: var(--success-subtle);
+  --price-lowest-border: var(--success-border);
+  --data-risk: var(--warning);
+  --data-risk-bg: var(--warning-subtle);
+  --action-now: var(--accent);
+
+  /* ---------- A1-structure · 字体 ---------- */
+  --font-sans: "Inter", "Noto Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-num: "Inter", "Noto Sans SC", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+
+  --lh-2xs: 14px;
+  --lh-xs: 16px;
+  --lh-sm: 20px;
+  --lh-base: 22px;
+  --lh-md: 24px;
+  --lh-lg: 26px;
+  --lh-xl: 28px;
+  --lh-2xl: 34px;
+
+  --fw-regular: 400;
+  --fw-medium: 510;
+  --fw-semibold: 590;
+  --fw-bold: 700;
+
+  --ls-tight: -0.01em;
+  --ls-tighter: -0.02em;
+  --ls-normal: 0;
+  --ls-wide: 0.02em;
+  --ls-wider: 0.08em;
+
+  /* ---------- A2 · 间距（4px 基准） ---------- */
+  --space-0: 0;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-7: 24px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 48px;
+  --space-11: 64px;
+
+  /* ---------- A2 · 圆角 ---------- */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* ---------- A2 · 阴影 ---------- */
+  --shadow-1: 0 1px 2px rgba(20, 24, 29, .06);
+  --shadow-2: 0 2px 8px rgba(20, 24, 29, .08);
+  --shadow-3: 0 12px 32px rgba(20, 24, 29, .12);
+  --shadow-focus: 0 0 0 2px #FFFFFF, 0 0 0 4px rgba(210, 67, 31, .45);
+
+  /* ---------- A2 · 动效（150ms 收敛） ---------- */
+  --motion-instant: 80ms;
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+
+  /* ---------- B-slot · 布局 ---------- */
+  --sidebar-w: 216px;
+  --sidebar-w-collapsed: 56px;
+  --topbar-h: 52px;
+  --page-pad-x: 24px;
+  --container-max: 1600px;
+  --editor-drawer-w: 320px;
+  --editor-footbar-h: 60px;
+  --settings-nav-w: 200px;
+  --vendor-drawer-w: 480px;
+  --command-palette-w: 560px;
+
+  /* ---------- B-slot · 表格 ---------- */
+  --table-header-bg: var(--gray-100);
+  --table-header-fg: var(--gray-600);
+  --table-header-border: var(--gray-200);
+  --table-header-h: 36px;
+  --table-row-h: 36px;
+  --table-row-border: #EBEEF1;
+  --table-row-hover: var(--gray-50);
+  --table-row-selected: var(--accent-subtle);
+  --table-row-selected-border: var(--accent-border);
+  --table-zebra: #FBFBFC;
+  --table-cell-pad-x: 12px;
+  --table-num-fg: var(--gray-900);
+  --table-num-muted: var(--gray-400);
+  --table-sticky-col-bg: var(--white);
+  --table-sticky-col-shadow: inset -8px 0 8px -8px rgba(20, 24, 29, .10);
+  --table-sticky-header-shadow: 0 4px 8px -4px rgba(20, 24, 29, .10);
+
+  /* ---------- C-extension · 比价卡片（v1.1 新增） ---------- */
+  --cmp-grid-min: 248px;        /* 卡片最小宽，1366 下 4 列的硬下限 */
+  --cmp-card-gap: 16px;
+  --cmp-card-h: 208px;
+  --cmp-card-h-expanded: 328px; /* 含 120px 迷你趋势图 */
+  --cmp-price-size: 22px;       /* 非最低价卡片单价 */
+  --cmp-price-size-lowest: 26px;/* 最低价卡片单价 */
+  --cmp-summary-h: 44px;        /* 顶部摘要条（第一落点，跟随选中交易性质） */
+  --cmp-toolbar-h: 48px;        /* 数量档切换条 */
+  --cmp-nature-tab-h: 40px;     /* 交易性质 Tab（>1 种性质时才出现；在摘要条之上） */
+  --cmp-footbar-h: 64px;        /* 底部攒单操作条 */
+  --qty-seg-h: 36px;
+  --qty-input-w: 72px;
+
+  /* ---------- C-extension · 价格状态（v1.1 新增，三级模型） ---------- */
+  --price-invalid: var(--danger);           /* 无任何有效价 / 全部已失效 → 阻断 */
+  --price-invalid-bg: var(--danger-subtle);
+  --price-invalid-border: var(--danger-border);
+  --price-stale: var(--warning);            /* >90 天未更新 → 提示，不阻断 */
+  --price-stale-bg: var(--warning-subtle);
+  --price-valid: var(--success);            /* 有有效价 → 占优 */
+  --price-manual: var(--gray-600);          /* 手填成本标记（cost_source = manual） */
+  --price-manual-bg: var(--gray-100);
+  --price-rebuilt: var(--info);             /* 按旧价重新录价后生成的新价标记 */
+  --price-rebuilt-bg: var(--info-subtle);
+
+  /* ---------- C-extension · 链接（× 不用朱砂：朱砂是行动色不是文字色） ---------- */
+  --link-fg: var(--info);                   /* 纸白底 5.04:1 */
+  --link-fg-hover: #0B5F76;
+
+  /* ---------- C-extension · 图表（克制，非彩虹） ---------- */
+  --chart-1: #14181D;
+  --chart-2: #D2431F;
+  --chart-3: #0E7490;
+  --chart-4: #A16207;
+  --chart-5: #7A8493;
+  --chart-grid: #EBEEF1;
+  --chart-axis-fg: #7A8493;
+  --chart-reference: #CDD3DB;
+
+  /* ---------- C-extension · 层级 ---------- */
+  --z-base: 0;
+  --z-sticky: 100;
+  --z-dropdown: 1000;
+  --z-sticky-header: 1100;
+  --z-drawer: 1200;
+  --z-modal: 1300;
+  --z-toast: 1400;
+}
+
+/* ============================================================================
+   密度切换  <html data-density="compact | standard | comfortable">
+   默认 standard（36px 行高 / 13px 表格正文）
+   ============================================================================ */
+[data-density="compact"] {
+  --table-row-h: 32px;
+  --table-header-h: 32px;
+  --text-sm: 12px;
+  --lh-sm: 18px;
+}
+[data-density="standard"] {
+  --table-row-h: 36px;
+  --table-header-h: 36px;
+}
+[data-density="comfortable"] {
+  --table-row-h: 44px;
+  --table-header-h: 40px;
+  --text-sm: 14px;
+  --lh-sm: 22px;
+}
+
+/* ============================================================================
+   深色皮肤（可选，非默认）  <html data-theme="dark">
+   ============================================================================ */
+[data-theme="dark"] {
+  --gray-50: #0F1216;
+  --gray-100: #161A20;
+  --gray-200: #232932;
+  --gray-300: #2F3641;
+  --gray-400: #5A6473;
+  --gray-500: #7A8493;
+  --gray-600: #9AA3AF;
+  --gray-700: #B8BFC9;
+  --gray-800: #D6DBE1;
+  --gray-900: #EDEFF2;
+  --white: #161A20;
+
+  --bg: #0F1216;
+  --surface: #161A20;
+  --surface-raised: #1D2229;
+  --surface-sunken: #11151A;
+  --surface-warm: #1A1E24;
+  --sidebar-bg: #0B0D10;
+  --sidebar-fg: #D6DBE1;
+  --sidebar-fg-muted: #6F7884;
+  --sidebar-item-hover: #1A1E24;
+  --sidebar-item-active: #232932;
+
+  --fg: #EDEFF2;
+  --fg-2: #D6DBE1;
+  --fg-3: #9AA3AF;
+  --fg-meta: #7A8493;
+  --fg-placeholder: #5A6473;
+  --fg-on-ink: #EDEFF2;
+
+  --border: #232932;
+  --border-soft: #1D2229;
+  --border-strong: #2F3641;
+
+  --ink: #EDEFF2;
+  --ink-hover: #FFFFFF;
+  --accent: #F0603C;
+  --accent-hover: #F47A5B;
+  --accent-active: #D2431F;
+  --accent-subtle: #2A1A15;
+  --accent-border: #5A2A1B;
+  --accent-on: #14181D;
+
+  --success: #4ADE80;
+  --success-subtle: #0E2018;
+  --success-border: #14532D;
+  /* 深色皮肤：明度差规则方向相反 —— 危险色必须比行动色更亮（L* 80.09 vs 59.17 = 20.92） */
+  --danger: #FFB4AB;
+  --danger-hover: #FFC7C2;
+  --danger-active: #FFD3CF;
+  --danger-fill: #B4241A;              /* 深底上的危险填充走「深红底 + 白字」 */
+  --danger-fill-hover: #9A1D13;
+  --danger-on: #FFFFFF;
+  --danger-subtle: #251113;
+  --danger-border: #7F1D1D;
+  --warning: #FBBF24;
+  --warning-subtle: #241C08;
+  --warning-border: #78350F;
+  --info: #38BDF8;
+  --info-subtle: #0A1E24;
+  --info-border: #0E4A5C;
+
+  --table-header-bg: #1A1E24;
+  --table-header-fg: #9AA3AF;
+  --table-header-border: #232932;
+  --table-row-border: #1D2229;
+  --table-row-hover: #1A1E24;
+  --table-row-selected: #2A1A15;
+  --table-row-selected-border: #5A2A1B;
+  --table-zebra: #191D23;
+  --table-num-fg: #EDEFF2;
+  --table-num-muted: #5A6473;
+  --table-sticky-col-bg: #161A20;
+
+  --price-invalid-bg: #251113;
+  --price-invalid-border: #7F1D1D;
+  --price-stale-bg: #241C08;
+  --price-manual: #9AA3AF;
+  --price-manual-bg: #1D2229;
+
+  --chart-1: #EDEFF2;
+  --chart-2: #F0603C;
+  --chart-3: #38BDF8;
+  --chart-4: #FBBF24;
+  --chart-5: #7A8493;
+  --chart-grid: #232932;
+  --chart-axis-fg: #7A8493;
+  --chart-reference: #2F3641;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, .5);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, .6);
+  --shadow-focus: 0 0 0 2px #161A20, 0 0 0 4px rgba(240, 96, 60, .5);
+}
+
+/* ============================================================================
+   数字排版工具类 —— 财务级界面的命脉，所有金额/数量/百分比必须套 .num
+   ============================================================================ */
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  text-align: right;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+.num--muted { color: var(--table-num-muted); }
+.num--save { color: var(--money-save); }
+.num--loss { color: var(--money-loss); }
+.num--total { font-size: var(--text-xl); line-height: var(--lh-xl); font-weight: var(--fw-semibold); }
+.num--animated { transition: color var(--motion-base) var(--ease-standard); }
+
+/* ============================================================================
+   无障碍基线
+   ============================================================================ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

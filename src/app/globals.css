@@ -1342,9 +1342,9 @@ button {
 .paper-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 .paper-tbl th,
 .paper-tbl td { padding: 5px var(--space-3); border-bottom: var(--border-width) solid var(--border-soft); text-align: left; vertical-align: top; }
-.paper-tbl th { background: var(--table-header-bg); color: var(--table-header-fg); font-weight: var(--fw-medium); }
+.paper-tbl th { background: var(--table-header-bg); color: var(--table-header-fg); font-weight: var(--fw-medium); white-space: nowrap; }
 .paper-tbl td.num, .paper-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.paper-tbl td.mid, .paper-tbl th.mid { text-align: center; }
+.paper-tbl td.mid, .paper-tbl th.mid { text-align: center; white-space: nowrap; }
 /* 分组行与 Excel 的合并行同义：整行一条分类名，不参与列对齐 */
 .paper-tbl tr.paper-group td { background: var(--surface-sunken); font-weight: var(--fw-semibold); padding-top: var(--space-3); }
 .paper-tbl tfoot td { border-bottom: 0; padding-top: var(--space-3); }

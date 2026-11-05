@@ -373,6 +373,29 @@ async function main() {
     `target_margin_rate=${quote.json?.data?.target_margin_rate} / 该类型默认=${typeMargin.get('annual_meeting')}`,
   );
 
+  // 6b. 未选项目类型也要有默认毛利率（v1.16）。
+  //     客户原话「项目类型未选，默认毛利率没有生效」。下拉上一直写着「未选（按默认 25%）」，
+  //     而实际落库是 NULL —— 于是第一行加进来就报「这张单没有目标毛利率，无法反推」。
+  //     默认值写在界面上却不算数，比不写更糟，所以从接口层钉住。
+  const siteDefault = Number(qSettings.json?.data?.default_margin_threshold);
+  const noType = await call('POST', '/quotes', {
+    as: 'admin',
+    body: {
+      customer_name: '自检样例',
+      event_name: '未选类型自检，跑完即删',
+      valid_until: validUntil,
+    },
+  });
+  record(
+    '建单：未选项目类型时也落全站默认毛利率（不是 NULL）',
+    Number.isFinite(siteDefault) &&
+      siteDefault > 0 &&
+      Math.abs(Number(noType.json?.data?.target_margin_rate) - siteDefault) < 1e-6,
+    `target_margin_rate=${noType.json?.data?.target_margin_rate} / 全站默认=${qSettings.json?.data?.default_margin_threshold}`,
+  );
+  // 这张单只为这一项自检存在，验完立刻删：列表里多一张「自检样例」会让人分不清哪张是自己的
+  if (noType.json?.data?.id) await call('DELETE', `/quotes/${noType.json.data.id}`, { as: 'admin' });
+
   const launchMargin = Number(typeMargin.get('product_launch'));
   const switched = await call('PATCH', `/quotes/${qid}`, { as: 'admin', body: { project_type: 'product_launch' } });
   record(
@@ -424,6 +447,10 @@ async function main() {
   });
   const nmId = noMargin.json?.data?.id;
   if (nmId) {
+    // v1.16 起新建单一定落一个默认毛利率，所以"没毛利率"这个状态要显式清出来。
+    // 它对应的是历史单：当年建单没带毛利率，target_margin_rate 是 NULL。
+    // 服务端契约没变——这种单攒行必须明确拒绝，不能静默失败。
+    await call('PATCH', `/quotes/${nmId}`, { as: 'admin', body: { target_margin_rate: null } });
     const bareLine = {
       line_kind: 'material',
       item_id: truss.id,
@@ -625,8 +652,8 @@ async function main() {
   //     这类问题在浏览器里只能靠人眼比对两张纸，所以从接口层验：预览页那四个版式开关
   //     是不是真的传到了导出渲染器，导出的表是不是跟着开关变（不是照旧出全表）。
   const ExcelJS = (await import('exceljs')).default;
-  async function readXlsx(query) {
-    const res = await fetch(`${BASE}/api/v1/quotes/${qid}/export.xlsx?${query}`, {
+  async function readXlsx(query, id = qid) {
+    const res = await fetch(`${BASE}/api/v1/quotes/${id}/export.xlsx?${query}`, {
       headers: { Cookie: jar.admin ?? '' },
     });
     const wb = new ExcelJS.Workbook();
@@ -649,13 +676,13 @@ async function main() {
   const dHead = headOf(detailed);
   const bHead = headOf(brief);
   record(
-    '导出：详细档有「规格 / 说明」「单价」两列',
-    dHead.includes('规格 / 说明') && dHead.includes('单价'),
+    '导出：详细档「规格」与「备注」是两列（不是合成「规格 / 说明」），且都有单价',
+    dHead.includes('规格') && dHead.includes('备注') && dHead.includes('单价') && !dHead.includes('规格 / 说明'),
     dHead.join(' | ') || '没找到表头行',
   );
   record(
-    '导出：精简档按参数收窄成 5 列（无规格、无单价），不是照旧出全表',
-    bHead.length === 5 && !bHead.includes('单价') && !bHead.includes('规格 / 说明'),
+    '导出：精简档按参数收窄成 5 列（无规格/备注、无单价），不是照旧出全表',
+    bHead.length === 5 && !bHead.includes('单价') && !bHead.includes('规格') && !bHead.includes('备注'),
     bHead.join(' | ') || '没找到表头行',
   );
   record(
@@ -736,6 +763,27 @@ async function main() {
       nl?.json?.data?.item?.remark === noteText,
       `行备注=${nl?.json?.data?.item?.remark ?? '空'}`,
     );
+
+    // 客户版 Excel 里规格与备注必须落在**不同两格**：合成一格时客户分不清
+    // 哪句是参数、哪句是条件，长备注还会把规格挤没
+    if (nqId) {
+      const nqXls = await readXlsx('view=customer', nqId);
+      const nxHead = headOf(nqXls);
+      const specAt = nxHead.indexOf('规格');
+      const remarkAt = nxHead.indexOf('备注');
+      const nameAt = nxHead.indexOf('项目');
+      const noteRow = nqXls.rows.find((x) => x.includes(noteText)) ?? [];
+      record(
+        '导出：规格与备注分两列落值，项目名不再驮括号',
+        specAt > -1 &&
+          remarkAt > -1 &&
+          noteRow.length > 0 &&
+          noteRow[remarkAt] === noteText &&
+          !String(noteRow[nameAt] ?? '').includes(noteText) &&
+          (truss.spec ? noteRow[specAt] === truss.spec : true),
+        noteRow.length ? noteRow.join(' | ') : '导出里找不到这条备注',
+      );
+    }
 
     if (nqId && lineId) {
       const patchBody = {

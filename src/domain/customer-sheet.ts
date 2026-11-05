@@ -42,7 +42,7 @@ export type SheetTaxBasis = 'inclusive' | 'exclusive';
 export type SheetAlign = 'left' | 'right' | 'center';
 
 export interface SheetColumn {
-  key: 'no' | 'name' | 'spec' | 'unit' | 'qty' | 'unitPrice' | 'amount';
+  key: 'no' | 'name' | 'spec' | 'remark' | 'unit' | 'qty' | 'unitPrice' | 'amount';
   header: string;
   /** Excel 列宽（字符数） */
   width: number;
@@ -50,13 +50,24 @@ export interface SheetColumn {
   money?: boolean;
 }
 
-/** 列定义。HTML 与 xlsx 都从这一份取，顺序与表头文案只有这里能改 */
+/**
+ * 列定义。HTML 与 xlsx 都从这一份取，顺序与表头文案只有这里能改。
+ *
+ * 规格与备注是**两列**：前者是「这个东西多大」，后者是「报价时要记得的事」
+ * （含不含运输、含不含调音师）。合成一列叫「规格 / 说明」时，客户分不清
+ * 哪句是参数、哪句是条件；一条长备注还会把规格挤没。
+ */
 export function sheetColumns(opts: SheetOptions): SheetColumn[] {
   const cols: SheetColumn[] = [
     { key: 'no', header: '序号', width: 6, align: 'center' },
-    { key: 'name', header: '项目', width: 32, align: 'left' },
+    { key: 'name', header: '项目', width: 30, align: 'left' },
   ];
-  if (opts.layout === 'detailed') cols.push({ key: 'spec', header: '规格 / 说明', width: 26, align: 'left' });
+  if (opts.layout === 'detailed') {
+    cols.push(
+      { key: 'spec', header: '规格', width: 18, align: 'left' },
+      { key: 'remark', header: '备注', width: 24, align: 'left' },
+    );
+  }
   cols.push(
     { key: 'unit', header: '单位', width: 8, align: 'left' },
     { key: 'qty', header: '数量', width: 10, align: 'right' },
@@ -73,7 +84,10 @@ export interface SheetItemInput {
   qty: string;
   unitPrice: string;
   amount: string;
-  /** 备注只在详细档显示，接在名称后面用括号 */
+  /**
+   * 行备注。详细档单独一列；精简档省掉了那一列，就接在项目名后面用括号
+   * ——省列不能把信息一起省掉。
+   */
   remark?: string | null;
   /** 分类名；分组用 */
   category?: string | null;
@@ -106,6 +120,8 @@ export interface SheetRow {
   no: number;
   name: string;
   spec: string;
+  /** 详细档的独立备注列；精简档为 ''（已折进 name） */
+  remark: string;
   unit: string;
   qty: string;
   unitPrice: string | null;
@@ -214,10 +230,15 @@ export function buildCustomerSheet(
   };
 
   function row(it: SheetItemInput): SheetRow {
+    const remark = it.remark?.trim() ?? '';
+    const detailed = opts.layout === 'detailed';
     return {
       no: 0,
-      name: it.remark && opts.layout === 'detailed' ? `${it.name}（${it.remark}）` : it.name,
+      // 详细档有独立的备注列，项目名就不再驮一段括号——同一句话印两遍，
+      // 客户会以为是两条不同的说明
+      name: detailed || !remark ? it.name : `${it.name}（${remark}）`,
       spec: it.spec?.trim() || '—',
+      remark: detailed ? remark : '',
       unit: it.unit,
       qty: it.qty,
       unitPrice: opts.showUnitPrice ? it.unitPrice : null,
@@ -235,6 +256,8 @@ export function sheetCellText(row: SheetRow, key: SheetColumn['key']): string {
       return row.name;
     case 'spec':
       return row.spec;
+    case 'remark':
+      return row.remark;
     case 'unit':
       return row.unit;
     case 'qty':

@@ -20,6 +20,7 @@ import {
 } from '../store/quotes.store';
 import {
   defaultMarginRateForType,
+  defaultTargetMarginRate,
   defaultTaxBasis,
   marginThresholds,
   marginWarnRate,
@@ -194,10 +195,13 @@ export async function createQuote(actor: CurrentUser, input: CreateQuoteInput) {
   const prefix = await quoteNoPrefix();
   const taxStatement = await defaultTaxBasis();
   const discount = input.discount_amount ?? '0';
-  // 选了类型就用该类型的默认毛利率建单；没配就留空，由报价员自己填
+  /**
+   * 目标毛利率**永远落一个值**：选了类型用该类型配的点数，没选（或该类没配）
+   * 用全站默认。留空建单曾经写出 NULL，于是第一行加进来就报
+   * 「这张单没有目标毛利率，无法反推」——而下拉框上明明写着「按默认 25%」。
+   */
   const marginRate =
-    input.target_margin_rate ??
-    (input.project_type ? ((await defaultMarginRateForType(input.project_type))?.toFixed(4) ?? null) : null);
+    input.target_margin_rate ?? (await defaultTargetMarginRate(input.project_type ?? null)).toFixed(4);
   const newId = await tx(async (c) => {
     const quoteNo = await nextQuoteNo(c, prefix);
     const r = await c.query<{ id: string }>(

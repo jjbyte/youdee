@@ -171,6 +171,8 @@ function writeCustomer(
             return row.name;
           case 'spec':
             return row.spec;
+          case 'remark':
+            return row.remark;
           case 'unit':
             return row.unit;
           case 'qty':

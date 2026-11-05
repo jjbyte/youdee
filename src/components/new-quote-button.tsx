@@ -16,6 +16,9 @@ import { IconPlus } from '@/components/icons';
  *
  * 项目类型 → 毛利率：选类型就把该类型配好的默认毛利率填进来，当场可见可改。
  * 之前类型只影响预警线的颜色，毛利率永远是空的，客户以为是"选了类型没反应"。
+ *
+ * **没选类型时也要有值**：下拉上写着「未选（按默认 25%）」，那就真的按 25% 填进去。
+ * 空着建单会让第一行加进来就报「这张单没有目标毛利率，无法反推」。
  */
 export function NewQuoteButton({
   label = '新建报价单',
@@ -33,12 +36,13 @@ export function NewQuoteButton({
   const [eventDate, setEventDate] = useState('');
   const [projectType, setProjectType] = useState<'' | ProjectType>('');
   const [marginRate, setMarginRate] = useState('');
+  const [defaultMargin, setDefaultMargin] = useState('');
   const [typeMargins, setTypeMargins] = useState<Record<string, string>>({});
   const [validUntil, setValidUntil] = useState(addDaysISO(todayISO(), 30));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 类型 → 默认毛利率的对照表。拿不到就退化成"不预填"，不报错：建单不能被它拦住
+  // 类型 → 默认毛利率的对照表 + 全站默认利率。拿不到就退化成"不预填"，不报错：建单不能被它拦住
   useEffect(() => {
     api
       .quoteSettings()
@@ -48,14 +52,19 @@ export function NewQuoteButton({
           if (t.defaultMarginRate) map[t.projectType] = rateToPctInput(t.defaultMarginRate);
         }
         setTypeMargins(map);
+        const fallback = rateToPctInput(s.defaultMarginThreshold);
+        setDefaultMargin(fallback);
+        // 只在用户还没动手时预填：接口回来前就敲了数字，不能被异步结果盖掉
+        setMarginRate((prev) => (prev.trim() === '' ? fallback : prev));
       })
       .catch(() => setTypeMargins({}));
   }, []);
 
   function pickType(t: '' | ProjectType) {
     setProjectType(t);
-    // 只在有默认值时覆盖；没配就保留手上填的数，不清空
-    if (t && typeMargins[t]) setMarginRate(typeMargins[t]);
+    // 类型有专门配的就用它的；没有（含"未选"）回到全站默认，不留空
+    const next = (t && typeMargins[t]) || defaultMargin;
+    if (next) setMarginRate(next);
   }
 
   async function submit() {
@@ -154,7 +163,7 @@ export function NewQuoteButton({
                 value={projectType}
                 onChange={(e) => pickType(e.target.value as ProjectType | '')}
               >
-                <option value="">未选（按默认 25%）</option>
+                <option value="">未选（按默认 {defaultMargin || '25'}%）</option>
                 {PROJECT_TYPE_ORDER.map((t) => (
                   <option key={t} value={t}>
                     {PROJECT_TYPE_LABELS[t]}
@@ -168,7 +177,9 @@ export function NewQuoteButton({
               hint={
                 projectType && typeMargins[projectType]
                   ? `按「${PROJECT_TYPE_LABELS[projectType]}」的默认值填好，可以改。`
-                  : '售价 = 成本 ÷ (1 − 毛利率)。留空也能建单，进单再填。'
+                  : projectType
+                    ? `这个类型没配默认毛利率，先按全站默认 ${defaultMargin || '25'}% 填好，可以改。`
+                    : `未选类型时按全站默认 ${defaultMargin || '25'}% 填好，可以改。`
               }
             >
               <div className="flex items-center gap-[var(--space-2)]">

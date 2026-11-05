@@ -52,6 +52,8 @@ export default function QuoteEditPage() {
   const [toastAction, setToastAction] = useState<{ label: string; onClick: () => void } | null>(null);
   /** 项目类型 → 默认毛利率（百分数）。换类型时用它同步单头那个数 */
   const [typeMargins, setTypeMargins] = useState<Record<string, string>>({});
+  /** 全站默认毛利率（百分数）。选回「未选」时用它，别把上一次类型的值留在单头 */
+  const [defaultMargin, setDefaultMargin] = useState('');
 
   /** 一条提示 = 一句话 + 一个语气。绿勾配「这次没成」是最刺眼的一种错。 */
   const say = useCallback((message: string, tone: 'success' | 'warn' | 'danger' = 'success', action?: { label: string; onClick: () => void }) => {
@@ -102,6 +104,7 @@ export default function QuoteEditPage() {
           if (t.defaultMarginRate) map[t.projectType] = rateToPctInput(t.defaultMarginRate);
         }
         setTypeMargins(map);
+        setDefaultMargin(rateToPctInput(s.defaultMarginThreshold));
       })
       .catch(() => setTypeMargins({}));
   }, []);
@@ -231,6 +234,7 @@ export default function QuoteEditPage() {
       <QuoteHeader
         quote={quote}
         typeMargins={typeMargins}
+        defaultMargin={defaultMargin}
         saveState={saveState}
         onRetrySave={() => void reload()}
         isAdmin={isAdmin}

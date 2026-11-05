@@ -79,8 +79,9 @@ export async function marginThresholds(): Promise<MarginThresholdRow[]> {
 }
 
 /**
- * 该类型的默认毛利率。没配就返回 null —— 不拿全局阈值顶上：
- * 「没配」和「配成 25%」在报价上是两件不同的事，前者应该留空让人填。
+ * 该类型有没有**专门配**默认毛利率。没配返回 null，不拿全局阈值顶上——
+ * 这个函数只回答"类型这一层配了吗"，全局兜底交给 `defaultTargetMarginRate`。
+ * 想直接要"新单该按几个点起算"用那个，别用这个再自己判空。
  */
 export async function defaultMarginRateForType(projectType: string | null): Promise<number | null> {
   if (!projectType) return null;
@@ -92,6 +93,27 @@ export async function defaultMarginRateForType(projectType: string | null): Prom
   if (raw === null || raw === undefined) return null;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 && n < 1 ? n : null;
+}
+
+/**
+ * 新建报价单时的目标毛利率初值 —— **永远有值**。
+ *
+ * 与 `defaultMarginRateForType` 的分工：那个回答"这个类型有没有专门配"（没配返回 null），
+ * 这个回答"新单该按几个点起算"。客户原话是「项目类型未选，默认毛利率没有生效」——
+ * 界面下拉里写着「未选（按默认 25%）」，而实际落库是 NULL，于是加行时反推不出对客价、
+ * 按毛利率重算直接报「这张单没有目标毛利率」。**默认值写在界面上却不算数，比不写更糟。**
+ *
+ * 取值顺序：类型默认 → app_settings.default_margin_threshold → 常量 0.25。
+ * 全局默认与预警线共用一个设置项（设置页叫「默认毛利率（新行初值）」）。
+ */
+export async function defaultTargetMarginRate(projectType: string | null): Promise<number> {
+  const typeRate = await defaultMarginRateForType(projectType);
+  if (typeRate !== null) return typeRate;
+  const raw = await getSetting<number | string | null>('default_margin_threshold', null);
+  const legacy = await getSetting<number | string | null>('default_margin_warn_rate', null);
+  const n = Number(raw ?? legacy);
+  if (Number.isFinite(n) && n > 0 && n < 1) return n;
+  return 0.25;
 }
 
 export interface MarginWarn {

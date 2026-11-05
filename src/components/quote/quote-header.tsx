@@ -42,6 +42,7 @@ export function QuoteHeader({
   onApplyMargin,
   applyingMargin,
   typeMargins = {},
+  defaultMargin = '',
 }: {
   quote: QuoteDetail;
   saveState: 'idle' | 'saving' | 'error';
@@ -59,6 +60,8 @@ export function QuoteHeader({
   applyingMargin?: boolean;
   /** 项目类型 → 默认毛利率（百分数，如 "40"）。没配的类型不出现 */
   typeMargins?: Record<string, string>;
+  /** 全站默认毛利率（百分数）。选回「未选」时用它——否则会留着上一个类型配的点数 */
+  defaultMargin?: string;
 }) {
   const [customer, setCustomer] = useState(quote.customerName);
   const [eventName, setEventName] = useState(quote.eventName);
@@ -279,8 +282,11 @@ export function QuoteHeader({
               /**
                * 换类型 = 换这一类的默认毛利率（客户原话「选了类型毛利率没同步变」）。
                * 只改单头这个数，不动已有行的对客价——所以要重算还点「按毛利率重算」。
+               *
+               * 选回「未选」时落到全站默认，不留着上一个类型的点数：下拉上写着
+               * 「按默认 25%」，单头却还是 40，是同一类"写了不算数"。
                */
-              const m = t ? typeMargins[t] : undefined;
+              const m = (t ? typeMargins[t] : undefined) ?? defaultMargin;
               onPatch(
                 m
                   ? { projectType: t || null, targetMarginRate: String(Number(m) / 100) }
@@ -288,7 +294,7 @@ export function QuoteHeader({
               );
             }}
           >
-            <option value="">未选（按默认 25%）</option>
+            <option value="">未选（按默认 {defaultMargin || '25'}%）</option>
             {PROJECT_TYPE_ORDER.map((t) => (
               <option key={t} value={t}>
                 {PROJECT_TYPE_LABELS[t]}

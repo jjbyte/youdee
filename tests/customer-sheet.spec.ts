@@ -29,11 +29,12 @@ const quote = (over: Partial<SheetQuoteInput> = {}): SheetQuoteInput => ({
 const company = { name: '杭州星芒活动策划', address: '杭州市西湖区', phone: '0571-88888888' };
 
 describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
-  it('详细档列 = 序号/项目/规格/单位/数量/单价/小计', () => {
+  it('详细档列 = 序号/项目/规格/备注/单位/数量/单价/小计（规格与备注分两列）', () => {
     expect(sheetColumns(SHEET_OPTIONS_DEFAULT).map((c) => c.header)).toEqual([
       '序号',
       '项目',
-      '规格 / 说明',
+      '规格',
+      '备注',
       '单位',
       '数量',
       '单价',
@@ -41,7 +42,7 @@ describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
     ]);
   });
 
-  it('精简档去掉规格列，关掉单价再少一列', () => {
+  it('精简档去掉规格与备注两列，关掉单价再少一列', () => {
     expect(sheetColumns({ ...SHEET_OPTIONS_DEFAULT, layout: 'brief' }).map((c) => c.key)).toEqual([
       'no',
       'name',
@@ -52,7 +53,7 @@ describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
     ]);
     expect(
       sheetColumns({ ...SHEET_OPTIONS_DEFAULT, showUnitPrice: false }).map((c) => c.key),
-    ).toEqual(['no', 'name', 'spec', 'unit', 'qty', 'amount']);
+    ).toEqual(['no', 'name', 'spec', 'remark', 'unit', 'qty', 'amount']);
   });
 
   it('分组按出现顺序编号，序号跨组连续', () => {
@@ -101,11 +102,30 @@ describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
     ).toBe('12846.00');
   });
 
-  it('备注只在详细档挂在名称后面', () => {
+  it('详细档里备注是独立一列，项目名不再驮括号', () => {
     const q = quote({ items: [{ ...quote().items[0]!, remark: '含安装' }] });
-    expect(buildCustomerSheet(q, company).groups[0]!.rows[0]!.name).toBe('桁架背景板（含安装）');
+    const row = buildCustomerSheet(q, company).groups[0]!.rows[0]!;
+    expect(row.name).toBe('桁架背景板');
+    expect(row.spec).toBe('3m×6m');
+    expect(row.remark).toBe('含安装');
+  });
+
+  it('精简档没有备注列，备注折进项目名——省列不能把信息一起省掉', () => {
+    const q = quote({ items: [{ ...quote().items[0]!, remark: '含安装' }] });
+    const row = buildCustomerSheet(q, company, { ...SHEET_OPTIONS_DEFAULT, layout: 'brief' }).groups[0]!
+      .rows[0]!;
+    expect(row.name).toBe('桁架背景板（含安装）');
+    expect(row.remark).toBe('');
+  });
+
+  it('备注只有空白时不占位，也不留一对空括号', () => {
+    const q = quote({ items: [{ ...quote().items[0]!, remark: '   ' }] });
+    const s = buildCustomerSheet(q, company);
+    expect(s.groups[0]!.rows[0]!.remark).toBe('');
+    expect(s.groups[0]!.rows[0]!.name).toBe('桁架背景板');
     expect(
-      buildCustomerSheet(q, company, { ...SHEET_OPTIONS_DEFAULT, layout: 'brief' }).groups[0]!.rows[0]!.name,
+      buildCustomerSheet(q, company, { ...SHEET_OPTIONS_DEFAULT, layout: 'brief' }).groups[0]!.rows[0]!
+        .name,
     ).toBe('桁架背景板');
   });
 

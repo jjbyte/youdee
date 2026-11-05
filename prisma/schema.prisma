@@ -40,6 +40,8 @@ model User {
   passwordHash String   @map("password_hash") @db.VarChar(200)
   name         String   @db.VarChar(40)
   role         String   @db.VarChar(20) /// admin | member
+  /// 报价人电话：只用于报价单抬头给客户看，与登录/验证无关
+  phone        String?  @db.VarChar(30)
   isActive     Boolean  @map("is_active")
   tokenVersion Int      @map("token_version")
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
@@ -109,6 +111,8 @@ model Item {
   name            String   @db.VarChar(80)
   aliases         String[] @db.Text
   spec            String?  @db.VarChar(200)
+  /// 物料 / 人员备注：录进报价单时作为该行备注的初值，改行内备注只影响那张单
+  note            String?  @db.Text
   baseUnitCode    String   @map("base_unit_code") @db.VarChar(20)
   compareUnitCode String?  @map("compare_unit_code") @db.VarChar(20)
   /// 仅 personnel：单价是否含差旅

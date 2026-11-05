@@ -98,6 +98,90 @@ export interface LineFlags {
 }
 
 /**
+ * 行备注：显示 + 就地编辑。
+ *
+ * 为什么不做成弹窗：备注是"给这一行补一句话"，长度通常小于 20 字。
+ * 开弹窗意味着鼠标跑一趟、点两下、再关掉——大多数人会干脆不写。
+ * 点一下就地变成输入框，回车即存，是这类短文本的正确成本。
+ *
+ * 三条边界：
+ *   · **只存在这张单的这一行**（quote_items.note）：改它不回写物料库，
+ *     也不会影响别的单——同一句"含运输"在另一张单里可能是"不含"。
+ *   · 空着时给一个「＋ 备注」的落点：没有落点，这个功能等于不存在。
+ *   · 已发出的单只读：备注也算这张单的内容，客户手里那份已经印出去了。
+ */
+function LineNoteCell({
+  note,
+  locked,
+  onCommit,
+  ariaLabel,
+}: {
+  note: string | null;
+  locked: boolean;
+  onCommit: (next: string | null) => void;
+  ariaLabel: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(note ?? '');
+
+  function commit() {
+    const v = draft.trim();
+    if (v === (note ?? '').trim()) return;
+    onCommit(v || null);
+  }
+
+  if (editing) {
+    return (
+      <input
+        className="cell-input t-xs"
+        // cell-input 是给金额格写的（右对齐），备注必须左对齐
+        style={{ textAlign: 'left' }}
+        autoFocus
+        maxLength={300}
+        value={draft}
+        aria-label={ariaLabel}
+        placeholder="例：含运输与安装，不含电费"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          commit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            // 交给 blur 去提交：否则 Enter 会提交两次（keydown 一次、失焦一次）
+            e.currentTarget.blur();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setDraft(note ?? '');
+            setEditing(false);
+            e.currentTarget.blur();
+          }
+        }}
+      />
+    );
+  }
+
+  if (!note && locked) return null;
+
+  return (
+    <button
+      type="button"
+      className={cx('line-note', !note && 'line-note--empty')}
+      disabled={locked}
+      onClick={() => {
+        setDraft(note ?? '');
+        setEditing(true);
+      }}
+      title={note ? `${note}（点这里改，只影响这张单）` : '给这一行加备注（只影响这张单）'}
+      aria-label={ariaLabel}
+    >
+      {note ?? '＋ 备注'}
+    </button>
+  );
+}
+
+/**
  * 一行明细（§C.7 明细表）。
  *
  * 三条不能错：
@@ -181,16 +265,28 @@ export function QuoteLineRow({
         <div className="truncate" title={line.itemNameSnapshot}>
           {line.itemNameSnapshot}
         </div>
-        <span className="cell-sub">
-          {line.supplierNameSnapshot ?? '未指定供应商'}
-          {line.remark ? ` · ${line.remark}` : ''}
-        </span>
+        <span className="cell-sub">{line.supplierNameSnapshot ?? '未指定供应商'}</span>
+        {/* 精简档没有「规格 / 备注」列，备注就落到名称下面——省列不能省掉这句话 */}
+        {compact ? (
+          <LineNoteCell
+            note={line.remark}
+            locked={locked}
+            ariaLabel={`第 ${index + 1} 行备注`}
+            onCommit={(v) => onPatch({ remark: v })}
+          />
+        ) : null}
       </td>
       {compact ? null : (
         <td>
           <span className="truncate t-3 t-xs" title={line.specSnapshot ?? ''}>
             {line.specSnapshot || '—'}
           </span>
+          <LineNoteCell
+            note={line.remark}
+            locked={locked}
+            ariaLabel={`第 ${index + 1} 行备注`}
+            onCommit={(v) => onPatch({ remark: v })}
+          />
         </td>
       )}
       <td>

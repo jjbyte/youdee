@@ -6,7 +6,7 @@ import { useMe } from '@/lib/use-me';
 import { UNIT_LABELS } from '@/lib/labels';
 import type { Category, ItemDetail, ItemType } from '@/lib/types';
 import { Button } from '@/components/ui/button';
-import { Field, Input, Select } from '@/components/ui/field';
+import { Field, Input, Select, Textarea } from '@/components/ui/field';
 import { Drawer } from '@/components/ui/overlay';
 import { Note } from '@/components/ui/states';
 
@@ -58,6 +58,7 @@ export function ItemEditDrawer({
   const [categories, setCategories] = useState<Category[]>([]);
   const [name, setName] = useState('');
   const [spec, setSpec] = useState('');
+  const [note, setNote] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [baseUnitCode, setBaseUnitCode] = useState('');
   const [compareUnitCode, setCompareUnitCode] = useState('');
@@ -73,6 +74,7 @@ export function ItemEditDrawer({
     setDetail(d);
     setName(d.name ?? '');
     setSpec(d.spec ?? '');
+    setNote(d.note ?? '');
     setCategoryId(d.categoryId ?? '');
     setBaseUnitCode(d.baseUnitCode ?? '');
     setCompareUnitCode(d.compareUnitCode ?? '');
@@ -118,6 +120,7 @@ export function ItemEditDrawer({
       const updated = await api.updateItem(itemId, {
         name: name.trim(),
         spec: spec.trim() || null,
+        note: note.trim() || null,
         categoryId,
         baseUnitCode,
         compareUnitCode: compareUnitCode || null,
@@ -244,6 +247,30 @@ export function ItemEditDrawer({
             hint={itemType === 'personnel' ? '例：单场 4 小时，超时另计' : '例：3000×3000'}
           >
             <Input id="ie-spec" value={spec} disabled={!isAdmin} onChange={(e) => setSpec(e.target.value)} />
+          </Field>
+
+          {/*
+            备注与规格分开：规格是"这个东西多大"，备注是"报价时要记得的事"。
+            合在一格，报价员要么把"含运输"写进尺寸格，要么干脆不写——
+            而这正是三个月后同一个人重新报这张单时最需要的那句话。
+          */}
+          <Field
+            label={itemType === 'personnel' ? '人员备注' : '物料备注'}
+            htmlFor="ie-note"
+            hint="录进报价单时作为那一行的备注带出来，单子里怎么改都只影响那张单。注意：客户版详细档会把这句跟在项目名后面，所以别写只给自己看的话。"
+          >
+            <Textarea
+              id="ie-note"
+              rows={3}
+              value={note}
+              disabled={!isAdmin}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={
+                itemType === 'personnel'
+                  ? '例：需提前一天到场彩排，报价已含市内往返'
+                  : '例：报价含运输与安装，不含电费；起订 10 米'
+              }
+            />
           </Field>
 
           <Field label="分类" htmlFor="ie-cat" required>

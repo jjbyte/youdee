@@ -41,6 +41,7 @@ export const POST = route(async (req) => {
     base_unit_code: reqStr(b.base_unit_code, '基准单位', 20),
     compare_unit_code: optStr(b.compare_unit_code, 20),
     spec: optStr(b.spec, 200),
+    note: optStr(b.note, 1000),
     aliases: Array.isArray(b.aliases) ? (b.aliases as string[]).map((a) => String(a)) : [],
     includes_travel: b.includes_travel === undefined ? null : Boolean(b.includes_travel),
     is_active: b.is_active === undefined ? true : Boolean(b.is_active),

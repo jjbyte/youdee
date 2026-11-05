@@ -102,6 +102,8 @@ export interface ItemListItem {
   itemType: ItemType;
   name: string;
   spec: string | null;
+  /** 物料 / 人员备注：录进报价单时作为该行备注的初值 */
+  note: string | null;
   baseUnitCode: string;
   baseUnitName: string;
   /** 比价单位（为空时等于基础单位）。成本单价是按它归一化的，行上的单位必须用它 */
@@ -124,7 +126,6 @@ export interface ItemDetail extends ItemListItem {
   employmentType: 'internal_staff' | 'external_expert' | 'external_parttime' | null;
   includesTravel: boolean | null;
   phone: string | null;
-  note: string | null;
   updatedAt: string;
   categoryPath?: Category[];
   images?: Attachment[];
@@ -346,6 +347,8 @@ export interface QuoteListItem extends QuoteTotals {
   isExpired: boolean;
   itemCount: number;
   createdByName: string | null;
+  /** 报价人电话：客户版抬头用；账号没填就是 null（抬头不显示这一格） */
+  createdByPhone: string | null;
   createdAt: string;
   /** 列表接口未返回时前端退回 createdAt */
   updatedAt?: string;
@@ -472,6 +475,8 @@ export interface UserRecord {
   login: string;
   name: string;
   role: Role;
+  /** 报价单抬头给客户看的电话；空 = 抬头不显示电话这一格 */
+  phone: string | null;
   isActive: boolean;
   lastLoginAt: string | null;
   createdAt: string;

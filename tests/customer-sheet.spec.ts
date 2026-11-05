@@ -125,3 +125,26 @@ describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
     expect(buildCustomerSheet(quote(), {}).title).toBe('报价单');
   });
 });
+
+describe('customer-sheet — 报价人（操作人员）在抬头', () => {
+  it('有姓名与电话时，抬头多一行「报价人 / 联系电话」', () => {
+    const s = buildCustomerSheet(quote({ operatorName: '王小明', operatorPhone: '0571-8888 6677' }), company);
+    expect(s.meta).toHaveLength(4);
+    expect(s.meta[3]).toEqual(['报价人：王小明', '联系电话：0571-8888 6677']);
+  });
+
+  it('只有姓名（账号没填电话）时，右格留空而不是写半个「联系电话：」', () => {
+    const s = buildCustomerSheet(quote({ operatorName: '王小明', operatorPhone: null }), company);
+    expect(s.meta[3]).toEqual(['报价人：王小明', '']);
+  });
+
+  it('创建人已删、电话也没有时整行不出现，不留一个空抬头', () => {
+    const s = buildCustomerSheet(quote({ operatorName: null, operatorPhone: null }), company);
+    expect(s.meta).toHaveLength(3);
+  });
+
+  it('空白字符串按没填处理（老数据里是空格不是 null）', () => {
+    const s = buildCustomerSheet(quote({ operatorName: '  ', operatorPhone: '  ' }), company);
+    expect(s.meta).toHaveLength(3);
+  });
+});

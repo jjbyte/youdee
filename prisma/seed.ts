@@ -75,14 +75,14 @@ async function main() {
 
     const admin = await one<Id>(
       client,
-      `INSERT INTO users (login, password_hash, name, role, is_active, token_version)
-       VALUES ($1,$2,$3,'admin',true,0) RETURNING id`,
+      `INSERT INTO users (login, password_hash, name, role, phone, is_active, token_version)
+       VALUES ($1,$2,$3,'admin','0571-8888 6677',true,0) RETURNING id`,
       ['admin', adminPwd, '管理员'],
     );
     const member = await one<Id>(
       client,
-      `INSERT INTO users (login, password_hash, name, role, is_active, token_version)
-       VALUES ($1,$2,$3,'member',true,0) RETURNING id`,
+      `INSERT INTO users (login, password_hash, name, role, phone, is_active, token_version)
+       VALUES ($1,$2,$3,'member',NULL,true,0) RETURNING id`,
       ['xiaowang', memberPwd, '小王'],
     );
 
@@ -209,20 +209,22 @@ async function main() {
       name: string;
       aliases: string[];
       spec: string | null;
+      /** 备注：录进报价单时作为该行备注的初值。只给几个常用的示例填，其余留空 */
+      note?: string | null;
       baseUnit: string;
       compareUnit: string | null;
       includesTravel?: boolean | null;
     }
     const items: ItemSeed[] = [
       // 物料
-      { key: 'truss_bg', type: 'material', cat: '桁架背景板', name: '桁架背景板 6m×3m', aliases: ['背景板', '签到墙'], spec: '含桁架 + 画面 + 安装', baseUnit: 'set', compareUnit: 'sqm' },
+      { key: 'truss_bg', type: 'material', cat: '桁架背景板', name: '桁架背景板 6m×3m', aliases: ['背景板', '签到墙'], spec: '含桁架 + 画面 + 安装', note: "报价含运输、安装与拆除；不含电费与场地费", baseUnit: 'set', compareUnit: 'sqm' },
       { key: 'truss', type: 'material', cat: '桁架背景板', name: '铝合金桁架（单根 3m）', aliases: ['桁架'], spec: '200×200 方管', baseUnit: 'meter', compareUnit: 'meter' },
-      { key: 'stage', type: 'material', cat: '舞台', name: '舞台（含围裙）', aliases: ['地台'], spec: '高度 0.4–0.8m 可调', baseUnit: 'sqm', compareUnit: 'sqm' },
+      { key: 'stage', type: 'material', cat: '舞台', name: '舞台（含围裙）', aliases: ['地台'], spec: '高度 0.4–0.8m 可调', note: "报价含围裙与台阶；高度按 0.6m 报，0.8m 加 15%", baseUnit: 'sqm', compareUnit: 'sqm' },
       { key: 'carpet', type: 'material', cat: '地毯', name: '展览地毯', aliases: ['红毯', '灰毯'], spec: '宽 3m', baseUnit: 'sqm', compareUnit: 'sqm' },
-      { key: 'led', type: 'material', cat: 'LED 屏', name: 'LED 屏 P3.9（一套约 12㎡）', aliases: ['大屏', 'LED'], spec: '含控台与技术人员', baseUnit: 'day', compareUnit: 'day' },
-      { key: 'speaker', type: 'material', cat: '音响', name: '线阵音响（全场）', aliases: ['音响', 'PA'], spec: '含调音台、无线麦 4 支', baseUnit: 'day', compareUnit: 'day' },
+      { key: 'led', type: 'material', cat: 'LED 屏', name: 'LED 屏 P3.9（一套约 12㎡）', aliases: ['大屏', 'LED'], spec: '含控台与技术人员', note: "含控台与 1 名技术；超 8 小时按半天加收", baseUnit: 'day', compareUnit: 'day' },
+      { key: 'speaker', type: 'material', cat: '音响', name: '线阵音响（全场）', aliases: ['音响', 'PA'], spec: '含调音台、无线麦 4 支', note: "含调音师与 4 支无线麦；话筒加一支 +120", baseUnit: 'day', compareUnit: 'day' },
       { key: 'par_light', type: 'material', cat: '灯光', name: '帕灯 54 颗（单台）', aliases: ['帕灯', '面光'], spec: null, baseUnit: 'piece', compareUnit: 'piece' },
-      { key: 'print_banner', type: 'material', cat: '喷绘写真', name: '喷绘布（普通）', aliases: ['喷绘', '写真'], spec: '510 克内光布', baseUnit: 'sqm', compareUnit: 'sqm' },
+      { key: 'print_banner', type: 'material', cat: '喷绘写真', name: '喷绘布（普通）', aliases: ['喷绘', '写真'], spec: '510 克内光布', note: "含设计与喷绘；画面改版另算，不含高空安装", baseUnit: 'sqm', compareUnit: 'sqm' },
       { key: 'kt_board', type: 'material', cat: 'KT 板 / 展架', name: 'KT 板 5mm（含写真）', aliases: ['KT板'], spec: '1.2m×2.4m 一张 2.88㎡', baseUnit: 'sqm', compareUnit: 'sqm' },
       { key: 'rollup', type: 'material', cat: 'KT 板 / 展架', name: '易拉宝 80×200', aliases: ['易拉宝', '展架'], spec: '含画面', baseUnit: 'piece', compareUnit: 'piece' },
       { key: 'table_set', type: 'material', cat: '桌椅', name: '圆桌 + 10 椅（含桌布椅套）', aliases: ['桌椅'], spec: null, baseUnit: 'set', compareUnit: 'set' },
@@ -231,12 +233,12 @@ async function main() {
       { key: 'catering', type: 'material', cat: '茶歇', name: '茶歇（30 人份）', aliases: ['茶歇', '下午茶'], spec: '含摆台与服务员', baseUnit: 'batch', compareUnit: 'batch' },
       { key: 'generator', type: 'material', cat: '发电机', name: '静音发电机 5kW', aliases: ['发电机'], spec: '含油', baseUnit: 'day', compareUnit: 'day' },
       // 人员
-      { key: 'host_cn', type: 'personnel', cat: '主持人', name: '主持人（中文·商务）', aliases: ['主持'], spec: '3 年以上经验', baseUnit: 'session', compareUnit: 'session', includesTravel: true },
+      { key: 'host_cn', type: 'personnel', cat: '主持人', name: '主持人（中文·商务）', aliases: ['主持'], spec: '3 年以上经验', note: "报价含彩排一次；跨市场地另计差旅", baseUnit: 'session', compareUnit: 'session', includesTravel: true },
       { key: 'host_bi', type: 'personnel', cat: '主持人', name: '主持人（中英双语）', aliases: ['双语主持'], spec: null, baseUnit: 'session', compareUnit: 'session', includesTravel: true },
       { key: 'singer', type: 'personnel', cat: '歌手', name: '歌手（流行·单人）', aliases: ['歌手', '演唱'], spec: '含 2 首', baseUnit: 'session', compareUnit: 'session', includesTravel: false },
-      { key: 'photographer', type: 'personnel', cat: '摄影摄像', name: '摄影（单机）', aliases: ['摄影'], spec: '含 200 张精修', baseUnit: 'day', compareUnit: 'day', includesTravel: false },
+      { key: 'photographer', type: 'personnel', cat: '摄影摄像', name: '摄影（单机）', aliases: ['摄影'], spec: '含 200 张精修', note: "含 200 张精修；原片全给，加急 3 天内交付 +20%", baseUnit: 'day', compareUnit: 'day', includesTravel: false },
       { key: 'videographer', type: 'personnel', cat: '摄影摄像', name: '摄像（双机 + 剪辑）', aliases: ['摄像', '视频'], spec: '3 分钟成片', baseUnit: 'day', compareUnit: 'day', includesTravel: false },
-      { key: 'builder', type: 'personnel', cat: '搭建搬运', name: '搭建工', aliases: ['工人', '搭建'], spec: null, baseUnit: 'person_day', compareUnit: 'person_day', includesTravel: false },
+      { key: 'builder', type: 'personnel', cat: '搭建搬运', name: '搭建工', aliases: ['工人', '搭建'], spec: null, note: "按人天报；夜班（22:00 后）按 1.5 倍", baseUnit: 'person_day', compareUnit: 'person_day', includesTravel: false },
       { key: 'supervisor', type: 'personnel', cat: '搭建搬运', name: '现场督导', aliases: ['督导', '场控'], spec: null, baseUnit: 'day', compareUnit: 'day', includesTravel: false },
       { key: 'usher', type: 'personnel', cat: '礼仪', name: '礼仪（迎宾）', aliases: ['礼仪', '迎宾'], spec: '身高 168 以上', baseUnit: 'session', compareUnit: 'session', includesTravel: false },
       { key: 'lecturer_mid', type: 'personnel', cat: '讲师', name: '外聘讲师（中级）', aliases: ['讲师', '老师'], spec: '行业 5 年以上', baseUnit: 'day', compareUnit: 'day', includesTravel: true },
@@ -245,14 +247,15 @@ async function main() {
     for (const it of items) {
       item[it.key] = await one<Id>(
         client,
-        `INSERT INTO items (item_type, category_id, name, aliases, spec, base_unit_code, compare_unit_code, includes_travel, is_active, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,$9) RETURNING id`,
+        `INSERT INTO items (item_type, category_id, name, aliases, spec, note, base_unit_code, compare_unit_code, includes_travel, is_active, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10) RETURNING id`,
         [
           it.type,
           sub[it.cat] ?? (it.type === 'material' ? catMat[it.cat] : catPer[it.cat]),
           it.name,
           it.aliases,
           it.spec,
+          it.note ?? null,
           it.baseUnit,
           it.compareUnit,
           it.includesTravel ?? null,

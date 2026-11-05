@@ -88,6 +88,8 @@ export default function QuotePreviewPage() {
         discountAmount: quote.discountAmount,
         totalPrice: quote.totalPrice,
         note: quote.note,
+        operatorName: quote.createdByName,
+        operatorPhone: quote.createdByPhone,
         items: quote.items
           .filter((l) => l.isVisibleToCustomer)
           .map((l) => ({

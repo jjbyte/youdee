@@ -7,6 +7,7 @@
 import { one, q } from '../db';
 import { AppError } from '../http';
 import { hashPassword } from '../auth/password';
+import { PHONE_MIN_DIGITS, cleanPhone, phoneDigitCount } from '@/domain/phone';
 import type { CurrentUser } from '../auth/session';
 
 interface UserRow {
@@ -14,6 +15,8 @@ interface UserRow {
   login: string;
   name: string;
   role: string;
+  /** 报价单抬头给客户看的电话 */
+  phone: string | null;
   is_active: boolean;
   last_login_at: Date | null;
   created_at: Date;
@@ -25,6 +28,7 @@ function dto(r: UserRow) {
     login: r.login,
     name: r.name,
     role: r.role,
+    phone: r.phone,
     is_active: r.is_active,
     last_login_at: r.last_login_at ? r.last_login_at.toISOString() : null,
     created_at: r.created_at.toISOString(),
@@ -52,7 +56,7 @@ export async function listUsers(query: UserListQuery) {
   const where = parts.length ? `WHERE ${parts.join(' AND ')}` : '';
   const total = await q<{ n: string }>(`SELECT count(*)::text AS n FROM users ${where}`, params);
   const rows = await q<UserRow>(
-    `SELECT id, login, name, role, is_active, last_login_at, created_at FROM users ${where}
+    `SELECT id, login, name, role, phone, is_active, last_login_at, created_at FROM users ${where}
       ORDER BY is_active DESC, created_at LIMIT ${query.limit} OFFSET ${query.offset}`,
     params,
   );
@@ -65,11 +69,28 @@ export async function listUsers(query: UserListQuery) {
   };
 }
 
+/**
+ * 电话：null / '' 都表示"没填"，不报错——这个字段是给客户看的便利信息，
+ * 不是账号能不能用的前置条件。填了就要求像个号码。
+ */
+function normalizePhoneOrNull(raw: string | null | undefined): string | null {
+  const s = cleanPhone(raw);
+  if (!s) return null;
+  if (phoneDigitCount(s) < PHONE_MIN_DIGITS) {
+    throw new AppError(40001, '电话至少要有 7 位数字（座机写区号，手机写 11 位）。', 400, { field: 'phone' });
+  }
+  if (s.length > 30) {
+    throw new AppError(40001, '电话最多 30 个字符。', 400, { field: 'phone' });
+  }
+  return s;
+}
+
 export async function createUser(input: {
   login: string;
   name: string;
   password: string;
   role: string;
+  phone?: string | null;
 }) {
   if (input.role !== 'admin' && input.role !== 'member') {
     throw new AppError(40001, 'role 只能是 admin 或 member。', 400, { field: 'role' });
@@ -80,23 +101,24 @@ export async function createUser(input: {
   if (input.password === input.login) {
     throw new AppError(40001, '密码不能和登录名相同。', 400, { field: 'password' });
   }
+  const phone = normalizePhoneOrNull(input.phone);
   const hash = await hashPassword(input.password);
   const rows = await q<UserRow>(
-    `INSERT INTO users (login, password_hash, name, role, is_active, token_version)
-     VALUES ($1,$2,$3,$4,true,0)
-     RETURNING id, login, name, role, is_active, last_login_at, created_at`,
-    [input.login, hash, input.name, input.role],
+    `INSERT INTO users (login, password_hash, name, role, phone, is_active, token_version)
+     VALUES ($1,$2,$3,$4,$5,true,0)
+     RETURNING id, login, name, role, phone, is_active, last_login_at, created_at`,
+    [input.login, hash, input.name, input.role, phone],
   );
   return dto(rows[0]!);
 }
 
 export async function patchUser(
   id: string,
-  input: { name?: string; role?: string; is_active?: boolean; password?: string },
+  input: { name?: string; role?: string; is_active?: boolean; password?: string; phone?: string | null },
   actor: CurrentUser,
 ) {
   const current = await one<UserRow>(
-    'SELECT id, login, name, role, is_active, last_login_at, created_at FROM users WHERE id = $1',
+    'SELECT id, login, name, role, phone, is_active, last_login_at, created_at FROM users WHERE id = $1',
     [id],
   );
   if (!current) throw new AppError(40401, '这个账号不存在。', 404);
@@ -136,11 +158,21 @@ export async function patchUser(
 
   const rows = await q<UserRow>(
     `UPDATE users SET name=$2, role=$3, is_active=$4,
+            phone = CASE WHEN $6::boolean THEN $7::text ELSE phone END,
             password_hash = COALESCE($5, password_hash),
             token_version = token_version + CASE WHEN $5::text IS NULL THEN 0 ELSE 1 END
       WHERE id=$1
-      RETURNING id, login, name, role, is_active, last_login_at, created_at`,
-    [id, input.name ?? current.name, input.role ?? current.role, input.is_active ?? current.is_active, hash],
+      RETURNING id, login, name, role, phone, is_active, last_login_at, created_at`,
+    [
+      id,
+      input.name ?? current.name,
+      input.role ?? current.role,
+      input.is_active ?? current.is_active,
+      hash,
+      // 三态：不传 = 不动这一列；传 null / '' = 清空；有值 = 校验后写入
+      input.phone !== undefined,
+      input.phone === undefined ? null : normalizePhoneOrNull(input.phone),
+    ],
   );
   return dto(rows[0]!);
 }

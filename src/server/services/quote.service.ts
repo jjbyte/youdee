@@ -71,6 +71,8 @@ export interface QuoteBaseDTO {
   is_expired: boolean;
   item_count: number;
   created_by_name: string | null;
+  /** 报价人电话：抬头那行给客户看，缺失时抬头只显示姓名 */
+  created_by_phone: string | null;
   created_at: string;
   issued_at: string | null;
   total_cost: string;
@@ -102,6 +104,7 @@ export function toQuoteBase(
     is_expired: isExpired(row.status as 'draft' | 'issued' | 'void', row.valid_until, todayStr),
     item_count: Number(row.item_count ?? 0),
     created_by_name: row.created_by_name ?? null,
+    created_by_phone: row.created_by_phone ?? null,
     created_at: row.created_at.toISOString(),
     issued_at: row.issued_at ? row.issued_at.toISOString() : null,
     ...totalsDto(row),

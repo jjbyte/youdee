@@ -11,6 +11,8 @@
  * 两边各写一遍正则，是最容易出现"界面放行、接口报错"的做法。
  */
 
+import { PHONE_MIN_DIGITS, cleanPhone, phoneDigitCount, toHalfWidth } from './phone';
+
 export interface InvoiceInfo {
   tax_no: string | null;
   company_address: string | null;
@@ -47,11 +49,6 @@ export interface NormalizeResult {
 }
 
 /** 全角数字/字母 → 半角。报价员从微信里复制过来的税号常是全角 */
-function toHalfWidth(s: string): string {
-  return s
-    .replace(/[\uFF01-\uFF5E]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-    .replace(/\u3000/g, ' ');
-}
 
 /**
  * 纳税人识别号：15 位老税号 / 18 位统一社会信用代码 / 20 位个别地区。
@@ -83,10 +80,11 @@ export function normalizeBankAccount(raw: unknown): NormalizeResult {
 
 /** 联系电话：允许 + - 空格 括号，但至少要有 7 位数字（座机 8 位、手机 11 位都不至于更短） */
 export function normalizeInvoicePhone(raw: unknown): NormalizeResult {
-  const s = toHalfWidth(String(raw ?? '')).replace(/\s+/g, ' ').trim();
+  const s = cleanPhone(raw);
   if (!s) return { value: null };
-  const digits = s.replace(/\D/g, '');
-  if (digits.length < 7) return { value: null, error: '这个电话太短了，写一个财务能打通或者能开的号。' };
+  if (phoneDigitCount(s) < PHONE_MIN_DIGITS) {
+    return { value: null, error: '这个电话太短了，写一个财务能打通或者能开的号。' };
+  }
   if (s.length > INVOICE_MAX.company_phone) {
     return { value: null, error: `联系电话最多 ${INVOICE_MAX.company_phone} 个字符。` };
   }

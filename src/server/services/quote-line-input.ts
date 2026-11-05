@@ -68,13 +68,15 @@ export interface ItemBriefRow {
   id: string;
   name: string;
   spec: string | null;
+  /** 主体自己的备注：作为这一行备注的初值 */
+  note: string | null;
   base_unit_name: string;
   category_name: string | null;
 }
 
 export async function loadItemBrief(itemId: string): Promise<ItemBriefRow | null> {
   const rows = await q<ItemBriefRow>(
-    `SELECT i.id, i.name, i.spec, u.name_zh AS base_unit_name, c.name AS category_name
+    `SELECT i.id, i.name, i.spec, i.note, u.name_zh AS base_unit_name, c.name AS category_name
        FROM items i JOIN units u ON u.code = i.base_unit_code
        JOIN categories c ON c.id = i.category_id
       WHERE i.id = $1`,

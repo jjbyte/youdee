@@ -23,17 +23,19 @@ const PAGE_SIZE = 20;
 /**
  * 报价单列表（§C.8）。
  *
- * 状态只有三态，**「已作废」默认不列**——作废单留在默认列表里会稀释台账的可信度；
- * 但它不能消失，筛选器里可选中，因为"这单作废了，我重报了"是需要被查证的。
+ * 状态只有三态，默认**全部列出**、草稿排在最前（服务端按状态分组，组内按最后编辑倒序）。
+ * 客户原话就是「显示全部状态的报价单，按状态排序草稿优先」——按状态分组是给"接着做完"
+ * 用的，不是给"藏起来"用的：上一版默认只看草稿，已发出的单要先去下拉里筛一次才看得到，
+ * 于是交接、对账、复述历史价都多一步。
+ * 已作废仍留在默认列表里（排在最后）：作废单是"这单不做了"的证据，垃圾桶不该盖上盖子。
  */
 const STATUSES = ['draft', 'issued', 'void'] as const;
 
 export default function QuotesPage() {
   const router = useRouter();
   const [q, setQ] = useState('');
-  // 默认 draft：进列表最想看的永远是「还没做完的」。
-  // URL 上带了 status 就认它（工作台的「本月已发出」、编辑页的「复制另一张单」都靠这个跳过来）。
-  const [status, setStatus] = useState<'' | QuoteStatus>('draft');
+  // 默认全部状态；URL 上带了 status 就认它（工作台的「本月已发出」靠这个跳过来）
+  const [status, setStatus] = useState<'' | QuoteStatus>('');
   /**
    * 先等 URL 读完再发第一次请求。否则 ?status=issued 会先进来拉一遍草稿、
    * 再切到已发出拉一遍——用户看到的是一次没必要的闪动，两次都花他的时间。
@@ -56,7 +58,7 @@ export default function QuotesPage() {
   const load = useCallback(async () => {
     setState('loading');
     try {
-      const [list, drafts, issued] = await Promise.all([
+      const [list, drafts, issued, voids] = await Promise.all([
         api.quotes({
           q: q.trim() || undefined,
           status: status || undefined,
@@ -66,9 +68,10 @@ export default function QuotesPage() {
         }),
         api.quotes({ status: 'draft', limit: 1 }).catch(() => null),
         api.quotes({ status: 'issued', limit: 1 }).catch(() => null),
+        api.quotes({ status: 'void', limit: 1 }).catch(() => null),
       ]);
       setData(list);
-      setCounts({ draft: drafts?.total ?? 0, issued: issued?.total ?? 0 });
+      setCounts({ draft: drafts?.total ?? 0, issued: issued?.total ?? 0, void: voids?.total ?? 0 });
       setState('ready');
     } catch (e) {
       setError(errorMessage(e));
@@ -217,9 +220,10 @@ export default function QuotesPage() {
 
         <span className="ml-auto t-xs t-3">
           草稿 <span className="num">{counts.draft ?? 0}</span> · 已发出{' '}
-          <span className="num">{counts.issued ?? 0}</span>
-          {/* 原来这里硬编码了「已作废 5 张」，删了几张之后这句话一直在骗人 */}
-          {status === 'void' ? null : <span> · 已作废的单在筛选里看</span>}
+          <span className="num">{counts.issued ?? 0}</span> · 已作废{' '}
+          <span className="num">{counts.void ?? 0}</span>
+          {/* 默认就把三类都列出来（草稿在最前），所以这里只说明顺序，不再指路去筛选 */}
+          <span> · 按状态排序，草稿在最前</span>
         </span>
       </div>
 

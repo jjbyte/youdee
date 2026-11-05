@@ -41,6 +41,7 @@ export interface QuoteRow extends QueryResultRow {
   issued_at: Date | null;
   deleted_at: Date | null;
   created_by_name?: string | null;
+  created_by_phone?: string | null;
   item_count?: number;
 }
 
@@ -78,7 +79,7 @@ export interface QuoteItemRow extends QueryResultRow {
 export async function getQuoteRow(id: string, c: PoolClient | null = null): Promise<QuoteRow | null> {
   const runner = c ?? pool;
   const r = await runner.query<QuoteRow>(
-    `SELECT q.*, u.name AS created_by_name,
+    `SELECT q.*, u.name AS created_by_name, u.phone AS created_by_phone,
             (SELECT count(*) FROM quote_items qi WHERE qi.quote_id = q.id)::int AS item_count
        FROM quotes q LEFT JOIN users u ON u.id = q.created_by
       WHERE q.id = $1 AND q.deleted_at IS NULL`,

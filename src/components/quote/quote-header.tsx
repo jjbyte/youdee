@@ -250,6 +250,20 @@ export function QuoteHeader({
             onBlur={() => eventDate !== (quote.eventDate ?? '') && onPatch({ eventDate: eventDate || null })}
           />
         </label>
+        <span className="t-muted">·</span>
+        {/*
+          报价人是**派生信息**，不是可填字段：它来自登录账号，改了就等于改台账署名。
+          所以这里是只读文字而不是输入框——看得见"客户手里那份印的是谁"，也改不动。
+        */}
+        <span className="inline-flex items-center gap-[var(--space-2)]">
+          <span className="t-3">报价人</span>
+          <span className="t-sm">{quote.createdByName ?? '—'}</span>
+          {quote.createdByPhone ? (
+            <span className="num-code t-xs t-2">{quote.createdByPhone}</span>
+          ) : (
+            <span className="t-2xs t-3">（账号没填电话，抬头不显示）</span>
+          )}
+        </span>
       </div>
 
       <div className="flex items-center gap-[var(--space-4)] flex-wrap">

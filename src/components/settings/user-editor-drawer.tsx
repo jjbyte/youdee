@@ -44,6 +44,7 @@ export function UserEditorDrawer({
 
   const [login, setLogin] = useState('');
   const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
   const [role, setRole] = useState<Role>('member');
   const [isActive, setIsActive] = useState(true);
   const [password, setPassword] = useState('');
@@ -54,6 +55,7 @@ export function UserEditorDrawer({
     if (!open) return;
     setLogin(user?.login ?? '');
     setName(user?.name ?? '');
+    setPhone(user?.phone ?? '');
     setRole((user?.role as Role) ?? 'member');
     setIsActive(user ? user.isActive : true);
     setPassword('');
@@ -88,11 +90,12 @@ export function UserEditorDrawer({
     setError(null);
     try {
       if (isCreate) {
-        const created = await api.createUser({ login: l, name: n, password, role });
+        const created = await api.createUser({ login: l, name: n, password, role, phone: phone.trim() || null });
         onSaved(created, true);
       } else {
         const updated = await api.updateUser(user.id, {
           name: n,
+          phone: phone.trim() || null,
           // 自己的角色/状态不发：服务端会 40904，但让按钮点了才报错是耍人
           ...(isSelf ? {} : { role, isActive }),
           ...(password ? { password } : {}),
@@ -148,6 +151,21 @@ export function UserEditorDrawer({
 
         <Field label="姓名" htmlFor="ue-name" required hint="会显示在顶栏、报价单的「制单人」和操作记录里。">
           <Input id="ue-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="例：王小明" />
+        </Field>
+
+        <Field
+          label="电话"
+          htmlFor="ue-phone"
+          hint="印在报价单抬头的那一个号，客户对不上人时会打它。留空则抬头不显示电话。"
+        >
+          <Input
+            id="ue-phone"
+            className="num-code"
+            inputMode="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="例：138 0000 0001"
+          />
         </Field>
 
         <Field

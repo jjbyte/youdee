@@ -12,7 +12,7 @@ import { defaultTaxBasis } from '../store/settings.store';
 import { lowestSummaries, type LowestSummary } from './lowest-summary.service';
 
 export const ITEM_SELECT = `
-SELECT i.id, i.item_type, i.category_id, c.name AS category_name, i.name, i.spec, i.aliases,
+SELECT i.id, i.item_type, i.category_id, c.name AS category_name, i.name, i.spec, i.note, i.aliases,
        i.base_unit_code, bu.name_zh AS base_unit_name,
        i.compare_unit_code, cu.name_zh AS compare_unit_name,
        i.includes_travel, i.is_active, i.created_at, i.updated_at,
@@ -30,6 +30,7 @@ export interface ItemRow {
   category_name: string;
   name: string;
   spec: string | null;
+  note: string | null;
   aliases: string[];
   base_unit_code: string;
   base_unit_name: string;
@@ -51,6 +52,7 @@ export function baseDto(r: ItemRow) {
     category_name: r.category_name,
     name: r.name,
     spec: r.spec,
+    note: r.note,
     aliases: r.aliases,
     base_unit_code: r.base_unit_code,
     base_unit_name: r.base_unit_name,
@@ -99,7 +101,10 @@ export async function listItems(query: ItemListQuery) {
   }
   if (query.q) {
     add(
-      (n) => `(i.name ILIKE $${n} OR i.spec ILIKE $${n} OR EXISTS (SELECT 1 FROM unnest(i.aliases) a WHERE a ILIKE $${n}))`,
+      // 备注也进搜索：报价员记得的常常是"那个写着含运输的桁架"，而不是主体全名
+      (n) =>
+        `(i.name ILIKE $${n} OR i.spec ILIKE $${n} OR i.note ILIKE $${n}
+          OR EXISTS (SELECT 1 FROM unnest(i.aliases) a WHERE a ILIKE $${n}))`,
       `%${query.q!.replace(/[\\%_]/g, (m) => `\\${m}`)}%`,
     );
   }
@@ -150,7 +155,7 @@ export async function searchLite(qText: string, itemType: string | null, limit: 
             (SELECT ii.url FROM item_images ii WHERE ii.item_id = i.id ORDER BY ii.sort_order LIMIT 1) AS first_image_url
        FROM items i JOIN units bu ON bu.code = i.base_unit_code
       WHERE i.is_active
-        AND (i.name ILIKE $1 OR i.spec ILIKE $1 OR EXISTS (SELECT 1 FROM unnest(i.aliases) a WHERE a ILIKE $1))
+        AND (i.name ILIKE $1 OR i.spec ILIKE $1 OR i.note ILIKE $1 OR EXISTS (SELECT 1 FROM unnest(i.aliases) a WHERE a ILIKE $1))
         ${extra}
       ORDER BY i.name
       LIMIT $${params.length}`,

@@ -2220,6 +2220,14 @@ components:
         email: { type: string, format: email }
         display_name: { type: string }
         role: { type: string, enum: [admin, member] }
+        phone:
+          type: string
+          nullable: true
+          maxLength: 30
+          description: |
+            报价人电话，**印在客户版抬头**（预览/打印/PDF/Excel 同一份版面）。
+            与登录无关，也不用于找回密码。留空时抬头不显示电话那一格。
+            至少 7 位数字；全角字符与多余空格在入库前会被清掉。
         is_active: { type: boolean }
         last_login_at: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
@@ -2322,6 +2330,13 @@ components:
           description: 其 domain 必须与 item_type 一致（material 对应 material，personnel 对应 personnel）
         name: { type: string, minLength: 1, maxLength: 80 }
         spec: { type: string, nullable: true, maxLength: 200 }
+        note:
+          type: string
+          nullable: true
+          maxLength: 1000
+          description: |
+            物料 / 人员备注（两者共用 items 表）。**录进报价单时作为该行备注的初值**：
+            进单之后这一行就是快照，改行备注不回写这里，改这里也不影响已录的行。
         base_unit_code:
           type: string
           description: 基准单位。已有价格记录后不可修改（42204）
@@ -2996,6 +3011,7 @@ components:
             is_expired: { type: boolean, description: 派生：valid_until < 今天 且 status=issued }
             item_count: { type: integer }
             created_by_name: { type: string, nullable: true }
+            created_by_phone: { type: string, nullable: true, description: 报价人电话；账号没填则为 null，抬头不显示这一格 }
             created_at: { type: string, format: date-time }
             issued_at: { type: string, format: date-time, nullable: true }
 

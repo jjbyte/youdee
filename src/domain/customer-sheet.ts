@@ -90,6 +90,15 @@ export interface SheetQuoteInput {
   discountAmount: string;
   totalPrice: string;
   note?: string | null;
+  /**
+   * 报价人（谁做的这张单）与他的电话。
+   *
+   * 客户拿单子最先问的是「这个桁架几米」，接电话的得是当初报价的那个人。
+   * 公司电话解决不了这件事——打过去报单号，对方还得再转一次。
+   * 两个都没有时（老账号没填电话、创建人已删）整行不出，不留一行空的「报价人：」。
+   */
+  operatorName?: string | null;
+  operatorPhone?: string | null;
   items: SheetItemInput[];
 }
 
@@ -175,17 +184,25 @@ export function buildCustomerSheet(
    */
   const lineSum = fmtAmount(quote.items.reduce((a, it) => a + parseAmount(it.amount), 0n));
 
+  const operatorName = quote.operatorName?.trim() ?? '';
+  const operatorPhone = quote.operatorPhone?.trim() ?? '';
+  const meta: Array<[string, string]> = [
+    [`报价单号：${quote.quoteNo}  V${quote.version}`, `报价有效期：${quote.validUntil}`],
+    [`客户：${quote.customerName}`, `活动：${quote.eventName}`],
+    [
+      quote.eventDate ? `活动日期：${quote.eventDate}` : '',
+      `税口径：${TAX_LABEL[quote.taxStatement] ?? quote.taxStatement}`,
+    ],
+  ];
+  // 第 4 行只在真有报价人信息时出现：空行会把下面表格往下推一段，而且看着像漏填
+  if (operatorName || operatorPhone) {
+    meta.push([operatorName ? `报价人：${operatorName}` : '', operatorPhone ? `联系电话：${operatorPhone}` : '']);
+  }
+
   return {
     title: company.name?.trim() || '报价单',
     subtitle: `${quote.eventName}活动报价 · 单号 ${quote.quoteNo} V${quote.version}`,
-    meta: [
-      [`报价单号：${quote.quoteNo}  V${quote.version}`, `报价有效期：${quote.validUntil}`],
-      [`客户：${quote.customerName}`, `活动：${quote.eventName}`],
-      [
-        quote.eventDate ? `活动日期：${quote.eventDate}` : '',
-        `税口径：${TAX_LABEL[quote.taxStatement] ?? quote.taxStatement}`,
-      ],
-    ],
+    meta,
     columns,
     groups,
     totalLabel: opts.showDiscount ? '报价合计' : '合计',

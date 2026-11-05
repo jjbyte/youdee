@@ -19,6 +19,7 @@ export const PATCH = route(async (req, params) => {
     base_unit_code: b.base_unit_code === undefined ? undefined : reqStr(b.base_unit_code, '基准单位', 20),
     compare_unit_code: b.compare_unit_code === undefined ? undefined : optStr(b.compare_unit_code, 20),
     spec: b.spec === undefined ? undefined : optStr(b.spec, 200),
+    note: b.note === undefined ? undefined : optStr(b.note, 1000),
     aliases: Array.isArray(b.aliases) ? (b.aliases as string[]).map((a) => String(a)) : undefined,
     includes_travel: b.includes_travel === undefined ? undefined : Boolean(b.includes_travel),
     is_active: b.is_active === undefined ? undefined : Boolean(b.is_active),

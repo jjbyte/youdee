@@ -19,6 +19,8 @@ export interface ItemInput {
   base_unit_code: string;
   compare_unit_code?: string | null;
   spec?: string | null;
+  /** 物料 / 人员备注 */
+  note?: string | null;
   aliases?: string[] | null;
   includes_travel?: boolean | null;
   is_active?: boolean;
@@ -46,15 +48,16 @@ export async function createItem(actor: CurrentUserLike, input: ItemInput) {
   await assertUnit(input.base_unit_code, 'base_unit_code');
   await assertUnit(input.compare_unit_code, 'compare_unit_code');
   const rows = await q<{ id: string }>(
-    `INSERT INTO items (item_type, category_id, name, aliases, spec, base_unit_code, compare_unit_code,
+    `INSERT INTO items (item_type, category_id, name, aliases, spec, note, base_unit_code, compare_unit_code,
                         includes_travel, is_active, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
     [
       input.item_type,
       input.category_id,
       input.name,
       input.aliases ?? [],
       input.spec ?? null,
+      input.note ?? null,
       input.base_unit_code,
       input.compare_unit_code ?? null,
       input.includes_travel ?? null,
@@ -88,7 +91,7 @@ export async function patchItem(id: string, input: Partial<ItemInput>) {
 
   await q(
     `UPDATE items SET item_type=$2, category_id=$3, name=$4, aliases=$5, spec=$6, base_unit_code=$7,
-            compare_unit_code=$8, includes_travel=$9, is_active=$10, updated_at=now()
+            compare_unit_code=$8, includes_travel=$9, is_active=$10, note=$11, updated_at=now()
       WHERE id=$1`,
     [
       id,
@@ -101,6 +104,7 @@ export async function patchItem(id: string, input: Partial<ItemInput>) {
       input.compare_unit_code !== undefined ? input.compare_unit_code : current.compare_unit_code,
       input.includes_travel !== undefined ? input.includes_travel : current.includes_travel,
       input.is_active !== undefined ? input.is_active : current.is_active,
+      input.note !== undefined ? input.note : current.note,
     ],
   );
   return getItemDetail(id);

@@ -183,7 +183,15 @@ export async function buildDraft(quote: QuoteRow, input: QuoteItemInput, stale: 
     price_id: resolved.draft.price_id ?? input.price_id ?? null,
     supplier_id: resolved.draft.supplier_id ?? input.supplier_id ?? null,
     is_visible_to_customer: input.is_visible_to_customer ?? true,
-    note: input.remark ?? null,
+    /**
+     * 行备注的初值来自物料/人员自己的备注（"报价含运输不含电费"这类），
+     * 到了这一行就是**这一行的快照**：之后在物料库里改备注，不影响已经录进来的行；
+     * 在单子里改行备注，也不回写物料库。三处各是各的。
+     *
+     * 用 `!== undefined` 而不是 `??`：清空备注传的是 null，
+     * 用 `??` 会把 null 当成"没传"，于是被物料备注重新填回来——清不掉。
+     */
+    note: input.remark !== undefined ? input.remark : (item?.note ?? null),
   };
 }
 

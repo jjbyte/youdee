@@ -41,7 +41,14 @@ export function parseQuoteItemCreate(b: Body): QuoteItemInput {
     reference_lowest_price: optDecimal(b.reference_lowest_price, '参考最低价'),
     reference_lowest_supplier_id: maybeUuid(b.reference_lowest_supplier_id, 'reference_lowest_supplier_id') ?? null,
     is_visible_to_customer: b.is_visible_to_customer === undefined ? undefined : Boolean(b.is_visible_to_customer),
-    remark: optStr(b.remark, 300),
+    /**
+     * 没传 ≠ 传了空串。
+     *   undefined → 交给 buildDraft 用**物料/人员自己的备注**做初值（这是「加一行」的常态）；
+     *   null / ''  → 明确不要备注，不要拿物料备注回填。
+     * 写成 `optStr(b.remark, 300)` 会把 undefined 压成 null，于是物料备注永远带不进单子——
+     * 这个 bug 不报错，只是"备注功能好像没用"。
+     */
+    remark: b.remark === undefined ? undefined : optStr(b.remark, 300),
   };
 }
 

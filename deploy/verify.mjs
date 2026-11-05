@@ -83,15 +83,29 @@ async function main() {
 
   // 2d. 权限编辑：三个用户接口 0.1.0 就在，但界面上只有一张只读表，等于管理员开不了权限。
   //     这里建一个临时账号走一遍「新建 → 升管理员 → 降回成员 → 停用」，全程可逆。
-  //     留一条 is_active=false 的「自检临时账号」在库里，属正常现象（停用是软删，台账要留署名）。
+  //     登录名固定成 selfcheck_temp：停用是软删（台账要留署名），删不掉，所以**首次建、之后复用**。
+  //     早先用时间戳命名，跑十次「设置 / 账号」里就多十行「自检临时账号」，全是自检留下的垃圾。
   const adminId = login.json?.data?.id;
-  const tmpLogin = `selfcheck_${Date.now().toString(36)}`;
-  const created = await call('POST', '/users', {
+  const tmpLogin = 'selfcheck_temp';
+  let created = await call('POST', '/users', {
     as: 'admin',
     body: { login: tmpLogin, name: '自检临时账号', password: 'selfcheck-2026', role: 'member' },
   });
-  const tmpId = created.json?.data?.id;
-  record('管理员能新建账号', created.json?.code === 0 && !!tmpId, `${created.json?.code} ${created.json?.message ?? tmpLogin}`);
+  let tmpId = created.json?.data?.id;
+  let reused = false;
+  if (!tmpId) {
+    const found = await call('GET', `/users?q=${tmpLogin}&is_active=0&limit=50`, { as: 'admin' });
+    const hit = (found.json?.data?.items ?? []).find((u) => u.login === tmpLogin);
+    if (hit) {
+      tmpId = hit.id;
+      reused = true;
+    }
+  }
+  record(
+    '管理员能新建账号',
+    !!tmpId,
+    reused ? '上次跑过，复用同一行 selfcheck_temp（不重复建）' : `${created.json?.code} ${created.json?.message ?? tmpLogin}`,
+  );
   if (tmpId) {
     const promote = await call('PATCH', `/users/${tmpId}`, { as: 'admin', body: { role: 'admin' } });
     record(
@@ -628,7 +642,9 @@ async function main() {
   const detailed = await readXlsx('view=customer');
   const brief = await readXlsx('view=customer&layout=brief&grouped=0&unit_price=0&discount=0');
   const headOf = (r) => r.rows.find((x) => x.includes('序号')) ?? [];
-  const hasTxt = (r, t) => r.rows.some((x) => x.includes(t));
+  // 注意：这里是"某个单元格里含这段字"，不是"某一行有这一整格"。
+  // 抬头第 4 行印的是「报价人：管理员」，整格比对会假失败。
+  const hasTxt = (r, t) => r.rows.some((x) => x.some((c) => String(c).includes(t)));
   const isGroupRow = (x) => /^[一二三四五六七八九十]、/.test(x[0] ?? '');
   const dHead = headOf(detailed);
   const bHead = headOf(brief);
@@ -653,7 +669,124 @@ async function main() {
     '优惠不显示时若仍标「报价合计」，客户会拿它再减一次优惠',
   );
 
-  console.log(`\n本次自检产生了 1 张已发出的报价单：${quote.json?.data?.quote_no ?? ''}（客户名「自检样例」），请按需作废。`);
+  // 15. 报价人抬头 / 物料人员备注 / 列表草稿优先（v1.13）
+  //     三条都是"界面上看着对、接口其实没给"的类型，所以在这里从数据层钉住。
+  const usersBefore = await call('GET', '/users?limit=50', { as: 'admin' });
+  const meRow = (usersBefore.json?.data?.items ?? []).find((u) => u.id === adminId);
+  const oldPhone = meRow?.phone ?? null;
+  const operatorRow = detailed.rows.find((x) => x.some((c) => String(c).startsWith('报价人：'))) ?? [];
+  record(
+    '客户版抬头印了报价人姓名与电话',
+    // 管理员没填电话时，抬头只该有姓名那一格，不该出现空的「联系电话：」
+    hasTxt(detailed, '报价人：') && (oldPhone ? hasTxt(detailed, '联系电话：') : !hasTxt(detailed, '联系电话：')),
+    operatorRow.length ? operatorRow.join(' / ') : '抬头里找不到「报价人：」',
+  );
+
+  const listAll = await call('GET', '/quotes?limit=20', { as: 'admin' });
+  const statusSeq = (listAll.json?.data?.items ?? []).map((x) => x.status);
+  const lastDraftAt = statusSeq.lastIndexOf('draft');
+  const firstSettledAt = statusSeq.findIndex((s) => s !== 'draft');
+  record(
+    '列表默认返回全部状态，且草稿排在已发出/已作废之前',
+    statusSeq.includes('draft') &&
+      statusSeq.includes('issued') &&
+      (firstSettledAt === -1 || lastDraftAt < firstSettledAt),
+    statusSeq.join(' → ') || '列表空',
+  );
+
+  const phoneSet = await call('PATCH', `/users/${adminId}`, { as: 'admin', body: { phone: '138-0000-0009' } });
+  record(
+    '账号电话可写（抬头印的就是这个号，不是公司电话）',
+    phoneSet.json?.data?.phone === '138-0000-0009',
+    phoneSet.json?.data?.phone ?? phoneSet.json?.message ?? '',
+  );
+  await call('PATCH', `/users/${adminId}`, { as: 'admin', body: { phone: oldPhone } });
+
+  if (truss) {
+    const noteText = `自检备注${stamp}：报价含运输不含电费`;
+    const oldNote = truss.note ?? null;
+    await call('PATCH', `/items/${truss.id}`, { as: 'admin', body: { note: noteText } });
+    const noteBack = await call('GET', `/items/${truss.id}`, { as: 'admin' });
+    record('物料/人员备注能存能读', noteBack.json?.data?.note === noteText, noteBack.json?.data?.note ?? '');
+
+    const nq = await call('POST', '/quotes', {
+      as: 'admin',
+      body: { customer_name: '自检样例', event_name: '备注自检，跑完即删', valid_until: validUntil },
+    });
+    const nqId = nq.json?.data?.id;
+    const nl = nqId
+      ? await call('POST', `/quotes/${nqId}/items`, {
+          as: 'admin',
+          body: {
+            line_kind: 'material',
+            item_id: truss.id,
+            item_name_snapshot: truss.name,
+            unit_snapshot: '套',
+            qty: '1',
+            cost_source: 'manual',
+            cost_unit_price: '100',
+            sale_unit_price: '160',
+            pricing_nature: 'custom_made',
+          },
+        })
+      : null;
+    const lineId = nl?.json?.data?.item?.id;
+    record(
+      '加行：行备注默认带出物料/人员备注',
+      nl?.json?.data?.item?.remark === noteText,
+      `行备注=${nl?.json?.data?.item?.remark ?? '空'}`,
+    );
+
+    if (nqId && lineId) {
+      const patchBody = {
+        line_kind: 'material',
+        item_name_snapshot: truss.name,
+        unit_snapshot: '套',
+        qty: '1',
+        cost_source: 'manual',
+      };
+      await call('PATCH', `/quotes/${nqId}/items/${lineId}`, {
+        as: 'admin',
+        body: { ...patchBody, remark: '单内改过，只影响这张单' },
+      });
+      const itemNow = await call('GET', `/items/${truss.id}`, { as: 'admin' });
+      record(
+        '改行备注不回写物料库（同一句备注在两处各自独立）',
+        itemNow.json?.data?.note === noteText,
+        itemNow.json?.data?.note ?? '',
+      );
+
+      // 清空是清空：不能被物料备注在下次保存时又填回来
+      await call('PATCH', `/quotes/${nqId}/items/${lineId}`, { as: 'admin', body: { ...patchBody, remark: '' } });
+      const cleared = await call('GET', `/quotes/${nqId}`, { as: 'admin' });
+      record(
+        '行备注能清空，不会被物料备注重新填回',
+        (cleared.json?.data?.items ?? [])[0]?.remark === null,
+        `remark=${JSON.stringify((cleared.json?.data?.items ?? [])[0]?.remark)}`,
+      );
+
+      await call('DELETE', `/quotes/${nqId}`, { as: 'admin' });
+    } else {
+      record('加行：行备注默认带出物料/人员备注', false, nl?.json?.message ?? '临时单没建出来');
+      record('改行备注不回写物料库（同一句备注在两处各自独立）', false, '同上');
+      record('行备注能清空，不会被物料备注重新填回', false, '同上');
+    }
+    await call('PATCH', `/items/${truss.id}`, { as: 'admin', body: { note: oldNote } });
+  } else {
+    record('物料/人员备注能存能读', false, '没找到示例主体「桁架背景板」');
+    record('加行：行备注默认带出物料/人员备注', false, '同上');
+    record('改行备注不回写物料库（同一句备注在两处各自独立）', false, '同上');
+    record('行备注能清空，不会被物料备注重新填回', false, '同上');
+  }
+
+  // 自检单跑完自己删掉：它只是用来验证「出单」这一步，留着的话每跑一次列表里就多一张
+  // 「自检样例」，跑三遍用户就分不清哪张是自己的单了。（导出那几项已经读完了，删了不影响。）
+  const cleanup = await call('DELETE', `/quotes/${qid}`, { as: 'admin' });
+  console.log(
+    cleanup.json?.code === 0
+      ? `\n自检单 ${quote.json?.data?.quote_no ?? ''} 已自动删除，不用手工作废。`
+      : `\n自检单 ${quote.json?.data?.quote_no ?? ''}（客户名「自检样例」）没删掉，请手工作废。`,
+  );
 }
 
 const fail = (e) => {

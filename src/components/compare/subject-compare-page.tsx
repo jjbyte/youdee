@@ -150,12 +150,22 @@ export function SubjectComparePage({ kind }: { kind: ItemType }) {
             {item.note ? (
               <>
                 <span className="t-muted">·</span>
-                <span className="truncate" title={item.note}>
-                  {item.note}
+                <span className="inline-flex items-center gap-[var(--space-1)]">
+                  <IconPaperclip size={16} />
+                  有备注
                 </span>
               </>
             ) : null}
           </div>
+
+          {/* 备注单独一行：它常是一句完整的话（"报价含运输不含电费"），
+              塞进上面那排元信息里会被截成半句，而半句比没有更误导 */}
+          {item.note ? (
+            <p className="t-xs t-2 mt-[var(--space-2)]" title={item.note}>
+              <span className="t-3">备注：</span>
+              {item.note}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-[var(--space-3)]">

@@ -381,6 +381,8 @@ model Counter {
 model MarginThreshold {
   projectType String   @id @map("project_type") @db.VarChar(30)
   warnRate    Decimal  @map("warn_rate") @db.Decimal(5, 4)
+  /// 该类型新单的默认毛利率（反推对客价用）；NULL = 不设默认
+  defaultMarginRate Decimal? @map("default_margin_rate") @db.Decimal(5, 4)
   label       String   @db.VarChar(30)
   sortOrder   Int      @map("sort_order")
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)

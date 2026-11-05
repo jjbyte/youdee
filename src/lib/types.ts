@@ -440,7 +440,13 @@ export interface RiskCheckResult {
 export interface QuoteSettings {
   staleDaysThreshold: number;
   defaultMarginThreshold: string;
-  marginThresholds: Array<{ projectType: ProjectType; label?: string; warnRate: string }>;
+  marginThresholds: Array<{
+    projectType: ProjectType;
+    label?: string;
+    warnRate: string;
+    /** 该类型的默认毛利率；null = 没配，建单时不预填 */
+    defaultMarginRate?: string | null;
+  }>;
   taxStatementDefault: TaxBasis;
   defaultTerms: string | null;
 }

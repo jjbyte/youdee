@@ -1,8 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, errorMessage } from '@/lib/api';
-import { addDaysISO, todayISO } from '@/lib/format';
+import { addDaysISO, rateToPctInput, todayISO } from '@/lib/format';
 import { Button } from '@/components/ui/button';
 import { Field, Input, Select } from '@/components/ui/field';
 import { Modal } from '@/components/ui/overlay';
@@ -13,6 +13,9 @@ import { IconPlus } from '@/components/icons';
 /**
  * 新建报价单（草稿）。
  * 客户名/活动名/有效期三项必填由服务端校验，这里只做同款提示，不静默填默认值。
+ *
+ * 项目类型 → 毛利率：选类型就把该类型配好的默认毛利率填进来，当场可见可改。
+ * 之前类型只影响预警线的颜色，毛利率永远是空的，客户以为是"选了类型没反应"。
  */
 export function NewQuoteButton({
   label = '新建报价单',
@@ -29,9 +32,31 @@ export function NewQuoteButton({
   const [eventName, setEventName] = useState('');
   const [eventDate, setEventDate] = useState('');
   const [projectType, setProjectType] = useState<'' | ProjectType>('');
+  const [marginRate, setMarginRate] = useState('');
+  const [typeMargins, setTypeMargins] = useState<Record<string, string>>({});
   const [validUntil, setValidUntil] = useState(addDaysISO(todayISO(), 30));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 类型 → 默认毛利率的对照表。拿不到就退化成"不预填"，不报错：建单不能被它拦住
+  useEffect(() => {
+    api
+      .quoteSettings()
+      .then((s) => {
+        const map: Record<string, string> = {};
+        for (const t of s.marginThresholds ?? []) {
+          if (t.defaultMarginRate) map[t.projectType] = rateToPctInput(t.defaultMarginRate);
+        }
+        setTypeMargins(map);
+      })
+      .catch(() => setTypeMargins({}));
+  }, []);
+
+  function pickType(t: '' | ProjectType) {
+    setProjectType(t);
+    // 只在有默认值时覆盖；没配就保留手上填的数，不清空
+    if (t && typeMargins[t]) setMarginRate(typeMargins[t]);
+  }
 
   async function submit() {
     setError(null);
@@ -43,6 +68,11 @@ export function NewQuoteButton({
       setError('活动名称为空，先写一个活动名。');
       return;
     }
+    const rate = marginRate.trim() === '' ? null : Number(marginRate);
+    if (rate !== null && (!Number.isFinite(rate) || rate <= 0 || rate >= 100)) {
+      setError('毛利率要填 0 到 100 之间的数；不确定就先留空，进单后再填。');
+      return;
+    }
     setBusy(true);
     try {
       const quote = await api.createQuote({
@@ -50,6 +80,7 @@ export function NewQuoteButton({
         eventName: eventName.trim(),
         eventDate: eventDate || null,
         projectType: projectType || null,
+        targetMarginRate: rate === null ? null : String(rate / 100),
         validUntil,
       });
       setOpen(false);
@@ -112,24 +143,47 @@ export function NewQuoteButton({
               />
             </Field>
           </div>
-          <Field
-            label="项目类型"
-            htmlFor="q-type"
-            hint="只影响毛利预警线的取值，不拦截出单。"
-          >
-            <Select
-              id="q-type"
-              value={projectType}
-              onChange={(e) => setProjectType(e.target.value as ProjectType | '')}
+          <div className="grid grid-cols-2 gap-[var(--space-4)]">
+            <Field
+              label="项目类型"
+              htmlFor="q-type"
+              hint="决定预警线，也带出这一类的默认毛利率。"
             >
-              <option value="">未选（按默认 25%）</option>
-              {PROJECT_TYPE_ORDER.map((t) => (
-                <option key={t} value={t}>
-                  {PROJECT_TYPE_LABELS[t]}
-                </option>
-              ))}
-            </Select>
-          </Field>
+              <Select
+                id="q-type"
+                value={projectType}
+                onChange={(e) => pickType(e.target.value as ProjectType | '')}
+              >
+                <option value="">未选（按默认 25%）</option>
+                {PROJECT_TYPE_ORDER.map((t) => (
+                  <option key={t} value={t}>
+                    {PROJECT_TYPE_LABELS[t]}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field
+              label="毛利率"
+              htmlFor="q-margin"
+              hint={
+                projectType && typeMargins[projectType]
+                  ? `按「${PROJECT_TYPE_LABELS[projectType]}」的默认值填好，可以改。`
+                  : '售价 = 成本 ÷ (1 − 毛利率)。留空也能建单，进单再填。'
+              }
+            >
+              <div className="flex items-center gap-[var(--space-2)]">
+                <Input
+                  id="q-margin"
+                  className="num"
+                  inputMode="decimal"
+                  value={marginRate}
+                  onChange={(e) => setMarginRate(e.target.value)}
+                  placeholder="40"
+                />
+                <span className="t-xs t-3">%</span>
+              </div>
+            </Field>
+          </div>
           {error ? (
             <div className="field-error" role="alert">
               {error}

@@ -1,9 +1,9 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { cx, formatRate } from '@/lib/format';
+import { cx, formatRate, rateToPctInput } from '@/lib/format';
 import { PROJECT_TYPE_LABELS, PROJECT_TYPE_ORDER } from '@/lib/labels';
-import type { QuoteDetail, TaxBasis } from '@/lib/types';
+import type { ProjectType, QuoteDetail, TaxBasis } from '@/lib/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Segmented } from '@/components/ui/segmented';
@@ -41,6 +41,7 @@ export function QuoteHeader({
   onNewVersion,
   onApplyMargin,
   applyingMargin,
+  typeMargins = {},
 }: {
   quote: QuoteDetail;
   saveState: 'idle' | 'saving' | 'error';
@@ -56,12 +57,14 @@ export function QuoteHeader({
   /** 把已有行的对客价按毛利率整体重算（改毛利率只影响之后攒进来的行） */
   onApplyMargin?: () => void;
   applyingMargin?: boolean;
+  /** 项目类型 → 默认毛利率（百分数，如 "40"）。没配的类型不出现 */
+  typeMargins?: Record<string, string>;
 }) {
   const [customer, setCustomer] = useState(quote.customerName);
   const [eventName, setEventName] = useState(quote.eventName);
   const [eventDate, setEventDate] = useState(quote.eventDate ?? '');
   const [marginDraft, setMarginDraft] = useState(
-    quote.targetMarginRate ? String(Math.round(Number(quote.targetMarginRate) * 1000) / 10) : '',
+    quote.targetMarginRate ? rateToPctInput(quote.targetMarginRate) : '',
   );
   /**
    * 毛利率可能被别处改掉（选品面板里就能填，攒单时顺手落库）。
@@ -69,7 +72,7 @@ export function QuoteHeader({
    * 依赖只有这个字段：用户正在输入时它不变，所以不会把光标下的内容抹掉。
    */
   useEffect(() => {
-    setMarginDraft(quote.targetMarginRate ? String(Math.round(Number(quote.targetMarginRate) * 1000) / 10) : '');
+    setMarginDraft(quote.targetMarginRate ? rateToPctInput(quote.targetMarginRate) : '');
   }, [quote.targetMarginRate]);
   const [exportOpen, setExportOpen] = useState(false);
 
@@ -257,7 +260,19 @@ export function QuoteHeader({
             disabled={locked}
             aria-label="项目类型"
             style={{ width: 168 }}
-            onChange={(e) => onPatch({ projectType: e.target.value || null })}
+            onChange={(e) => {
+              const t = e.target.value as ProjectType | '';
+              /**
+               * 换类型 = 换这一类的默认毛利率（客户原话「选了类型毛利率没同步变」）。
+               * 只改单头这个数，不动已有行的对客价——所以要重算还点「按毛利率重算」。
+               */
+              const m = t ? typeMargins[t] : undefined;
+              onPatch(
+                m
+                  ? { projectType: t || null, targetMarginRate: String(Number(m) / 100) }
+                  : { projectType: t || null },
+              );
+            }}
           >
             <option value="">未选（按默认 25%）</option>
             {PROJECT_TYPE_ORDER.map((t) => (
@@ -302,7 +317,7 @@ export function QuoteHeader({
               const rate = parsePercentInput(marginDraft);
               if (rate === null || rate <= 0 || rate >= 1) {
                 setMarginDraft(
-                  quote.targetMarginRate ? String(Math.round(Number(quote.targetMarginRate) * 1000) / 10) : '',
+                  quote.targetMarginRate ? rateToPctInput(quote.targetMarginRate) : '',
                 );
                 return;
               }

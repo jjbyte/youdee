@@ -74,6 +74,18 @@ export function formatPct(v: string | number | null | undefined, decimals = 1): 
   return `${sign}${Math.abs(n).toFixed(decimals)}%`;
 }
 
+/**
+ * 比率 → 百分比输入框里的**值**（不是展示文案）：0.28 → "28"，0.185 → "18.5"，null → ""。
+ *
+ * 不能直接写 String(n * 100)：0.28 * 100 = 28.000000000000004，
+ * 输入框里就会显示成一长串没法看的数。先放大到万分之一位取整再缩回来。
+ */
+export function rateToPctInput(v: string | number | null | undefined): string {
+  const n = toNum(v);
+  if (n === null) return '';
+  return String(Math.round(n * 10000) / 100);
+}
+
 /** 涨跌幅：delta 是比率（0.077 → ↑7.7%），0 或 null → — */
 export function formatDelta(v: string | number | null | undefined, decimals = 1): string {
   const n = toNum(v);

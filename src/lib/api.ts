@@ -353,8 +353,22 @@ export const api = {
   /** 0.1.11 起顶栏不再有铃铛（没有列表页，点了没反应）；接口留着，接回界面时不用改后端 */
   unreadCount: () => request<{ unread: number }>('/notifications/unread-count'),
 
-  exportXlsxUrl: (id: string, view: 'customer' | 'internal' = 'customer') =>
-    `${API_BASE}/quotes/${id}/export.xlsx${qs({ view })}`,
+  /**
+   * 导出 Excel。客户版带上预览页的四个版式参数——客户版 Excel 与打印走同一份版面模型，
+   * 不传就按默认（详细 / 分组 / 含单价 / 含优惠）。
+   */
+  exportXlsxUrl: (
+    id: string,
+    view: 'customer' | 'internal' = 'customer',
+    layout: { layout?: 'detailed' | 'brief'; grouped?: boolean; unitPrice?: boolean; discount?: boolean } = {},
+  ) =>
+    `${API_BASE}/quotes/${id}/export.xlsx${qs({
+      view,
+      layout: view === 'customer' ? layout.layout : undefined,
+      grouped: view === 'customer' ? layout.grouped : undefined,
+      unitPrice: view === 'customer' ? layout.unitPrice : undefined,
+      discount: view === 'customer' ? layout.discount : undefined,
+    })}`,
 };
 
 /** 把任意异常变成一句人能读的话（优先用服务端原文） */

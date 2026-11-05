@@ -3,10 +3,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { api, errorMessage } from '@/lib/api';
-import { formatDate, formatMoney } from '@/lib/format';
-import type { CompanyProfile, QuoteDetail, QuoteItem } from '@/lib/types';
+import type { CompanyProfile, QuoteDetail } from '@/lib/types';
 import { useMe } from '@/lib/use-me';
 import { canExportInternal } from '@/domain/permissions';
+import { SHEET_OPTIONS_DEFAULT, buildCustomerSheet, type SheetOptions } from '@/domain/customer-sheet';
+import { PaperSheet } from '@/components/quote/paper-sheet';
 import { Button } from '@/components/ui/button';
 import { Segmented } from '@/components/ui/segmented';
 import { Note } from '@/components/ui/states';
@@ -39,7 +40,6 @@ export default function QuotePreviewPage() {
   const [showUnitPrice, setShowUnitPrice] = useState(true);
   const [showDiscount, setShowDiscount] = useState(true);
   const [grouped, setGrouped] = useState(true);
-
   const load = useCallback(async () => {
     if (!id) return;
     setLoading(true);
@@ -68,26 +68,43 @@ export default function QuotePreviewPage() {
     return () => window.clearTimeout(t);
   }, [loading]);
 
-  const visible = useMemo(() => (quote ? quote.items.filter((l) => l.isVisibleToCustomer) : []), [quote]);
+  // 版式选项 → 一份 sheet；打印、PDF、Excel 三条路都用它
+  const sheetOptions: SheetOptions = useMemo(
+    () => ({ ...SHEET_OPTIONS_DEFAULT, layout, grouped, showUnitPrice, showDiscount }),
+    [layout, grouped, showUnitPrice, showDiscount],
+  );
 
-  const groups = useMemo(() => {
-    if (!grouped) return [{ key: 'all', title: '', lines: visible }];
-    const map = new Map<string, QuoteItem[]>();
-    for (const l of visible) {
-      const k = l.categorySnapshot?.trim() || '其他';
-      const arr = map.get(k);
-      if (arr) arr.push(l);
-      else map.set(k, [l]);
-    }
-    const CN = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
-    return Array.from(map.entries()).map(([k, lines], i) => ({
-      key: k,
-      title: `${CN[i] ?? String(i + 1)}、${k}`,
-      lines,
-    }));
-  }, [visible, grouped]);
-
-  const total = visible.reduce((a, l) => a + Number(l.linePrice), 0);
+  const sheet = useMemo(() => {
+    if (!quote) return null;
+    return buildCustomerSheet(
+      {
+        quoteNo: quote.quoteNo,
+        version: quote.version,
+        customerName: quote.customerName,
+        eventName: quote.eventName,
+        eventDate: quote.eventDate,
+        validUntil: quote.validUntil,
+        taxStatement: quote.taxStatement,
+        discountAmount: quote.discountAmount,
+        totalPrice: quote.totalPrice,
+        note: quote.note,
+        items: quote.items
+          .filter((l) => l.isVisibleToCustomer)
+          .map((l) => ({
+            name: l.itemNameSnapshot,
+            spec: l.specSnapshot,
+            unit: l.unitSnapshot,
+            qty: String(l.qty),
+            unitPrice: String(l.saleUnitPrice),
+            amount: String(l.linePrice),
+            remark: l.remark,
+            category: l.categorySnapshot,
+          })),
+      },
+      company ?? {},
+      sheetOptions,
+    );
+  }, [quote, company, sheetOptions]);
 
   if (loading && !quote) {
     return (
@@ -105,14 +122,11 @@ export default function QuotePreviewPage() {
     );
   }
 
-  if (!quote) return null;
-
-  const taxLine =
-    quote.taxStatement === 'inclusive' ? '以上报价为含税价，税率另计' : '以上报价为不含税价，税额另计';
+  if (!quote || !sheet) return null;
 
   return (
     <div className="page flex flex-col gap-[var(--space-5)]">
-      <div className="flex items-center gap-[var(--space-3)] flex-wrap">
+      <div className="no-print flex items-center gap-[var(--space-3)] flex-wrap">
         <Link href={`/quotes/${quote.id}/edit`} className="btn btn--icon" aria-label="返回编辑">
           <IconArrowLeft size={16} />
         </Link>
@@ -126,92 +140,13 @@ export default function QuotePreviewPage() {
       </div>
 
       <div className="flex items-start gap-[var(--space-6)] flex-wrap">
-        {/* 左：A4 纸面（服务端 CustomerQuoteDTO 的渲染色样） */}
-        <div className="flex-1 min-w-[520px]">
-          <div className="paper">
-            <h1>{company?.name ?? '（公司名没配）'}</h1>
-            <div className="paper-sub">
-              {quote.eventName}活动报价 · 单号 {quote.quoteNo}
-            </div>
-
-            <div className="t-sm" style={{ marginBottom: 'var(--space-5)' }}>
-              <div>
-                客户：{quote.customerName || '（客户名没填）'}
-                {quote.eventDate ? `　　活动日期：${formatDate(quote.eventDate)}` : ''}
-              </div>
-              <div className="t-3 t-xs" style={{ marginTop: 'var(--space-1)' }}>
-                报价有效期至 {formatDate(quote.validUntil)}
-              </div>
-            </div>
-
-            <table className="paper-tbl">
-              <thead>
-                <tr>
-                  <th scope="col">名称</th>
-                  {layout === 'detailed' ? <th scope="col">规格</th> : null}
-                  <th scope="col">单位</th>
-                  <th scope="col" className="num">
-                    数量
-                  </th>
-                  {showUnitPrice ? (
-                    <th scope="col" className="num">
-                      单价
-                    </th>
-                  ) : null}
-                  <th scope="col" className="num">
-                    金额
-                  </th>
-                </tr>
-              </thead>
-              {groups.map((g) => (
-                <tbody key={g.key}>
-                  {g.title ? (
-                    <tr>
-                      <td colSpan={layout === 'detailed' ? (showUnitPrice ? 6 : 5) : showUnitPrice ? 5 : 4} className="fw-semi">
-                        {g.title}
-                      </td>
-                    </tr>
-                  ) : null}
-                  {g.lines.map((l) => (
-                    <tr key={l.id}>
-                      <td>
-                        {l.itemNameSnapshot}
-                        {layout === 'detailed' && l.remark ? <span className="t-3 t-2xs">（{l.remark}）</span> : null}
-                      </td>
-                      {layout === 'detailed' ? <td>{l.specSnapshot ?? '—'}</td> : null}
-                      <td>{l.unitSnapshot}</td>
-                      <td className="num">{l.qty}</td>
-                      {showUnitPrice ? <td className="num">{formatMoney(l.saleUnitPrice)}</td> : null}
-                      <td className="num">{formatMoney(l.linePrice)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              ))}
-            </table>
-
-            <div className="paper-total">
-              {showDiscount && Number(quote.discountAmount) > 0 ? (
-                <span className="t-sm t-3 fw-normal">
-                  优惠 −{formatMoney(quote.discountAmount, { symbol: true })}
-                </span>
-              ) : null}
-              <span>合计 {formatMoney(showDiscount ? quote.totalPrice : String(total), { symbol: true })}</span>
-            </div>
-
-            <div className="paper-foot">
-              <div>{taxLine}</div>
-              <div>
-                报价有效期至 {formatDate(quote.validUntil)}
-                {company?.phone ? ` · ${company.phone}` : ''}
-                {company?.address ? ` · ${company.address}` : ''}
-              </div>
-              {quote.note ? <div style={{ marginTop: 'var(--space-2)' }}>{quote.note}</div> : null}
-            </div>
-          </div>
+        {/* 左：A4 纸面。与客户版 Excel 同一份 model，不再各画一套表 */}
+        <div className="paper-wrap flex-1 min-w-[520px]">
+          <PaperSheet sheet={sheet} />
         </div>
 
         {/* 右：排版选项（没有一个选项与成本有关） */}
-        <aside className="flex flex-col gap-[var(--space-4)]" style={{ width: 300, flex: 'none' }}>
+        <aside className="no-print flex flex-col gap-[var(--space-4)]" style={{ width: 300, flex: 'none' }}>
           <div className="panel">
             <div className="fw-semi t-sm mb-[var(--space-3)]">客户版排版</div>
 
@@ -252,7 +187,7 @@ export default function QuotePreviewPage() {
                 显示原价与折后
               </label>
 
-              <div className="t-2xs t-3">{taxLine}</div>
+              <div className="t-2xs t-3">{sheet.taxLine}</div>
             </div>
           </div>
 
@@ -266,7 +201,12 @@ export default function QuotePreviewPage() {
             <Button
               variant="secondary"
               onClick={() => {
-                window.location.href = api.exportXlsxUrl(quote.id, 'customer');
+                window.location.href = api.exportXlsxUrl(quote.id, 'customer', {
+                  layout,
+                  grouped,
+                  unitPrice: showUnitPrice,
+                  discount: showDiscount,
+                });
               }}
             >
               导出客户版 Excel

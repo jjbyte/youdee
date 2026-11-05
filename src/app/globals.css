@@ -1273,30 +1273,61 @@ button {
 }
 
 /* ── 打印（报价单预览 / 客户版） ──────────────────────────── */
+/* 客户版纸面与客户版 Excel 共用 domain/customer-sheet 的列与抬头；
+   这里的字号按 A4 正文 12pt 折算，保证「所见即所印」 */
 .paper {
   background: var(--surface);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-9) var(--space-8);
-  font-size: var(--text-sm);
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--fg);
 }
-.paper h1 { font-size: var(--text-xl); font-weight: var(--fw-semibold); text-align: center; margin: 0 0 var(--space-2); }
+.paper h1 { font-size: 20px; font-weight: var(--fw-semibold); text-align: center; margin: 0 0 var(--space-1); }
 .paper h2 { font-size: var(--text-md); font-weight: var(--fw-semibold); margin: var(--space-6) 0 var(--space-2); }
-.paper .paper-sub { text-align: center; color: var(--fg-3); font-size: var(--text-sm); margin-bottom: var(--space-6); }
-.paper .paper-foot { margin-top: var(--space-7); padding-top: var(--space-4); border-top: var(--border-width) solid var(--border); color: var(--fg-3); font-size: var(--text-xs); }
-.paper-tbl { width: 100%; border-collapse: collapse; font-size: var(--text-xs); }
+.paper .paper-sub { text-align: center; color: var(--fg-3); font-size: 12px; margin-bottom: var(--space-5); }
+.paper .paper-foot { margin-top: var(--space-6); padding-top: var(--space-3); border-top: var(--border-width) solid var(--border); color: var(--fg-3); font-size: 11px; line-height: 1.7; }
+.paper .paper-note { margin-top: var(--space-2); color: var(--fg-2); white-space: pre-wrap; }
+
+/* 抬头三行：左值 + 右值，与 Excel 的合并单元格一一对应 */
+.paper-meta { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: var(--space-4); }
+.paper-meta td { padding: 1px 0; vertical-align: top; }
+.paper-meta td:last-child { text-align: right; white-space: nowrap; padding-left: var(--space-4); }
+
+.paper-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 .paper-tbl th,
-.paper-tbl td { padding: var(--space-2) var(--space-3); border-bottom: var(--border-width) solid var(--border-soft); text-align: left; }
+.paper-tbl td { padding: 5px var(--space-3); border-bottom: var(--border-width) solid var(--border-soft); text-align: left; vertical-align: top; }
 .paper-tbl th { background: var(--table-header-bg); color: var(--table-header-fg); font-weight: var(--fw-medium); }
-.paper-tbl td.num, .paper-tbl th.num { text-align: right; }
-.paper-total { display: flex; justify-content: flex-end; gap: var(--space-5); font-size: var(--text-md); font-weight: var(--fw-semibold); padding-top: var(--space-4); }
+.paper-tbl td.num, .paper-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.paper-tbl td.mid, .paper-tbl th.mid { text-align: center; }
+/* 分组行与 Excel 的合并行同义：整行一条分类名，不参与列对齐 */
+.paper-tbl tr.paper-group td { background: var(--surface-sunken); font-weight: var(--fw-semibold); padding-top: var(--space-3); }
+.paper-tbl tfoot td { border-bottom: 0; padding-top: var(--space-3); }
+.paper-tbl tfoot .paper-sum td { color: var(--fg-2); }
+.paper-tbl tfoot .paper-sum--total td { font-size: 15px; font-weight: var(--fw-semibold); color: var(--fg); padding-top: var(--space-1); }
+
+@page {
+  size: A4;
+  margin: 14mm 12mm;
+}
 
 @media print {
   .sidebar, .topbar, .no-print { display: none !important; }
   .shell { grid-template-columns: 1fr; }
   .page { padding: 0; max-width: none; }
-  .paper { border: 0; padding: 0; }
-  body { background: var(--surface); }
+  .paper { border: 0; border-radius: 0; padding: 0; font-size: 11pt; }
+  .paper-tbl { font-size: 10.5pt; }
+  /* 长单跨页时表头必须跟着走，否则第二页起是一堆没有列名的数字 */
+  .paper-tbl thead { display: table-header-group; }
+  .paper-tbl tfoot { display: table-row-group; }
+  /* 一行明细被劈成两半是最难读的一种断页 */
+  .paper-tbl tr { break-inside: avoid; page-break-inside: avoid; }
+  .paper-tbl tr.paper-group { break-after: avoid; page-break-after: avoid; }
+  .paper .paper-foot { break-inside: avoid; page-break-inside: avoid; }
+  /* 屏幕上那层纸的阴影/底色不进纸；深色主题下打印也必须落在白纸上 */
+  body { background: var(--white); }
+  /* 屏幕上为了不塌而设的 520px 最小宽，在纸面上会顶出一截横向溢出 */
+  .paper-wrap { min-width: 0 !important; }
+  a[href]::after { content: none !important; }
 }

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/lib/api';
+import { rateToPctInput } from '@/lib/format';
 import { PROJECT_TYPE_LABELS, PROJECT_TYPE_ORDER } from '@/lib/labels';
 import type { QuoteSettings, TaxBasis } from '@/lib/types';
 import { Button } from '@/components/ui/button';
@@ -32,18 +33,22 @@ export function QuoteRulesPanel() {
   const [saved, setSaved] = useState(false);
   const [defaultMargin, setDefaultMargin] = useState('');
   const [thresholds, setThresholds] = useState<Record<string, string>>({});
+  const [typeMargins, setTypeMargins] = useState<Record<string, string>>({});
 
   useEffect(() => {
     api
       .quoteSettings()
       .then((s) => {
         setSettings(s);
-        setDefaultMargin(s.defaultMarginThreshold ? String(Number(s.defaultMarginThreshold) * 100) : '25');
+        setDefaultMargin(s.defaultMarginThreshold ? rateToPctInput(s.defaultMarginThreshold) : '25');
         const map: Record<string, string> = {};
+        const margins: Record<string, string> = {};
         for (const t of s.marginThresholds ?? []) {
-          map[t.projectType] = t.warnRate ? String(Number(t.warnRate) * 100) : '';
+          map[t.projectType] = t.warnRate ? rateToPctInput(t.warnRate) : '';
+          margins[t.projectType] = rateToPctInput(t.defaultMarginRate);
         }
         setThresholds(map);
+        setTypeMargins(margins);
       })
       .catch((e) => setError(errorMessage(e)));
   }, []);
@@ -59,6 +64,8 @@ export function QuoteRulesPanel() {
         marginThresholds: PROJECT_TYPE_ORDER.filter((t) => thresholds[t]).map((t) => ({
           projectType: t,
           warnRate: String(Number(thresholds[t]) / 100),
+          // 空串 = 这个类型不设默认毛利率（null），不是"没传"
+          defaultMarginRate: typeMargins[t] ? String(Number(typeMargins[t]) / 100) : null,
         })),
       });
       setSaved(true);
@@ -82,7 +89,7 @@ export function QuoteRulesPanel() {
         <div className="flex flex-col gap-[var(--space-3)]">
           <label className="flex items-center gap-[var(--space-3)]">
             <span className="t-sm" style={{ width: 120 }}>
-              默认
+              默认（预警线）
             </span>
             <Input
               className="num"
@@ -95,8 +102,15 @@ export function QuoteRulesPanel() {
             <span className="t-xs t-3">%</span>
           </label>
 
+          {/* 两列数字必须分出表头：一个是"低于它就变琥珀色"，一个是"按它反推售价" */}
+          <div className="flex items-center gap-[var(--space-3)] t-2xs t-3">
+            <span style={{ width: 120 }}>项目类型</span>
+            <span style={{ width: 80, textAlign: 'right' }}>预警线</span>
+            <span style={{ width: 80, textAlign: 'right' }}>默认毛利率</span>
+          </div>
+
           {PROJECT_TYPE_ORDER.map((t) => (
-            <label key={t} className="flex items-center gap-[var(--space-3)]">
+            <div key={t} className="flex items-center gap-[var(--space-3)]">
               <span className="t-sm" style={{ width: 120 }}>
                 {PROJECT_TYPE_LABELS[t]}
               </span>
@@ -109,12 +123,26 @@ export function QuoteRulesPanel() {
                 aria-label={`${PROJECT_TYPE_LABELS[t]} 的毛利率阈值（百分比）`}
                 onChange={(e) => setThresholds((m) => ({ ...m, [t]: e.target.value }))}
               />
+              <Input
+                className="num"
+                style={{ width: 80, textAlign: 'right' }}
+                inputMode="decimal"
+                value={typeMargins[t] ?? ''}
+                placeholder="—"
+                aria-label={`${PROJECT_TYPE_LABELS[t]} 的默认毛利率（百分比）`}
+                onChange={(e) => setTypeMargins((m) => ({ ...m, [t]: e.target.value }))}
+              />
               <span className="t-xs t-3">%</span>
-            </label>
+            </div>
           ))}
         </div>
         <p className="t-2xs t-3 mt-[var(--space-3)]">
-          留空 = 用默认的值。不做「必须全填」——逼管理员给 5 个类型都编一个数，他会全部填成默认值，等于没分。
+          <b>预警线</b>只影响颜色：低于它就变琥珀色，永不拦截出单。<b>默认毛利率</b>是新建这张单时预填的数，
+          也是「售价 = 成本 ÷ (1 − 毛利率)」里的那个毛利率。两者别填成同一个数——那等于把报价正好压在
+          自己的警告线上。
+        </p>
+        <p className="t-2xs t-3">
+          预警线留空 = 用默认的值。默认毛利率留空 = 这个类型不预填，由报价员自己填。
         </p>
       </div>
 

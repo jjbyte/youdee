@@ -63,7 +63,12 @@ export async function patchCompany(input: Partial<CompanyProfile>, actor: Curren
 export interface QuoteSettingsDTO {
   stale_days_threshold: number;
   default_margin_threshold: string;
-  margin_thresholds: Array<{ project_type: string; label: string; warn_rate: string }>;
+  margin_thresholds: Array<{
+    project_type: string;
+    label: string;
+    warn_rate: string;
+    default_margin_rate: string | null;
+  }>;
   tax_statement_default: 'inclusive' | 'exclusive';
   default_terms: string | null;
 }
@@ -72,11 +77,17 @@ export interface QuoteSettingsDTO {
  * 写入用的形状与读出不完全对称，所以单列一个类型而不是复用 Partial<DTO>：
  * - margin_thresholds[].label 可省略（新增一行时先只给类型和预警线，标签回落到 project_type）
  * - 读出来的 label 永远有值，写进去时可以没有
+ * - default_margin_rate 用 null 表示「这个类型不设默认毛利率」，与「没传 = 不改」区分开
  */
 export interface QuoteSettingsPatch {
   stale_days_threshold?: number;
   default_margin_threshold?: string;
-  margin_thresholds?: Array<{ project_type: string; label?: string | null; warn_rate: string }>;
+  margin_thresholds?: Array<{
+    project_type: string;
+    label?: string | null;
+    warn_rate: string;
+    default_margin_rate?: string | null;
+  }>;
   tax_statement_default?: 'inclusive' | 'exclusive';
   default_terms?: string | null;
 }
@@ -94,6 +105,10 @@ export async function getQuoteSettings(): Promise<QuoteSettingsDTO> {
       project_type: r.project_type,
       label: r.label,
       warn_rate: Number(r.warn_rate).toFixed(4),
+      default_margin_rate:
+        r.default_margin_rate === null || r.default_margin_rate === undefined
+          ? null
+          : Number(r.default_margin_rate).toFixed(4),
     })),
     tax_statement_default: await defaultTaxBasis(),
     default_terms: await getSetting<string | null>('default_terms', null),
@@ -142,16 +157,37 @@ export async function patchQuoteSettings(
           field: 'margin_thresholds',
         });
       }
+      // 默认毛利率：undefined = 这次不动这一列；null / '' = 清空（这个类型不设默认）
+      let margin: string | null | undefined;
+      if (t.default_margin_rate === undefined) {
+        margin = undefined;
+      } else if (t.default_margin_rate === null || String(t.default_margin_rate).trim() === '') {
+        margin = null;
+      } else {
+        const m = Number(t.default_margin_rate);
+        if (!Number.isFinite(m) || m <= 0 || m >= 1) {
+          throw new AppError(40001, `项目类型 ${t.project_type} 的默认毛利率必须在 0 到 1 之间。`, 400, {
+            field: 'margin_thresholds',
+          });
+        }
+        margin = String(m);
+      }
       const updated = await q<{ project_type: string }>(
-        `UPDATE margin_thresholds SET warn_rate=$2, updated_at=now() WHERE project_type=$1 RETURNING project_type`,
-        [t.project_type, t.warn_rate],
+        margin === undefined
+          ? `UPDATE margin_thresholds SET warn_rate=$2, updated_at=now() WHERE project_type=$1 RETURNING project_type`
+          : `UPDATE margin_thresholds SET warn_rate=$2, default_margin_rate=$3, updated_at=now()
+               WHERE project_type=$1 RETURNING project_type`,
+        margin === undefined
+          ? [t.project_type, t.warn_rate]
+          : [t.project_type, t.warn_rate, margin],
       );
       if (updated.length === 0) {
         const label = t.label ?? t.project_type;
         const order = 100;
         await q(
-          'INSERT INTO margin_thresholds (project_type, warn_rate, label, sort_order) VALUES ($1,$2,$3,$4)',
-          [t.project_type, t.warn_rate, label, order],
+          `INSERT INTO margin_thresholds (project_type, warn_rate, default_margin_rate, label, sort_order)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [t.project_type, t.warn_rate, margin ?? null, label, order],
         );
       } else if (t.label) {
         await q('UPDATE margin_thresholds SET label=$2 WHERE project_type=$1', [t.project_type, t.label]);

@@ -407,7 +407,10 @@ async function main() {
       );
     }
 
-    // ── 7. 毛利预警线（按项目类型）────────────────────────────
+    // ── 7. 毛利预警线（按项目类型）+ 该类型的默认毛利率 ──────────
+    // 预警线是「低于它变琥珀色」，默认毛利率是「新建单预填、售价 = 成本 ÷ (1 − 它)」。
+    // 这里把默认毛利率填成「预警线 + 10 个点」只是占位，让新建单有个能看的初值；
+    // 设置页必须明写请按实际改——两个数填成一样，等于报价正好压在自己的警告线上。
     const thresholds: Array<[string, string, string, number]> = [
       ['annual_meeting', '0.1800', '年会 / 庆典', 10],
       ['product_launch', '0.2200', '品牌发布会', 20],
@@ -416,9 +419,11 @@ async function main() {
       ['framework_client', '0.1200', '长期框架客户', 50],
     ];
     for (const t of thresholds) {
+      const marginDefault = Math.min(Number(t[1]) + 0.1, 0.95).toFixed(4);
       await client.query(
-        'INSERT INTO margin_thresholds (project_type, warn_rate, label, sort_order) VALUES ($1,$2,$3,$4)',
-        t,
+        `INSERT INTO margin_thresholds (project_type, warn_rate, default_margin_rate, label, sort_order)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [t[0], t[1], marginDefault, t[2], t[3]],
       );
     }
 

@@ -19,6 +19,7 @@ import {
   type QuoteRow,
 } from '../store/quotes.store';
 import {
+  defaultMarginRateForType,
   defaultTaxBasis,
   marginThresholds,
   marginWarnRate,
@@ -190,6 +191,10 @@ export async function createQuote(actor: CurrentUser, input: CreateQuoteInput) {
   const prefix = await quoteNoPrefix();
   const taxStatement = await defaultTaxBasis();
   const discount = input.discount_amount ?? '0';
+  // 选了类型就用该类型的默认毛利率建单；没配就留空，由报价员自己填
+  const marginRate =
+    input.target_margin_rate ??
+    (input.project_type ? ((await defaultMarginRateForType(input.project_type))?.toFixed(4) ?? null) : null);
   const newId = await tx(async (c) => {
     const quoteNo = await nextQuoteNo(c, prefix);
     const r = await c.query<{ id: string }>(
@@ -206,7 +211,7 @@ export async function createQuote(actor: CurrentUser, input: CreateQuoteInput) {
         input.event_date ?? null,
         input.valid_until,
         input.project_type ?? null,
-        input.target_margin_rate ?? null,
+        marginRate,
         discount,
         taxStatement,
         input.note ?? null,
@@ -259,6 +264,26 @@ export async function patchQuote(id: string, input: PatchQuoteInput) {
     discount_amount: input.discount_amount ?? row.discount_amount,
     note: input.note !== undefined ? input.note : row.note,
   };
+
+  /**
+   * 换项目类型就换默认毛利率——客户原话「选择不同的类型，报价单的毛利率没有同步改变」。
+   *
+   * 只改单头的目标毛利率，**不碰任何已有行的对客价**：售价是按行算死的快照，
+   * 改毛利率要生效得显式点「按毛利率重算」。这条边界必须守住——否则换个类型
+   * 就把客户已经看过的那份报价上的每个金额都改了，而界面上没人会注意到。
+   *
+   * 新类型没配默认毛利率时保持原值不清空：清空等于逼人重填一个金额输入框，
+   * 而空白毛利率会让下一次攒单直接失败。
+   */
+  if (
+    input.project_type !== undefined &&
+    input.target_margin_rate === undefined &&
+    next.project_type !== row.project_type &&
+    next.project_type
+  ) {
+    const typeMargin = await defaultMarginRateForType(next.project_type);
+    if (typeMargin !== null) next.target_margin_rate = typeMargin.toFixed(4);
+  }
 
   await tx(async (c) => {
     await c.query(

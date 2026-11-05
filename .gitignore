@@ -1,5 +1,7 @@
 node_modules/
 .next/
+# Windows 上换构建产物要先改名（safe-delete 会超时），这些备份不进仓库
+.next.bak*/
 out/
 build/
 dist/

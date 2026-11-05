@@ -20,6 +20,13 @@ export const PATCH = route(async (req) => {
         project_type: String(t.project_type ?? ''),
         label: optStr(t.label, 30) ?? undefined,
         warn_rate: String(t.warn_rate ?? ''),
+        // 三态：没传 = 不动这一列；null / 空串 = 清空；有值 = 写入
+        default_margin_rate:
+          t.default_margin_rate === undefined
+            ? undefined
+            : t.default_margin_rate === null
+              ? null
+              : String(t.default_margin_rate),
       }))
     : undefined;
   const updated = await patchQuoteSettings(

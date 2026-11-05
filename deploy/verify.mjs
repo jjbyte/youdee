@@ -278,6 +278,33 @@ async function main() {
   record('新建报价单', quote.json?.code === 0 && !!qid, quote.json?.data?.quote_no ?? quote.json?.message ?? '');
   if (!qid) return;
 
+  // 6a. 项目类型 → 默认毛利率（v1.12）。
+  //     客户原话"选择不同的类型，报价单的毛利率没有同步改变"。查下来不是联动写错了，
+  //     是压根没有这个字段——类型此前只决定预警线的颜色。
+  //     这里从接口层钉住"选了类型就该带出一个数"，以后再退化成只变颜色，这一项先报警。
+  const qSettings = await call('GET', '/settings/quote', { as: 'admin' });
+  const typeMargin = new Map(
+    (qSettings.json?.data?.margin_thresholds ?? []).map((t) => [t.project_type, t.default_margin_rate]),
+  );
+  const annualMargin = Number(typeMargin.get('annual_meeting'));
+  record(
+    '建单：选了项目类型就带出该类默认毛利率（不是只变颜色）',
+    Number.isFinite(annualMargin) &&
+      annualMargin > 0 &&
+      Number(quote.json?.data?.target_margin_rate) === annualMargin,
+    `target_margin_rate=${quote.json?.data?.target_margin_rate} / 该类型默认=${typeMargin.get('annual_meeting')}`,
+  );
+
+  const launchMargin = Number(typeMargin.get('product_launch'));
+  const switched = await call('PATCH', `/quotes/${qid}`, { as: 'admin', body: { project_type: 'product_launch' } });
+  record(
+    '换类型：毛利率跟着换成新类型的默认值',
+    Number(switched.json?.data?.target_margin_rate) === launchMargin && launchMargin !== annualMargin,
+    `${quote.json?.data?.target_margin_rate} → ${switched.json?.data?.target_margin_rate}（期望 ${typeMargin.get('product_launch')}）`,
+  );
+  // 换回去，后面按年会这张单继续跑
+  await call('PATCH', `/quotes/${qid}`, { as: 'admin', body: { project_type: 'annual_meeting' } });
+
   const line1 = await call('POST', `/quotes/${qid}/items`, {
     as: 'admin',
     body: {
@@ -514,6 +541,53 @@ async function main() {
     record('成员改分类被拒（40301）', byMember.json?.code === 40301, `${byMember.json?.code} ${byMember.json?.message ?? ''}`);
     await call('DELETE', `/categories/${catId}`, { as: 'admin' });
   }
+
+  // 14. 客户版版面只有一个来源（v1.12）。
+  //     客户原话"打印和导出客户版 PDF 按钮，打印出来的页面要跟 EXCEL 保持一致"。
+  //     这类问题在浏览器里只能靠人眼比对两张纸，所以从接口层验：预览页那四个版式开关
+  //     是不是真的传到了导出渲染器，导出的表是不是跟着开关变（不是照旧出全表）。
+  const ExcelJS = (await import('exceljs')).default;
+  async function readXlsx(query) {
+    const res = await fetch(`${BASE}/api/v1/quotes/${qid}/export.xlsx?${query}`, {
+      headers: { Cookie: jar.admin ?? '' },
+    });
+    const wb = new ExcelJS.Workbook();
+    if (res.status === 200) await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
+    const rows = [];
+    wb.getWorksheet(1)?.eachRow((row) => {
+      const cells = [];
+      row.eachCell({ includeEmpty: false }, (c) => cells.push(String(c.value ?? '').trim()));
+      rows.push(cells);
+    });
+    return { status: res.status, rows };
+  }
+  const detailed = await readXlsx('view=customer');
+  const brief = await readXlsx('view=customer&layout=brief&grouped=0&unit_price=0&discount=0');
+  const headOf = (r) => r.rows.find((x) => x.includes('序号')) ?? [];
+  const hasTxt = (r, t) => r.rows.some((x) => x.includes(t));
+  const isGroupRow = (x) => /^[一二三四五六七八九十]、/.test(x[0] ?? '');
+  const dHead = headOf(detailed);
+  const bHead = headOf(brief);
+  record(
+    '导出：详细档有「规格 / 说明」「单价」两列',
+    dHead.includes('规格 / 说明') && dHead.includes('单价'),
+    dHead.join(' | ') || '没找到表头行',
+  );
+  record(
+    '导出：精简档按参数收窄成 5 列（无规格、无单价），不是照旧出全表',
+    bHead.length === 5 && !bHead.includes('单价') && !bHead.includes('规格 / 说明'),
+    bHead.join(' | ') || '没找到表头行',
+  );
+  record(
+    '导出：分组开关生效（详细档有「一、」分组行，关掉后没有）',
+    detailed.rows.some(isGroupRow) && !brief.rows.some(isGroupRow),
+    `详细档分组行 ${detailed.rows.filter(isGroupRow).length} 行`,
+  );
+  record(
+    '导出：关掉优惠后合计标签降级为「合计」',
+    hasTxt(brief, '合计') && !hasTxt(brief, '报价合计'),
+    '优惠不显示时若仍标「报价合计」，客户会拿它再减一次优惠',
+  );
 
   console.log(`\n本次自检产生了 1 张已发出的报价单：${quote.json?.data?.quote_no ?? ''}（客户名「自检样例」），请按需作废。`);
 }

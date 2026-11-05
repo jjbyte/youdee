@@ -65,14 +65,33 @@ export async function validDaysDefault(): Promise<number> {
 export interface MarginThresholdRow {
   project_type: string;
   warn_rate: string;
+  /** 该类型的默认毛利率；NULL = 没配，不设初值 */
+  default_margin_rate: string | null;
   label: string;
   sort_order: number;
 }
 
 export async function marginThresholds(): Promise<MarginThresholdRow[]> {
   return q<MarginThresholdRow>(
-    'SELECT project_type, warn_rate, label, sort_order FROM margin_thresholds ORDER BY sort_order',
+    `SELECT project_type, warn_rate, default_margin_rate, label, sort_order
+       FROM margin_thresholds ORDER BY sort_order`,
   );
+}
+
+/**
+ * 该类型的默认毛利率。没配就返回 null —— 不拿全局阈值顶上：
+ * 「没配」和「配成 25%」在报价上是两件不同的事，前者应该留空让人填。
+ */
+export async function defaultMarginRateForType(projectType: string | null): Promise<number | null> {
+  if (!projectType) return null;
+  const rows = await q<{ default_margin_rate: string | null }>(
+    'SELECT default_margin_rate FROM margin_thresholds WHERE project_type = $1',
+    [projectType],
+  );
+  const raw = rows[0]?.default_margin_rate;
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 && n < 1 ? n : null;
 }
 
 export interface MarginWarn {

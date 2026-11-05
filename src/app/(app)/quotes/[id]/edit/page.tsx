@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api, errorMessage, isUnauthorized } from '@/lib/api';
+import { rateToPctInput } from '@/lib/format';
 import type { QuoteDetail, QuoteItem, RiskCheckResult, TaxBasis } from '@/lib/types';
 import { useMe } from '@/lib/use-me';
 import { canExportInternal } from '@/domain/permissions';
@@ -49,6 +50,8 @@ export default function QuoteEditPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [toastTone, setToastTone] = useState<'success' | 'warn' | 'danger'>('success');
   const [toastAction, setToastAction] = useState<{ label: string; onClick: () => void } | null>(null);
+  /** 项目类型 → 默认毛利率（百分数）。换类型时用它同步单头那个数 */
+  const [typeMargins, setTypeMargins] = useState<Record<string, string>>({});
 
   /** 一条提示 = 一句话 + 一个语气。绿勾配「这次没成」是最刺眼的一种错。 */
   const say = useCallback((message: string, tone: 'success' | 'warn' | 'danger' = 'success', action?: { label: string; onClick: () => void }) => {
@@ -88,6 +91,20 @@ export default function QuoteEditPage() {
   useEffect(() => {
     void reload(true);
   }, [reload]);
+
+  // 类型 → 默认毛利率。读不到就退化成「换类型只改类型」，不影响编辑主流程
+  useEffect(() => {
+    api
+      .quoteSettings()
+      .then((s) => {
+        const map: Record<string, string> = {};
+        for (const t of s.marginThresholds ?? []) {
+          if (t.defaultMarginRate) map[t.projectType] = rateToPctInput(t.defaultMarginRate);
+        }
+        setTypeMargins(map);
+      })
+      .catch(() => setTypeMargins({}));
+  }, []);
 
   const mutate = useCallback(
     async (fn: () => Promise<unknown>) => {
@@ -132,7 +149,7 @@ export default function QuoteEditPage() {
     if (!quote) return;
     setConfirmMargin(false);
     setApplyingMargin(true);
-    const rate = quote.targetMarginRate ? Math.round(Number(quote.targetMarginRate) * 1000) / 10 : null;
+    const rate = quote.targetMarginRate ? rateToPctInput(quote.targetMarginRate) : null;
     const lineCount = quote.items.length;
     const res = await mutate(() => api.applyTargetMargin(quote.id));
     setApplyingMargin(false);
@@ -213,6 +230,7 @@ export default function QuoteEditPage() {
     >
       <QuoteHeader
         quote={quote}
+        typeMargins={typeMargins}
         saveState={saveState}
         onRetrySave={() => void reload()}
         isAdmin={isAdmin}
@@ -319,7 +337,7 @@ export default function QuoteEditPage() {
           <p className="t-sm">
             这张单有 <span className="num">{manualCount}</span> 行是手填成本 / 手改过对客价的。
             重算会把全部 {quote.items.length} 行改成「成本 ÷ (1 −{' '}
-            {quote.targetMarginRate ? Math.round(Number(quote.targetMarginRate) * 1000) / 10 : 0}%)」，
+            {rateToPctInput(quote.targetMarginRate) || '0'}%）」，
             手改的数字不保留。
           </p>
           <p className="t-xs t-3">

@@ -44,10 +44,17 @@ export type SheetAlign = 'left' | 'right' | 'center';
 export interface SheetColumn {
   key: 'no' | 'name' | 'spec' | 'remark' | 'unit' | 'qty' | 'unitPrice' | 'amount';
   header: string;
-  /** Excel 列宽（字符数） */
+  /** Excel 列宽（字符数）。HTML 侧按占比换算成百分比，两边列宽比例因此一致 */
   width: number;
   align: SheetAlign;
   money?: boolean;
+  /**
+   * 这一列允许折行。
+   *
+   * 只有文字列（项目 / 规格 / 备注）配折行；数字列必须单行——金额被折成两行
+   * 后「1,234.00」会断在逗号处，客户会按两笔读。
+   */
+  wrap?: boolean;
 }
 
 /**
@@ -56,24 +63,28 @@ export interface SheetColumn {
  * 规格与备注是**两列**：前者是「这个东西多大」，后者是「报价时要记得的事」
  * （含不含运输、含不含调音师）。合成一列叫「规格 / 说明」时，客户分不清
  * 哪句是参数、哪句是条件；一条长备注还会把规格挤没。
+ *
+ * 备注排在**最后一列（小计之后）**：它是不定长的一段话，只有放在右边缘才有
+ * 地方向下折行。夹在规格和小计之间时，一条长备注会把金额列挤成两行，
+ * 而金额恰恰是客户唯一必须一眼读准的东西。
  */
 export function sheetColumns(opts: SheetOptions): SheetColumn[] {
   const cols: SheetColumn[] = [
-    { key: 'no', header: '序号', width: 6, align: 'center' },
-    { key: 'name', header: '项目', width: 30, align: 'left' },
+    { key: 'no', header: '序号', width: 7, align: 'center' },
+    { key: 'name', header: '项目', width: 22, align: 'left', wrap: true },
   ];
-  if (opts.layout === 'detailed') {
-    cols.push(
-      { key: 'spec', header: '规格', width: 18, align: 'left' },
-      { key: 'remark', header: '备注', width: 24, align: 'left' },
-    );
-  }
+  // 规格 16：`1.2m×2.4m 一张 2.88㎡` 这类写法必须整段装得下，窄一格就会断成「2.4 / m」
+  if (opts.layout === 'detailed') cols.push({ key: 'spec', header: '规格', width: 16, align: 'left', wrap: true });
   cols.push(
-    { key: 'unit', header: '单位', width: 8, align: 'left' },
-    { key: 'qty', header: '数量', width: 10, align: 'right' },
+    { key: 'unit', header: '单位', width: 7, align: 'left' },
+    { key: 'qty', header: '数量', width: 7, align: 'right' },
   );
   if (opts.showUnitPrice) cols.push({ key: 'unitPrice', header: '单价', width: 14, align: 'right', money: true });
-  cols.push({ key: 'amount', header: '小计', width: 16, align: 'right', money: true });
+  cols.push({ key: 'amount', header: '小计', width: 15, align: 'right', money: true });
+  // 备注放最后：它是不定长的一段话，只有挨着纸边才有地方向下折行
+  if (opts.layout === 'detailed') {
+    cols.push({ key: 'remark', header: '备注', width: 24, align: 'left', wrap: true });
+  }
   return cols;
 }
 

@@ -659,12 +659,20 @@ async function main() {
     const wb = new ExcelJS.Workbook();
     if (res.status === 200) await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
     const rows = [];
+    // wraps 与 rows 逐格对齐：同一个 eachCell 里顺手记下 wrapText，
+    // 用来验「备注列真的开了自动换行」——这件事只看单元格文字看不出来
+    const wraps = [];
     wb.getWorksheet(1)?.eachRow((row) => {
       const cells = [];
-      row.eachCell({ includeEmpty: false }, (c) => cells.push(String(c.value ?? '').trim()));
+      const w = [];
+      row.eachCell({ includeEmpty: false }, (c) => {
+        cells.push(String(c.value ?? '').trim());
+        w.push(c.alignment?.wrapText === true);
+      });
       rows.push(cells);
+      wraps.push(w);
     });
-    return { status: res.status, rows };
+    return { status: res.status, rows, wraps, ws: wb.getWorksheet(1) };
   }
   const detailed = await readXlsx('view=customer');
   const brief = await readXlsx('view=customer&layout=brief&grouped=0&unit_price=0&discount=0');
@@ -678,6 +686,11 @@ async function main() {
   record(
     '导出：详细档「规格」与「备注」是两列（不是合成「规格 / 说明」），且都有单价',
     dHead.includes('规格') && dHead.includes('备注') && dHead.includes('单价') && !dHead.includes('规格 / 说明'),
+    dHead.join(' | ') || '没找到表头行',
+  );
+  record(
+    '导出：备注在小计之后，是整张表的最后一列',
+    dHead[dHead.length - 1] === '备注' && dHead.indexOf('备注') === dHead.indexOf('小计') + 1,
     dHead.join(' | ') || '没找到表头行',
   );
   record(
@@ -772,7 +785,10 @@ async function main() {
       const specAt = nxHead.indexOf('规格');
       const remarkAt = nxHead.indexOf('备注');
       const nameAt = nxHead.indexOf('项目');
-      const noteRow = nqXls.rows.find((x) => x.includes(noteText)) ?? [];
+      const amountAt = nxHead.indexOf('小计');
+      const noteIdx = nqXls.rows.findIndex((x) => x.includes(noteText));
+      const noteRow = noteIdx >= 0 ? nqXls.rows[noteIdx] : [];
+      const noteWrap = (noteIdx >= 0 ? nqXls.wraps[noteIdx] : []) ?? [];
       record(
         '导出：规格与备注分两列落值，项目名不再驮括号',
         specAt > -1 &&
@@ -782,6 +798,27 @@ async function main() {
           !String(noteRow[nameAt] ?? '').includes(noteText) &&
           (truss.spec ? noteRow[specAt] === truss.spec : true),
         noteRow.length ? noteRow.join(' | ') : '导出里找不到这条备注',
+      );
+      // 「备注太长要自动换行」在 Excel 里是单元格属性，不是内容：不设 wrapText 时
+      // 长备注要么被邻格压住，要么被截断，而打印出来和纸面对不上
+      record(
+        '导出：备注格开了自动换行，金额格没有（金额折行会断在逗号处）',
+        noteWrap[remarkAt] === true && amountAt > -1 && noteWrap[amountAt] === false,
+        `备注 wrap=${noteWrap[remarkAt]} 小计 wrap=${noteWrap[amountAt]}`,
+      );
+      // 备注在小计右边：合并合计行时不能把它一起吞掉，否则金额会印到备注列下面
+      record(
+        '导出：合计与优惠的金额仍落在「小计」列，没有被备注列挤位',
+        (() => {
+          const totalRow = nqXls.rows.find((x) => x.some((c) => /^(报价)?合计$/.test(String(c))));
+          if (!totalRow) return false;
+          const idx = nqXls.rows.indexOf(totalRow);
+          const cells = nqXls.ws?.getRow(idx + 1);
+          if (!cells) return false;
+          const at = cells.getCell(amountAt + 1).value;
+          return typeof at === 'number' && at > 0;
+        })(),
+        '合计金额必须写在「小计」那一格（合并区只保留左上角的值，写错格会静默消失）',
       );
     }
 

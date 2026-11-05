@@ -150,6 +150,21 @@ function writeCustomer(
   const header = ws.addRow(sheet.columns.map((c) => c.header));
   styleHeader(header);
 
+  /**
+   * 打印设置与 `@page` 对齐：A4 纵向、页边距 12mm/14mm、按一页宽缩放、表头跨页重复。
+   * 不设 fitToWidth 时，8 列的默认列宽加起来会横向溢到第二页，
+   * 客户拿到的「第一页」只有序号和项目——比排版难看严重得多。
+   */
+  ws.pageSetup = {
+    paperSize: 9,
+    orientation: 'portrait',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    printTitlesRow: `${header.number}:${header.number}`,
+    margins: { left: 0.47, right: 0.47, top: 0.55, bottom: 0.55, header: 0.3, footer: 0.3 },
+  };
+
   // ── 明细（含分组行）──
   for (const g of sheet.groups) {
     if (g.title) {
@@ -187,7 +202,9 @@ function writeCustomer(
       r.alignment = { vertical: 'middle' };
       sheet.columns.forEach((c, i) => {
         const cell = r.getCell(i + 1);
-        cell.alignment = { vertical: 'middle', horizontal: c.align };
+        // 折行跟着列定义走（项目 / 规格 / 备注）：Excel 里不设 wrapText，
+        // 长备注就会被写到邻格里去，或者被截断——打印出来和纸面对不上
+        cell.alignment = { vertical: 'middle', horizontal: c.align, wrapText: c.wrap === true };
         if (c.money) cell.numFmt = '#,##0.00';
         cell.border = { bottom: THIN };
       });

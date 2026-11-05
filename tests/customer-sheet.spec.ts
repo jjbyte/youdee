@@ -29,17 +29,31 @@ const quote = (over: Partial<SheetQuoteInput> = {}): SheetQuoteInput => ({
 const company = { name: '杭州星芒活动策划', address: '杭州市西湖区', phone: '0571-88888888' };
 
 describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
-  it('详细档列 = 序号/项目/规格/备注/单位/数量/单价/小计（规格与备注分两列）', () => {
+  it('详细档列 = 序号/项目/规格/单位/数量/单价/小计/备注（备注在最后一列）', () => {
     expect(sheetColumns(SHEET_OPTIONS_DEFAULT).map((c) => c.header)).toEqual([
       '序号',
       '项目',
       '规格',
-      '备注',
       '单位',
       '数量',
       '单价',
       '小计',
+      '备注',
     ]);
+  });
+
+  it('备注紧跟在小计后面，是整张表的最后一列', () => {
+    const keys = sheetColumns(SHEET_OPTIONS_DEFAULT).map((c) => c.key);
+    expect(keys[keys.length - 1]).toBe('remark');
+    expect(keys.indexOf('remark')).toBe(keys.indexOf('amount') + 1);
+  });
+
+  it('只有文字列允许折行，金额列必须单行', () => {
+    const cols = sheetColumns(SHEET_OPTIONS_DEFAULT);
+    const wrapped = cols.filter((c) => c.wrap).map((c) => c.key);
+    expect(wrapped).toEqual(['name', 'spec', 'remark']);
+    // 数字列折行会让「1,234.00」断在逗号处，客户会按两笔读
+    expect(cols.filter((c) => c.money).every((c) => !c.wrap)).toBe(true);
   });
 
   it('精简档去掉规格与备注两列，关掉单价再少一列', () => {
@@ -53,7 +67,7 @@ describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
     ]);
     expect(
       sheetColumns({ ...SHEET_OPTIONS_DEFAULT, showUnitPrice: false }).map((c) => c.key),
-    ).toEqual(['no', 'name', 'spec', 'remark', 'unit', 'qty', 'amount']);
+    ).toEqual(['no', 'name', 'spec', 'unit', 'qty', 'amount', 'remark']);
   });
 
   it('分组按出现顺序编号，序号跨组连续', () => {

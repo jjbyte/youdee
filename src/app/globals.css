@@ -1339,12 +1339,20 @@ button {
 .paper-meta td { padding: 1px 0; vertical-align: top; }
 .paper-meta td:last-child { text-align: right; white-space: nowrap; padding-left: var(--space-4); }
 
-.paper-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.paper-tbl { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+/* 列宽由 th 上的百分比定死（来自 customer-sheet 的 Excel 字符宽），左右内边距压到 6px：
+   8 列 + A4 内容宽 186mm 时，每列都要容得下两个字的表头，8px 会让「序号」只剩 23px */
 .paper-tbl th,
-.paper-tbl td { padding: 5px var(--space-3); border-bottom: var(--border-width) solid var(--border-soft); text-align: left; vertical-align: top; }
+.paper-tbl td { padding: 5px 6px; border-bottom: var(--border-width) solid var(--border-soft); text-align: left; vertical-align: top; }
 .paper-tbl th { background: var(--table-header-bg); color: var(--table-header-fg); font-weight: var(--fw-medium); white-space: nowrap; }
 .paper-tbl td.num, .paper-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .paper-tbl td.mid, .paper-tbl th.mid { text-align: center; white-space: nowrap; }
+/* 文字列（项目 / 规格 / 备注）允许折行：长备注在自己的列里往下走，
+   不会把金额列挤成两行，也不会把表格顶出纸面。数字列必须单行——金额
+   断在逗号处客户会按两笔读。
+   用 break-word 而不是 anywhere：先按空格与标点断，实在装不下才在词内断，
+   否则 `1.2m×2.4m` 会被切成「2.4 / m」 */
+.paper-tbl td.wrap { white-space: normal; overflow-wrap: break-word; }
 /* 分组行与 Excel 的合并行同义：整行一条分类名，不参与列对齐 */
 .paper-tbl tr.paper-group td { background: var(--surface-sunken); font-weight: var(--fw-semibold); padding-top: var(--space-3); }
 .paper-tbl tfoot td { border-bottom: 0; padding-top: var(--space-3); }

@@ -60,7 +60,11 @@ export function PriceEntryDrawer({
   );
 
   const [expanded, setExpanded] = useState(false);
-  const [taxIncluded, setTaxIncluded] = useState(false);
+  // 默认含税：供应商报过来的价基本都是含税的，报价单与客户版也一律按含税算，
+  // 所以"录进来就是含税"才是常态，"先按不含税记、用的时候再换算"没有这条路——
+  // 取价按口径严格匹配、不回落，记错口径的价在含税单子里直接取不到。
+  // 服务端 price-write 的默认值也是 true，这两处必须一致（前端显式传 false 会顶掉服务端默认）。
+  const [taxIncluded, setTaxIncluded] = useState(true);
   const [moq, setMoq] = useState('');
   const [leadTime, setLeadTime] = useState('');
   const [baseUnitQty, setBaseUnitQty] = useState('');
@@ -89,6 +93,9 @@ export function PriceEntryDrawer({
       setSupplierQuery('');
       setSupplierId('');
       setSupplierQuery('');
+      // 关掉抽屉等于这次录入结束：下次打开回到默认含税。
+      // 否则给某一家关过含税之后，后面每一家都会静默按不含税记。
+      setTaxIncluded(true);
     }
   }, [open]);
 
@@ -115,7 +122,8 @@ export function PriceEntryDrawer({
     setBaseUnitQty('');
     setSourceNote('');
     setTiers([]);
-    setTaxIncluded(false);
+    // 下一条价也回到含税，否则「保存并再录一家」从第二条起会静默变回不含税
+    setTaxIncluded(true);
     setOverlap(null);
     setSavedCount((n) => n + 1);
   }
@@ -398,17 +406,27 @@ export function PriceEntryDrawer({
 
         <div>
           <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? '收起更多' : '展开更多（含税 / 起订量 / 阶梯价 / 来源备注 / 交期）'}
+            {/* 口径藏在折叠区里，用户就不知道这条价是按什么记的——所以把它写进触发文字里 */}
+            {expanded
+              ? '收起更多'
+              : `展开更多（${taxIncluded ? '含税价' : '不含税价'} · 起订量 / 阶梯价 / 交期）`}
           </Button>
         </div>
 
         {expanded ? (
           <div className="flex flex-col gap-[var(--space-4)]">
-            <label className="switch">
-              <input type="checkbox" checked={taxIncluded} onChange={(e) => setTaxIncluded(e.target.checked)} />
-              <span className="switch-track" aria-hidden="true" />
-              含税价
-            </label>
+            <div className="flex flex-col gap-[var(--space-1)]">
+              <label className="switch">
+                <input type="checkbox" checked={taxIncluded} onChange={(e) => setTaxIncluded(e.target.checked)} />
+                <span className="switch-track" aria-hidden="true" />
+                含税价
+              </label>
+              <span className="hint">
+                {taxIncluded
+                  ? '默认含税。供应商报的价基本都是含税的，客户版报价单也按含税算。'
+                  : '这条按不含税记。它只能在「不含税」口径的单子里取到价，含税单子会报「没有有效价格」。'}
+              </span>
+            </div>
 
             {needsConversion ? (
               <Field

@@ -779,6 +779,53 @@ async function main() {
     record('行备注能清空，不会被物料备注重新填回', false, '同上');
   }
 
+  // 16. 录价的默认税口径（v1.15）
+  //     客户原话「物料和人员的报价默认都是含税价」。这条最容易只改一半：
+  //     界面默认含税、接口默认不含税，或者反过来——两边不一致时，用户点保存那一刻是对的，
+  //     第二天从别处录进来的价就躺在另一侧，而取价按口径严格匹配、不回落，
+  //     结果是含税单子里"没有有效价格"，人却找不到原因。
+  //     所以这里不验界面，直接验接口：**不传 tax_included 时落库必须是真的**。
+  const basisFrom = new Date().toISOString().slice(0, 10);
+  const basisTo = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+  const basisSup = await call('POST', '/suppliers', {
+    as: 'admin',
+    body: { name: `自检口径供应商${stamp}`, type: 'factory' },
+  });
+  const basisSupId = basisSup.json?.data?.id;
+  if (basisSupId) {
+    const baseBody = {
+      item_id: truss.id,
+      supplier_id: basisSupId,
+      unit_code: 'set',
+      base_unit_qty: '0.055556',
+      pricing_nature: 'purchase',
+      unit_price: '100',
+      effective_from: basisFrom,
+      effective_to: basisTo,
+    };
+    const noTax = await call('POST', '/prices', { as: 'admin', body: baseBody });
+    // 同一主体、同一供应商、同一段期，但税口径不同 —— 重叠判定把它当另一条价，所以不会撞车
+    const explicitNo = await call('POST', '/prices', { as: 'admin', body: { ...baseBody, tax_included: false } });
+    // 直接用录价接口的返回，不再查一遍列表：用户点保存后看到的就是这个对象
+    record(
+      '录价不传税口径时默认按含税记（物料与人员同一套接口）',
+      noTax.json?.data?.tax_included === true,
+      `tax_included=${noTax.json?.data?.tax_included} ${noTax.json?.message ?? ''}`,
+    );
+    record(
+      '显式传 tax_included=false 时仍能记成不含税（默认值不许盖掉用户的选择）',
+      explicitNo.json?.data?.tax_included === false,
+      `tax_included=${explicitNo.json?.data?.tax_included} ${explicitNo.json?.message ?? ''}`,
+    );
+    for (const p of [noTax.json?.data, explicitNo.json?.data]) {
+      if (p?.id) await call('DELETE', `/prices/${p.id}`, { as: 'admin' });
+    }
+    await call('DELETE', `/suppliers/${basisSupId}`, { as: 'admin' });
+  } else {
+    record('录价不传税口径时默认按含税记（物料与人员同一套接口）', false, basisSup.json?.message ?? '临时供应商没建出来');
+    record('显式传 tax_included=false 时仍能记成不含税（默认值不许盖掉用户的选择）', false, '同上');
+  }
+
   // 自检单跑完自己删掉：它只是用来验证「出单」这一步，留着的话每跑一次列表里就多一张
   // 「自检样例」，跑三遍用户就分不清哪张是自己的单了。（导出那几项已经读完了，删了不影响。）
   const cleanup = await call('DELETE', `/quotes/${qid}`, { as: 'admin' });

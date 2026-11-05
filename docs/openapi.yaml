@@ -3296,6 +3296,16 @@ components:
                 enum: [annual_meeting, product_launch, exhibition_booth, roadshow, framework_client]
               label: { type: string, description: 中文名（年会/庆典、品牌发布会、展台特装、路演/地推、长期框架客户） }
               warn_rate: { type: string, description: 0-1 小数，CHECK (0,1) 开区间 }
+              default_margin_rate:
+                type: string
+                nullable: true
+                description: |
+                  该类型的**默认毛利率**（0-1 小数），新建报价单时预填进「毛利率」，
+                  也是「按毛利率重算」的入参。
+                  与 warn_rate 是两个数：warn_rate 是「最低可接受」，只影响颜色、永不拦出单；
+                  default_margin_rate 是「我们通常报多少」。合成同一个数，建单初值就正好压在
+                  自己的警告线上，报价员一进来看到琥珀色，于是他学会无视琥珀色。
+                  变更类型只改初值，**绝不重算已有行的对客价**（要重算得显式点「按毛利率重算」）。
         tax_statement_default:
           type: string
           enum: [inclusive, exclusive]

@@ -37,3 +37,8 @@ coverage/
 # 构建/联调期间的临时脚本（agent 产出，非交付物；文件保留在本地但不入库）
 .workbuddy/*.mjs
 .workbuddy/*.out.txt
+# agent 的工作笔记：本地记录，不是代码也不是文档，不进公开仓库
+.workbuddy/memory/
+
+# TS 增量编译缓存（每次构建都变，入库只会制造无意义的 diff）
+tsconfig.tsbuildinfo

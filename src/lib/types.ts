@@ -1,7 +1,7 @@
 /**
  * API 响应类型（唯一前端契约文件）。
  *
- * 与 docs/openapi.yaml 对齐，但键名统一为 camelCase —— 服务端返回 snake_case 时
+ * 与 /api/v1 实际响应对齐，键名统一为 camelCase —— 服务端返回 snake_case 时
  * 由 lib/api.ts 的 deepCamel 统一转换，页面只认这一套。
  *
  * 金额一律是**字符串**（decimal），前端不做浮点运算，只做展示。

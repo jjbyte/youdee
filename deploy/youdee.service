@@ -1,6 +1,6 @@
 [Unit]
 Description=Youdee 有底 — 活动物料与报价系统
-Documentation=https://example.invalid/docs/05-DEPLOY.md
+Documentation=https://github.com/jjbyte/youdee#readme
 After=network-online.target postgresql.service
 Wants=network-online.target
 

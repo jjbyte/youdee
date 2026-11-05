@@ -29,7 +29,6 @@
   - [常见故障对照](#常见故障对照)
 - [四、常用命令](#四常用命令)
 - [五、还缺客户提供的东西](#五还缺客户提供的东西)
-- [六、文档索引](#六文档索引)
 
 ---
 
@@ -143,7 +142,6 @@ youdee/
 ├── public/                   # 构建期静态资源（logo、favicon）
 ├── scripts/db.mjs            # 本地数据库启停（仅开发机用，部署时不需要）
 ├── tests/                    # 领域层单元测试（8 个文件 / 104 条）
-├── docs/                     # PRD / 架构 / UIUX / Spec / 部署手册 / openapi.yaml
 ├── deploy/                   # 部署脚本 + 部署后自检
 ├── Dockerfile                # 生产镜像
 ├── docker-compose.yml        # app + postgres 18
@@ -237,7 +235,6 @@ src/components/
 | `prisma/seed.ts` | 17 单位 / 8 供应商 / 35 分类 / 25 主体 / 48 条价格；**幂等**，已有用户就整段跳过 |
 | `tests/` | 只测 `domain/` 纯函数，不连库、不起服务，所以秒级跑完 |
 | `deploy/verify.mjs` | 部署后自检，71 项，逐项比对具体数值 |
-| `docs/` | 见文末文档索引 |
 
 ### 几个「改了会影响哪里」的定位表
 
@@ -636,7 +633,7 @@ cd /opt/youdee && node deploy/verify.mjs
 
 自检会自己收尾：临时账号固定为 `selfcheck_temp`（首次建、之后复用），自检单跑完自动删除，不会往你的列表里堆垃圾数据。
 
-有失败项时，脚本会打印实际值与期望值，照着 `docs/05-DEPLOY.md` 第 6 节的故障对照表处理。
+有失败项时，脚本会打印实际值与期望值，照着本文第三节末尾的「常见故障对照」表处理。
 
 ---
 
@@ -723,7 +720,7 @@ gunzip -c backup-2026-11-05.sql.gz | docker compose exec -T db psql -U youdee -d
 | `prisma migrate deploy` 报 P3025 | 配置里设了 `shadowDatabaseUrl` 且与主库相同 | `prisma.config.ts` 已移除该字段，不要加回去 |
 | 纯离线服务器 `docker build` 失败 | 没有外网装依赖 | 在能联网的**同架构 Linux** 上 `docker compose build` → `docker save` → 拷过去 `docker load` → `docker compose up -d`（跳过 `--build`） |
 
-更长的排障过程（含 PostCSS 解析失败的三步判定、锁文件不同步的定位方法）见 **`docs/05-DEPLOY.md` 第 6 节**。
+更长的排障过程（含 PostCSS 解析失败的三步判定、锁文件不同步的定位方法）见本文第三节的「常见故障对照」。
 
 ---
 
@@ -772,20 +769,6 @@ node deploy/verify.mjs         # 部署后自检（71 项）
 
 ---
 
-## 六、文档索引
-
-| 文件 | 内容 |
-|---|---|
-| `docs/01-PRD.md` | 需求与口径（含 9 个竞品的真实调研结论） |
-| `docs/01a-PRD-口径验收用例.md` | 232 条口径验收用例（带真实数字） |
-| `docs/02-ARCHITECTURE.md` | 数据模型、接口设计、8 段关键 SQL |
-| `docs/03-UIUX.md` | 页面线框、组件规范、交互细节、空态/错态文案、变更记录 |
-| `docs/04-Spec.md` | 规格即契约 + 环境实测偏差清单 |
-| `docs/05-DEPLOY.md` | 部署手册（给执行部署的人看，比本文件更细） |
-| `docs/openapi.yaml` | API 契约（OpenAPI 3.0） |
-
----
-
-## 许可与使用范围
+## 六、许可与使用范围
 
 内部工具，按「自用」授权。没有多租户隔离、没有对外注册，不适合直接改成 SaaS 对外服务。

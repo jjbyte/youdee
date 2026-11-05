@@ -1,5 +1,5 @@
 // 有底 — Prisma Schema
-// 契约来源：docs/04-Spec.md §6 + docs/02-ARCHITECTURE.md §7.3
+// 契约来源：领域口径（金额、单位折算、取价规则的唯一实现在 src/domain/）
 //
 // 重要说明：
 // 1) `prices.unit_mode` 是数据库 GENERATED ALWAYS AS ... STORED 生成列，

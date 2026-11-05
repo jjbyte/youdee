@@ -1,6 +1,6 @@
 {
   "$schema": "https://design-tokens.org/draft",
-  "$description": "「有底」价格底账系统 · Design Tokens v1.1 · 真源见 docs/03-UIUX.md 第 B 节 · 设计师 颜好看",
+  "$description": "「有底」价格底账系统 · Design Tokens v1.1 · 设计师 颜好看",
   "color": {
     "gray": {
       "50": {

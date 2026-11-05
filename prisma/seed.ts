@@ -110,6 +110,26 @@ async function main() {
       );
     }
 
+    /**
+     * 开票信息（v1.13）：给三家「会走公账开发票」的补满，另外五家留空。
+     *
+     * 留空是有意的：淘宝店和兼职团队通常不开发票，正好演示「五项全空也能用」。
+     * 如果种子里家家都填满，验收的人会以为这五格是必填。
+     */
+    const invoices: Array<[string, string, string, string, string, string]> = [
+      // name, 税号, 地址, 电话, 开户银行, 账号
+      ['金桥桁架厂', '91310114MA1GX8Q23K', '上海市嘉定区安亭镇墨玉路 28 号 2 幢', '021-5998 6677', '中国工商银行上海安亭支行', '1001200409006789123'],
+      ['星辉租赁', '91310112MA1GB2X68R', '上海市闵行区莘庄工业区申北路 66 号', '021-6412 3355', '中国建设银行上海莘庄支行', '31001529360050212345'],
+      ['本公司自有', '91310115MA1K4T0L7Y', '上海市浦东新区张江路 88 号 5 层', '021-5888 1234', '招商银行上海张江支行', '121905261810901'],
+    ];
+    for (const [name, taxNo, address, phone, bank, account] of invoices) {
+      await client.query(
+        `UPDATE suppliers SET tax_no=$2, company_address=$3, company_phone=$4, bank_name=$5, bank_account=$6
+          WHERE name=$1`,
+        [name, taxNo, address, phone, bank, account],
+      );
+    }
+
     // ── 4. 分类（物料 8 + 人员 8，各带二级）──────────────────
     const catMat: Record<string, Id> = {};
     const matCats: Array<[string, string | null]> = [

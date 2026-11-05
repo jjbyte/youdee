@@ -2246,6 +2246,31 @@ components:
         default_lead_time_days: { type: integer, nullable: true, minimum: 0, maximum: 365 }
         note: { type: string, nullable: true, maxLength: 500 }
         is_active: { type: boolean, default: true }
+        # ── 开票信息（v1.13 新增，五项全部可选）───────────────
+        # 只在开发票时用得上；不填不影响录价、比价、出单。
+        # 写入前服务端会做规范化：去全角、去空格、税号转大写、账号去横杠。
+        # 校验失败返回 40001，`detail.field` 指出是哪一格。
+        tax_no:
+          type: string
+          nullable: true
+          maxLength: 30
+          description: 纳税人识别号。15–20 位字母或数字（统一社会信用代码为 18 位），字母存为大写。不校验校验位。
+        company_address:
+          type: string
+          nullable: true
+          maxLength: 200
+          description: 开票地址（以开票资料为准，不必等于办公地址）
+        company_phone:
+          type: string
+          nullable: true
+          maxLength: 30
+          description: 开票电话。**与 contact_phone 不同**：那个是找到这个人的手机，这个是印在发票上的号。
+        bank_name: { type: string, nullable: true, maxLength: 100, description: 开户银行 }
+        bank_account:
+          type: string
+          nullable: true
+          maxLength: 50
+          description: 银行账号。只存数字，空格与「-」在入库前去掉。
 
     Supplier:
       allOf:

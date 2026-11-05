@@ -257,6 +257,20 @@ export function optStr(v: unknown, maxLen = 200): string | null {
   return s.slice(0, maxLen);
 }
 
+/**
+ * 可选字符串的**三态**：`undefined` = 这一格没提交（不动它），`null` / 空串 = 清空。
+ *
+ * 与 `optStr` 的区别只有一点：**不截断**。开票信息那几列（税号、账号）截断是灾难——
+ * 「存进去的是前 30 位」这种错，只有等发票开出去被退回才会发现。
+ * 超长要报错，交给领域层的规范化函数去做。
+ */
+export function optLoose(v: unknown): string | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+}
+
 /** 日期只接受 yyyy-mm-dd；不做"猜格式" */
 export function reqDate(v: unknown, field: string): string {
   const s = typeof v === 'string' ? v.trim() : '';

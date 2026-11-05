@@ -186,6 +186,70 @@ async function main() {
     record('管理员能改供应商档案', false, '供应商表是空的，连一条都没读到');
   }
 
+  // 3d. 供应商开票信息（v1.13）：五项可选字段。
+  //     为什么建一个临时供应商而不是拿第一家的来试：这五项是真数据，
+  //     "写进去再清空"会在生产上把人家填好的税号抹掉——自检脚本绝不能有这种手。
+  const tmpSup = await call('POST', '/suppliers', {
+    as: 'admin',
+    body: { name: `自检临时供应商${String(Date.now()).slice(-6)}`, type: 'factory' },
+  });
+  const tmpSupId = tmpSup.json?.data?.id;
+  if (tmpSupId) {
+    record(
+      '新建供应商：五项开票信息全空也能建（可选字段不是必填字段）',
+      tmpSup.json?.code === 0 &&
+        tmpSup.json?.data?.tax_no === null &&
+        tmpSup.json?.data?.bank_account === null,
+      `tax_no=${tmpSup.json?.data?.tax_no} / bank_account=${tmpSup.json?.data?.bank_account}`,
+    );
+
+    const invPatch = await call('PATCH', `/suppliers/${tmpSupId}`, {
+      as: 'admin',
+      body: {
+        // 故意送脏数据：小写、全角、空格、横杠 —— 入口处该洗干净再入库
+        tax_no: '91310114ma1gx-8q23k',
+        company_address: '上海市嘉定区安亭镇墨玉路 28 号 2 幢',
+        company_phone: '021-5998 6677',
+        bank_name: '中国工商银行上海安亭支行',
+        bank_account: '1001 2004 0900 6789 123',
+      },
+    });
+    const d = invPatch.json?.data ?? {};
+    record(
+      '开票信息入库前被规范化（税号转大写去横杠、账号去空格）',
+      d.tax_no === '91310114MA1GX8Q23K' && d.bank_account === '1001200409006789123',
+      `tax_no=${d.tax_no} / bank_account=${d.bank_account}`,
+    );
+
+    const reread = await call('GET', `/suppliers/${tmpSupId}`, { as: 'admin' });
+    record(
+      '开票信息读回来一致（详情页显示的就是库里那五个数）',
+      reread.json?.data?.tax_no === '91310114MA1GX8Q23K' &&
+        reread.json?.data?.bank_name === '中国工商银行上海安亭支行' &&
+        reread.json?.data?.company_phone === '021-5998 6677',
+      `${reread.json?.data?.company_phone} / ${reread.json?.data?.bank_name}`,
+    );
+
+    const badTax = await call('PATCH', `/suppliers/${tmpSupId}`, { as: 'admin', body: { tax_no: '1234' } });
+    record(
+      '税号格式不对时明确拒绝（40001 + 指出是哪一格）',
+      badTax.json?.code === 40001 && JSON.stringify(badTax.json ?? {}).includes('tax_no'),
+      `${badTax.json?.code} ${badTax.json?.message ?? ''}`,
+    );
+
+    // 只清能清的那一格，其余字段不动（三态：不提交 ≠ 清空）
+    const clearOne = await call('PATCH', `/suppliers/${tmpSupId}`, { as: 'admin', body: { tax_no: null } });
+    record(
+      '只清一格不影响其他四格（不提交的字段不被清空）',
+      clearOne.json?.data?.tax_no === null && clearOne.json?.data?.bank_name === '中国工商银行上海安亭支行',
+      `tax_no=${clearOne.json?.data?.tax_no} / bank_name=${clearOne.json?.data?.bank_name}`,
+    );
+
+    await call('DELETE', `/suppliers/${tmpSupId}`, { as: 'admin' });
+  } else {
+    record('新建供应商：五项开票信息全空也能建（可选字段不是必填字段）', false, tmpSup.json?.message ?? '');
+  }
+
   // 4. 比价：所有价必须都在（含不可比的），最低价必须标出来
   const cmp = await call('GET', `/items/${truss.id}/compare?qty_base=18&tax_basis=inclusive`, { as: 'admin' });
   const group = (cmp.json?.data?.groups ?? [])[0];

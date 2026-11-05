@@ -358,6 +358,20 @@ button {
 .input[aria-invalid="true"] {
   border-color: var(--danger);
 }
+/*
+ * 编码型数字串：税号、银行账号、电话、发票抬头类的东西。
+ *
+ * 不要直接套 `.num`——那是给表格数字列的：右对齐 + nowrap。套在输入框或
+ * 「标签在上、值在下」的字段上，18 位税号会被推到最右边，和上面左对齐的
+ * 「公司地址」错开一列，看着像两个版本的界面拼在一起。
+ * 这里只借等宽字形让它逐位可数，对齐沿用容器自己的左对齐。
+ */
+.num-code {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  letter-spacing: 0;
+}
 .select {
   appearance: none;
   background-image: none;

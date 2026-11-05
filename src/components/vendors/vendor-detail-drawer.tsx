@@ -1,6 +1,7 @@
 'use client';
 import { formatMoney, formatTimeRel } from '@/lib/format';
 import { UNIT_LABELS, supplierTypeLabel } from '@/lib/labels';
+import { invoiceFilledCount } from '@/domain/invoice-info';
 import type { Price, Supplier } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Drawer } from '@/components/ui/overlay';
@@ -103,6 +104,44 @@ export function VendorDetailDrawer({
             </dl>
             {detail.note ? <p className="t-xs t-2 mt-[var(--space-3)]">{detail.note}</p> : null}
           </div>
+
+          {/*
+            开票信息：五项填了才显示。空数组时整块不出现——一块全是「—」的表，
+            会让人以为这里出错了，而实际上只是还没填。
+          */}
+          {invoiceFilledCount({
+            tax_no: detail.taxNo,
+            company_address: detail.companyAddress,
+            company_phone: detail.companyPhone,
+            bank_name: detail.bankName,
+            bank_account: detail.bankAccount,
+          }) > 0 ? (
+            <div className="panel">
+              <div className="fw-semi t-sm mb-[var(--space-3)]">开票信息</div>
+              <dl className="grid grid-cols-2 gap-[var(--space-3)] t-xs">
+                <div className="col-span-2">
+                  <dt className="t-3">纳税人识别号</dt>
+                  <dd className="num-code">{detail.taxNo || '—'}</dd>
+                </div>
+                <div className="col-span-2">
+                  <dt className="t-3">公司地址</dt>
+                  <dd>{detail.companyAddress || '—'}</dd>
+                </div>
+                <div>
+                  <dt className="t-3">联系电话</dt>
+                  <dd className="num-code">{detail.companyPhone || '—'}</dd>
+                </div>
+                <div>
+                  <dt className="t-3">开户银行</dt>
+                  <dd>{detail.bankName || '—'}</dd>
+                </div>
+                <div className="col-span-2">
+                  <dt className="t-3">银行账号</dt>
+                  <dd className="num-code">{detail.bankAccount || '—'}</dd>
+                </div>
+              </dl>
+            </div>
+          ) : null}
 
           <div>
             <div className="fw-semi t-sm mb-[var(--space-2)]">这家报过的价</div>

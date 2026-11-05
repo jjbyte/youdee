@@ -69,6 +69,12 @@ export interface Supplier {
   region: string | null;
   defaultLeadTimeDays: number | null;
   note: string | null;
+  /** 开票信息五项：全部可选，只在开发票时用 */
+  taxNo: string | null;
+  companyAddress: string | null;
+  companyPhone: string | null;
+  bankName: string | null;
+  bankAccount: string | null;
   isActive: boolean;
   updatedAt: string;
   priceCount?: number;

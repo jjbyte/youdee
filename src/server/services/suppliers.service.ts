@@ -7,10 +7,17 @@
 import { q, one } from '../db';
 import { AppError } from '../http';
 import { SUPPLIER_TYPES } from '@/domain/units';
+import {
+  INVOICE_KEYS,
+  INVOICE_LABELS,
+  normalizeInvoiceField,
+  type InvoiceInfo,
+  type InvoiceKey,
+} from '@/domain/invoice-info';
 
 // ── 供应商 ──────────────────────────────────────────────────
 
-export interface SupplierInput {
+export interface SupplierInput extends Partial<InvoiceInfo> {
   name: string;
   type: string;
   contact_name?: string | null;
@@ -22,7 +29,7 @@ export interface SupplierInput {
   is_active?: boolean;
 }
 
-interface SupplierRow {
+interface SupplierRow extends InvoiceInfo {
   id: string;
   name: string;
   type: string;
@@ -50,6 +57,11 @@ function supplierDto(r: SupplierRow) {
     region: r.region,
     default_lead_time_days: r.default_lead_time_days,
     note: r.note,
+    tax_no: r.tax_no,
+    company_address: r.company_address,
+    company_phone: r.company_phone,
+    bank_name: r.bank_name,
+    bank_account: r.bank_account,
     is_active: r.is_active,
     created_at: r.created_at.toISOString(),
     updated_at: r.updated_at.toISOString(),
@@ -57,6 +69,30 @@ function supplierDto(r: SupplierRow) {
     // 于是每一家都显示 0 —— 数字是错的，比空白更糟：看起来像"这家没报过价"。
     price_count: r.price_count == null ? undefined : Number(r.price_count),
   };
+}
+
+/**
+ * 开票信息：逐个字段规范化，有错就报**第一条**并说清是哪一格。
+ *
+ * 为什么不一次性把五条错都返回：界面是逐格校验的（输入时就提示），
+ * 服务端这一层只是兜底，一次说一条足够；返回五条反而要求界面再做一个错误列表。
+ */
+function normalizeInvoice(input: Partial<InvoiceInfo>): Partial<InvoiceInfo> {
+  const out: Partial<InvoiceInfo> = {};
+  for (const key of INVOICE_KEYS) {
+    const raw = input[key];
+    if (raw === undefined) continue;
+    if (raw === null) {
+      out[key] = null;
+      continue;
+    }
+    const res = normalizeInvoiceField(key as InvoiceKey, raw);
+    if (res.error) {
+      throw new AppError(40001, `${INVOICE_LABELS[key]}：${res.error}`, 400, { field: key });
+    }
+    out[key] = res.value;
+  }
+  return out;
 }
 
 export interface SupplierListQuery {
@@ -110,10 +146,12 @@ export async function createSupplier(input: SupplierInput) {
   if (!SUPPLIER_TYPES.includes(input.type as never)) {
     throw new AppError(40001, '供应商类型不在允许值内。', 400, { field: 'type' });
   }
+  const inv = normalizeInvoice(input);
   const rows = await q<SupplierRow>(
     `INSERT INTO suppliers (name, type, contact_name, contact_phone, shop_url, region,
-                            default_lead_time_days, note, is_active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+                            default_lead_time_days, note, is_active,
+                            tax_no, company_address, company_phone, bank_name, bank_account)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
     [
       input.name,
       input.type,
@@ -124,6 +162,11 @@ export async function createSupplier(input: SupplierInput) {
       input.default_lead_time_days ?? null,
       input.note ?? null,
       input.is_active ?? true,
+      inv.tax_no ?? null,
+      inv.company_address ?? null,
+      inv.company_phone ?? null,
+      inv.bank_name ?? null,
+      inv.bank_account ?? null,
     ],
   );
   return supplierDto(rows[0]!);
@@ -135,9 +178,12 @@ export async function patchSupplier(id: string, input: Partial<SupplierInput>) {
   if (input.type && !SUPPLIER_TYPES.includes(input.type as never)) {
     throw new AppError(40001, '供应商类型不在允许值内。', 400, { field: 'type' });
   }
+  const inv = normalizeInvoice(input);
   const rows = await q<SupplierRow>(
     `UPDATE suppliers SET name=$2, type=$3, contact_name=$4, contact_phone=$5, shop_url=$6, region=$7,
-            default_lead_time_days=$8, note=$9, is_active=$10, updated_at=now()
+            default_lead_time_days=$8, note=$9, is_active=$10,
+            tax_no=$11, company_address=$12, company_phone=$13, bank_name=$14, bank_account=$15,
+            updated_at=now()
       WHERE id=$1 RETURNING *`,
     [
       id,
@@ -150,6 +196,12 @@ export async function patchSupplier(id: string, input: Partial<SupplierInput>) {
       input.default_lead_time_days !== undefined ? input.default_lead_time_days : current.default_lead_time_days,
       input.note !== undefined ? input.note : current.note,
       input.is_active !== undefined ? input.is_active : current.is_active,
+      // 三态：undefined = 这一格没提交（不动）；null = 清空；有值 = 写规范化后的值
+      inv.tax_no !== undefined ? inv.tax_no : current.tax_no,
+      inv.company_address !== undefined ? inv.company_address : current.company_address,
+      inv.company_phone !== undefined ? inv.company_phone : current.company_phone,
+      inv.bank_name !== undefined ? inv.bank_name : current.bank_name,
+      inv.bank_account !== undefined ? inv.bank_account : current.bank_account,
     ],
   );
   return supplierDto(rows[0]!);

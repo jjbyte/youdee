@@ -19,7 +19,11 @@ export const GET = route(async (req) => {
       q: (sp.get('q') ?? '').trim() || null,
       categoryId: categoryId ? reqStr(categoryId, 'category_id', 40) : null,
       supplierId: supplierId ? reqStr(supplierId, 'supplier_id', 40) : null,
-      isActive: boolParam(sp, 'is_active') ?? true,
+      /**
+       * 三态：不传 = 只看在用的（默认）；false = 只看已作废；all = 全看。
+       * `all` 是为「作废/恢复」这个动作用的：要恢复一条，先得看得见它。
+       */
+      isActive: sp.get('is_active') === 'all' ? null : (boolParam(sp, 'is_active') ?? true),
       orderBy: sortClause(sp, SORTABLE, 'i.name'),
       limit: page.limit,
       offset: page.offset,

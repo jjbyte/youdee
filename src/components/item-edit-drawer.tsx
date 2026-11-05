@@ -142,7 +142,24 @@ export function ItemEditDrawer({
     if (!itemId) return;
     setBusy(true);
     try {
-      const updated = await api.deactivateItem(itemId);
+      // 作废接口只回 id/name/isActive；这里的回调要一整份 ItemDetail，所以顺手再读一次
+      await api.archiveItem(itemId);
+      const updated = await api.item(itemId);
+      onSaved?.(updated);
+      onClose();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restore() {
+    if (!itemId) return;
+    setBusy(true);
+    try {
+      await api.restoreItem(itemId);
+      const updated = await api.item(itemId);
       onSaved?.(updated);
       onClose();
     } catch (e) {
@@ -166,20 +183,28 @@ export function ItemEditDrawer({
       closeOnScrim={false}
       footer={
         <>
-          {isAdmin && detail?.isActive !== false ? (
+          {/*
+            作废 / 恢复不设管理员闸门：作废可逆，成员也能用。
+            改档案（保存）仍然是管理员专属——名字一改，所有人口里的叫法就都错了。
+          */}
+          {detail?.isActive === false ? (
+            <Button variant="secondary" size="sm" loading={busy} onClick={() => void restore()}>
+              恢复这个主体
+            </Button>
+          ) : detail ? (
             confirmOff ? (
               <>
-                <span className="t-xs t-3">停用后不再出现在列表里，历史报价单还能正常显示。</span>
+                <span className="t-xs t-3">作废后不再出现在列表里，历史报价单还能正常显示。</span>
                 <Button variant="secondary" size="sm" onClick={() => setConfirmOff(false)}>
                   不了
                 </Button>
                 <Button variant="danger" size="sm" loading={busy} onClick={() => void deactivate()}>
-                  确认停用
+                  确认作废
                 </Button>
               </>
             ) : (
               <Button variant="ghost" size="sm" onClick={() => setConfirmOff(true)}>
-                停用这个主体
+                作废这个主体
               </Button>
             )
           ) : null}
@@ -305,7 +330,9 @@ export function ItemEditDrawer({
           ) : null}
 
           {detail.isActive === false ? (
-            <Note tone="warn">这个主体已停用。把下面的开关打开再保存，可以重新启用。</Note>
+            <Note tone="warn">
+              这个主体已作废。左下角「恢复这个主体」能把它拿回来，价都还在。
+            </Note>
           ) : null}
 
           <label className="switch">

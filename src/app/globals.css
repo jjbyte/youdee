@@ -300,6 +300,20 @@ button {
   text-underline-offset: 2px;
 }
 .btn--link:hover { color: var(--link-fg-hover); }
+
+/*
+ * 危险动作的链接/图标按钮（删除）。
+ *
+ * 必须写成「两个类同时存在」而不是给 .t-danger 提权：`.btn--link` 和
+ * `.btn--icon` 各自带一个 color，和 `.t-danger` 同权重，谁在后面谁赢——
+ * 而 .t-danger 定义在文件前部，于是 `<button class="btn btn--link t-danger">删除</button>`
+ * 永远显示成普通链接色。结果就是"删除"和"作废"长得一模一样，
+ * 这是最不该长得一样的一对按钮。
+ */
+.btn--link.t-danger,
+.btn--icon.t-danger { color: var(--danger); }
+.btn--link.t-danger:hover,
+.btn--icon.t-danger:hover { color: var(--danger); opacity: 0.78; text-decoration-color: var(--danger); }
 .btn:disabled,
 .btn[aria-disabled="true"] {
   opacity: 0.45;

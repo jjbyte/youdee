@@ -29,8 +29,15 @@ export function canEdit(status: QuoteStatus): boolean {
   return status === 'draft';
 }
 
-export function canDelete(status: QuoteStatus): boolean {
-  return status === 'draft';
+/**
+ * 删除：**不看状态，只看角色**（admin，判定在 permissions.canDeleteRecord）。
+ *
+ * 这里原来写的是 `status === 'draft'`——那是"只有草稿能删"的时代定的。
+ * 2026-11-05 客户明确要求管理员能删已发出的单（重复建、建错了要清掉），
+ * 状态不再是删除的边界；「删了就没台账」这件事由 requireDelete 的确认弹窗承担。
+ */
+export function canDelete(_status: QuoteStatus): boolean {
+  return true;
 }
 
 /** 出单前置：只有草稿能发。真正的内容校验在 risk-check，不在这里 */
@@ -38,8 +45,20 @@ export function canIssue(status: QuoteStatus): boolean {
   return status === 'draft';
 }
 
+/**
+ * 作废：草稿与已发出都能作废。
+ *
+ * 草稿也必须能作废，否则**成员会走进死胡同**：他不能删（删除是管理员专属），
+ * 又不能作废（原来只允许 issued），一张建错的草稿就永远挂在草稿列表里。
+ * 唯一的出路是找管理员删——为了清一张空单去打扰人，这种系统没人愿意用。
+ */
 export function canVoid(status: QuoteStatus): boolean {
-  return status === 'issued';
+  return status === 'draft' || status === 'issued';
+}
+
+/** 恢复：只有已作废的能恢复。回到哪个状态由 issued_at 决定，见 quote-actions */
+export function canRestore(status: QuoteStatus): boolean {
+  return status === 'void';
 }
 
 /** 改版重报：已发出的单可以复制成新版本，不能原地改 */

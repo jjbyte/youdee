@@ -15,6 +15,7 @@ import { ItemEditDrawer } from '@/components/item-edit-drawer';
 import { useMe } from '@/lib/use-me';
 import { canManageCatalog } from '@/domain/permissions';
 import { CompareWorkbench } from '@/components/compare/compare-workbench';
+import { PriceAdminPanel } from '@/components/compare/price-admin-panel';
 import { IconExternal, IconPaperclip, IconPencil, IconPlus, IconRuler } from '@/components/icons';
 
 /**
@@ -198,8 +199,13 @@ export function SubjectComparePage({ kind }: { kind: ItemType }) {
         <InlineLoading label="正在算这个物料各家的价…" />
       )}
 
-      {kind === 'personnel' ? (
-        <section className="mt-[var(--space-5)]">
+      {/*
+        价格记录放在比价区下面，不是放进卡片里：比价区只显示在效的价，
+        被作废的那条根本不在卡片里，恢复就永远没有入口。
+      */}
+      <PriceAdminPanel itemId={item.id} reloadKey={reloadKey} onChanged={() => setReloadKey((k) => k + 1)} />
+
+      {kind === 'personnel' ? (        <section className="mt-[var(--space-5)]">
           <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-2)]">
             <span className="t-sm fw-semi">档期（未来 30 天）</span>
             <span className="t-2xs t-3">· 已占用 / 可预约</span>

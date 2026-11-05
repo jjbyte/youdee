@@ -9,7 +9,7 @@
  */
 import { NextResponse } from 'next/server';
 import { currentUser, type CurrentUser } from './auth/session';
-import { canCreatePrice, canOverridePrice, canManageCatalog, canManageUsers, canExportInternal } from '@/domain/permissions';
+import { canCreatePrice, canOverridePrice, canManageCatalog, canManageUsers, canExportInternal, canArchive, canDeleteRecord } from '@/domain/permissions';
 
 export interface ApiError {
   code: number;
@@ -176,6 +176,32 @@ export async function requireAdmin(what = '该操作'): Promise<CurrentUser> {
   const u = await requireUser();
   if (!canManageCatalog(u.role) || !canManageUsers(u.role)) {
     throw new AppError(40301, `${what}需要管理员权限。`, 403);
+  }
+  return u;
+}
+
+/**
+ * 作废 / 恢复：成员也能做。
+ *
+ * 和 requireAdmin 分开写，不是因为权限不同（其实 member 也行），而是为了让
+ * 每个 service 的入口一眼能看出"这是可逆动作"——半年后有人把作废改成删除时，
+ * 这三个字的差别就是他要读的那一行。
+ */
+export async function requireArchive(what = '作废 / 恢复'): Promise<CurrentUser> {
+  const u = await requireUser();
+  if (!canArchive(u.role)) throw new AppError(40301, `${what}需要登录。`, 403);
+  return u;
+}
+
+/** 删除记录：仅管理员。文案必须点明"删了就没了"，且给出可逆的替代动作 */
+export async function requireDelete(what = '删除'): Promise<CurrentUser> {
+  const u = await requireUser();
+  if (!canDeleteRecord(u.role)) {
+    throw new AppError(
+      40301,
+      `只有管理员能${what}。你可以用「作废」——作废之后随时能恢复。`,
+      403,
+    );
   }
   return u;
 }

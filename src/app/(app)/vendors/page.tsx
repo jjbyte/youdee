@@ -5,14 +5,15 @@ import { cx, formatStaleDays, formatTimeRel, todayISO } from '@/lib/format';
 import { SUPPLIER_TYPE_LABELS, SUPPLIER_TYPE_ORDER, supplierTypeLabel } from '@/lib/labels';
 import type { Price, Supplier, SupplierType } from '@/lib/types';
 import { useMe } from '@/lib/use-me';
-import { canManageCatalog } from '@/domain/permissions';
+import { canDeleteRecord, canManageCatalog } from '@/domain/permissions';
 import { Badge } from '@/components/ui/badge';
 import { Button, IconButton } from '@/components/ui/button';
 import { SearchInput } from '@/components/ui/field';
 import { Toast } from '@/components/ui/overlay';
+import { ConfirmModal, type ConfirmSpec } from '@/components/ui/confirm-modal';
 import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
 import { Table, TableWrap, Td, Th } from '@/components/ui/table';
-import { IconPencil, IconPlus, IconRisk, IconSupplierFactory } from '@/components/icons';
+import { IconArchive, IconPencil, IconPlus, IconRestore, IconRisk, IconSupplierFactory, IconTrash } from '@/components/icons';
 import { VendorDetailDrawer } from '@/components/vendors/vendor-detail-drawer';
 import { VendorEditDrawer } from '@/components/vendors/vendor-edit-drawer';
 import { NewVendorModal } from '@/components/vendors/new-vendor-modal';
@@ -39,6 +40,7 @@ function daysSince(iso: string | null | undefined): number | null {
 export default function VendorsPage() {
   const { user } = useMe();
   const isAdmin = user ? canManageCatalog(user.role) : false;
+  const canDelete = user ? canDeleteRecord(user.role) : false;
 
   const [q, setQ] = useState('');
   const [type, setType] = useState<'' | SupplierType>('');
@@ -55,13 +57,23 @@ export default function VendorsPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Supplier | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  /** 含已作废：作废之后要能看见、要能恢复回来 */
+  const [showArchived, setShowArchived] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmSpec | null>(null);
 
 
   const load = useCallback(async () => {
     setStatus('loading');
     try {
       const [list, ...rest] = await Promise.all([
-        api.suppliers({ q: q.trim() || undefined, type: type || undefined, isActive: true, page, limit: PAGE_SIZE }),
+        api.suppliers({
+          q: q.trim() || undefined,
+          type: type || undefined,
+          // 省略 isActive = 全看（含已作废）；否则只看在用的
+          isActive: showArchived ? undefined : true,
+          page,
+          limit: PAGE_SIZE,
+        }),
         ...SUPPLIER_TYPE_ORDER.map((t) =>
           api.suppliers({ type: t, isActive: true, limit: 1 }).catch(() => null),
         ),
@@ -79,7 +91,7 @@ export default function VendorsPage() {
       setError(errorMessage(e));
       setStatus('error');
     }
-  }, [q, type, page]);
+  }, [q, type, page, showArchived]);
 
   useEffect(() => {
     void load();
@@ -102,6 +114,34 @@ export default function VendorsPage() {
   }, []);
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const askArchive = (s: Supplier) =>
+    setConfirm({
+      title: `作废「${s.name}」？`,
+      body: '作废后这家不再出现在录价和比价的可选供应商里，它报过的价都还在。',
+      warn: '作废随时能恢复——打开「含已作废」就能把它找回来。',
+      confirmLabel: '作废',
+      run: async () => {
+        await api.archiveSupplier(s.id);
+        setConfirm(null);
+        setToast(`「${s.name}」已作废。`);
+        void load();
+      },
+    });
+
+  const askRestore = (s: Supplier) =>
+    setConfirm({
+      title: `恢复「${s.name}」？`,
+      body: '恢复后重新出现在录价和比价里，它报过的价直接可用。',
+      confirmLabel: '恢复',
+      tone: 'primary',
+      run: async () => {
+        await api.restoreSupplier(s.id);
+        setConfirm(null);
+        setToast(`「${s.name}」已恢复。`);
+        void load();
+      },
+    });
 
   return (
     <div className="page">
@@ -135,6 +175,10 @@ export default function VendorsPage() {
           ariaLabel="搜索供应商"
           className="min-w-[280px]"
         />
+        <label className="inline-flex items-center gap-[var(--space-2)] t-xs t-3 ml-auto">
+          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          含已作废
+        </label>
       </div>
 
       <div className="flex items-center gap-[var(--space-2)] flex-wrap mt-[var(--space-4)]">
@@ -206,7 +250,12 @@ export default function VendorsPage() {
                     return (
                       <tr key={s.id} onClick={() => void openDetail(s)} style={{ cursor: 'pointer' }}>
                         <Td>
-                          <div className="truncate">{s.name}</div>
+                          <div className="truncate">
+                            {s.name}
+                            {!s.isActive ? (
+                              <span className="badge badge--sm badge--neutral ml-[var(--space-2)]">已作废</span>
+                            ) : null}
+                          </div>
                           <span className="cell-sub truncate">{s.region || s.note || '—'}</span>
                         </Td>
                         <Td>
@@ -261,6 +310,43 @@ export default function VendorsPage() {
                             >
                               看报价
                             </button>
+                            {s.isActive ? (
+                              <IconButton
+                                label={`作废 ${s.name}（随时能恢复）`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  askArchive(s);
+                                }}
+                              >
+                                <IconArchive size={16} />
+                              </IconButton>
+                            ) : (
+                              <IconButton
+                                label={`恢复 ${s.name}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  askRestore(s);
+                                }}
+                              >
+                                <IconRestore size={16} />
+                              </IconButton>
+                            )}
+                            {/*
+                              删除只在管理员这里出现。作废成员也能点，
+                              删除不能——这条界线就是整轮需求的全部意思。
+                            */}
+                            {canDelete ? (
+                              <IconButton
+                                label={`删除 ${s.name}（不可恢复，仅管理员）`}
+                                className="t-danger"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirmDelete(s);
+                                }}
+                              >
+                                <IconTrash size={16} />
+                              </IconButton>
+                            ) : null}
                           </div>
                         </Td>
                       </tr>
@@ -338,6 +424,7 @@ export default function VendorsPage() {
       />
 
       <Toast message={toast} onClose={() => setToast(null)} />
+      <ConfirmModal spec={confirm} onClose={() => setConfirm(null)} />
 
       <div className="t-2xs t-3 mt-[var(--space-4)]">
         今天是 {todayISO()}。最后更新超过 90 天的会标成琥珀——不是它错了，是可能不准了。

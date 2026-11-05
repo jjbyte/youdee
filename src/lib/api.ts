@@ -182,14 +182,31 @@ export const api = {
     request<Category[] | { material?: Category[]; personnel?: Category[] }>(
       `/categories${qs({ domain })}`,
     ),
-  suppliers: (params: { q?: string; type?: string; isActive?: boolean; page?: number; limit?: number } = {}) =>
-    request<Page<Supplier>>(`/suppliers${qs(params)}`),
+  createCategory: (body: { domain: 'material' | 'personnel'; name: string; parentId?: string | null; sortOrder?: number }) =>
+    request<Category>('/categories', { method: 'POST', body }),
+  /** 改名是最高频的分类维护动作：客户口里的叫法一年会变好几次 */
+  updateCategory: (id: string, body: { name?: string; parentId?: string | null; sortOrder?: number }) =>
+    request<Category>(`/categories/${id}`, { method: 'PATCH', body }),
+  suppliers: (params: {
+    q?: string;
+    type?: string;
+    /** true = 只看在用的；省略 = 全看（含已作废） */
+    isActive?: boolean;
+    page?: number;
+    limit?: number;
+  } = {}) => request<Page<Supplier>>(`/suppliers${qs(params)}`),
   supplier: (id: string) => request<Supplier>(`/suppliers/${id}`),
   createSupplier: (body: Record<string, unknown>) =>
     request<Supplier>('/suppliers', { method: 'POST', body }),
   updateSupplier: (id: string, body: Record<string, unknown>) =>
     request<Supplier>(`/suppliers/${id}`, { method: 'PATCH', body }),
-  deleteSupplier: (id: string) => request<null>(`/suppliers/${id}`, { method: 'DELETE' }),
+  /** 作废 / 恢复：成员也能做，可逆 */
+  archiveSupplier: (id: string) =>
+    request<{ id: string; name: string; isActive: boolean }>(`/suppliers/${id}/archive`, { method: 'POST' }),
+  restoreSupplier: (id: string) =>
+    request<{ id: string; name: string; isActive: boolean }>(`/suppliers/${id}/restore`, { method: 'POST' }),
+  /** 真删除：仅管理员。有价格会被拒（40904）并说明影响面 */
+  deleteSupplier: (id: string) => request<{ deleted: boolean; name: string }>(`/suppliers/${id}`, { method: 'DELETE' }),
 
   // ── 主体 ──
   items: (params: {
@@ -197,6 +214,8 @@ export const api = {
     q?: string;
     categoryId?: string;
     supplierId?: string;
+    /** true 只看在用（默认）；false 只看已作废；'all' 全看 */
+    isActive?: boolean | 'all';
     page?: number;
     limit?: number;
   }) => request<Page<ItemListItem>>(`/items${qs(params)}`),
@@ -204,8 +223,17 @@ export const api = {
   createItem: (body: Record<string, unknown>) => request<{ id: string }>('/items', { method: 'POST', body }),
   updateItem: (id: string, body: Record<string, unknown>) =>
     request<ItemDetail>(`/items/${id}`, { method: 'PATCH', body }),
-  /** 停用而不是删除：历史报价单引用的主体名必须还能解析出来 */
-  deactivateItem: (id: string) => request<ItemDetail>(`/items/${id}`, { method: 'DELETE' }),
+  /** 作废 / 恢复：成员也能做 */
+  archiveItem: (id: string) =>
+    request<{ id: string; name: string; isActive: boolean }>(`/items/${id}/archive`, { method: 'POST' }),
+  restoreItem: (id: string) =>
+    request<{ id: string; name: string; isActive: boolean }>(`/items/${id}/restore`, { method: 'POST' }),
+  /** 真删除：仅管理员，连带删掉这个主体自己的价（返回里带价格条数） */
+  deleteItem: (id: string) =>
+    request<{ id: string; name: string; itemType: string; priceCount: number; quoteCount: number }>(
+      `/items/${id}`,
+      { method: 'DELETE' },
+    ),
   searchLite: (q: string, itemType?: 'material' | 'personnel', limit = 20) =>
     request<ItemListItem[]>(`/items/search-lite${qs({ q, itemType, limit })}`),
 
@@ -229,8 +257,13 @@ export const api = {
   prices: (params: { itemId?: string; supplierId?: string; status?: string; page?: number; limit?: number } = {}) =>
     request<Page<Price>>(`/prices${qs(params)}`),
   createPrice: (body: Record<string, unknown>) => request<Price>('/prices', { method: 'POST', body }),
+  /** 作废：成员也能做，可逆 */
   archivePrice: (id: string, reason?: string) =>
     request<Price>(`/prices/${id}/archive`, { method: 'POST', body: { reason } }),
+  /** 撤销作废。撞上同口径在效价会 40902（消息里带撞的是哪家 / 哪段时间） */
+  restorePrice: (id: string) => request<Price>(`/prices/${id}/restore`, { method: 'POST' }),
+  /** 真删除：仅管理员，连带删掉变更日志与附件 */
+  deletePrice: (id: string) => request<{ deleted: boolean; id: string }>(`/prices/${id}`, { method: 'DELETE' }),
 
   // ── 报价单 ──
   quotes: (params: { q?: string; status?: string; projectType?: string; page?: number; limit?: number } = {}) =>
@@ -273,6 +306,8 @@ export const api = {
   issueQuote: (id: string) => request<QuoteDetail>(`/quotes/${id}/issue`, { method: 'POST' }),
   voidQuote: (id: string, reason?: string) =>
     request<QuoteDetail>(`/quotes/${id}/void`, { method: 'POST', body: { reason } }),
+  /** 撤销作废：成员也能做。回到「已发出」还是「草稿」由 issued_at 决定 */
+  restoreQuote: (id: string) => request<QuoteDetail>(`/quotes/${id}/restore`, { method: 'POST' }),
   newVersion: (id: string, copyItems = true) =>
     request<QuoteDetail>(`/quotes/${id}/new-version`, { method: 'POST', body: { copyItems } }),
   taxBasisPreview: (id: string, taxStatement: 'inclusive' | 'exclusive') =>

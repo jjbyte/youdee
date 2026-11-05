@@ -1,4 +1,4 @@
-import { body, ok, optStr, requireAdmin, requireUser, reqStr, reqUuid } from '@/server/http';
+import { body, ok, optStr, requireAdmin, requireDelete, requireUser, reqStr, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { deleteSupplier, getSupplier, patchSupplier } from '@/server/services/suppliers.service';
 
@@ -25,8 +25,8 @@ export const PATCH = route(async (req, params) => {
   return ok(updated);
 });
 
+/** 真删除：仅管理员。有价格时拒绝并说明影响面，不连带删（见 suppliers.service） */
 export const DELETE = route(async (_req, params) => {
-  await requireAdmin('删除供应商');
-  await deleteSupplier(reqUuid(params.id, 'id'));
-  return ok(null);
+  await requireDelete('删除供应商');
+  return ok(await deleteSupplier(reqUuid(params.id, 'id')));
 });

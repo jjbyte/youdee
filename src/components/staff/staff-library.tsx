@@ -14,11 +14,12 @@ import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
 import { NewItemButton } from '@/components/new-item-button';
 import { ItemEditDrawer } from '@/components/item-edit-drawer';
 import { useMe } from '@/lib/use-me';
-import { canManageCatalog } from '@/domain/permissions';
+import { canDeleteRecord, canManageCatalog } from '@/domain/permissions';
 import { IconPencil } from '@/components/icons';
 import { AddToQuoteModal } from '@/components/add-to-quote-modal';
 import { Toast } from '@/components/ui/overlay';
-import { IconSearch, IconStaff } from '@/components/icons';
+import { ConfirmModal, type ConfirmSpec } from '@/components/ui/confirm-modal';
+import { IconArchive, IconRestore, IconSearch, IconStaff, IconTrash } from '@/components/icons';
 
 const PAGE_SIZE = 20;
 const MODE_ORDER = ['per_day', 'per_event', 'per_person_day', 'per_hour', 'per_half_day'];
@@ -67,6 +68,10 @@ export function StaffLibrary({ guest = false }: { guest?: boolean }) {
   const [editId, setEditId] = useState<string | null>(null);
   const { user } = useMe();
   const isAdmin = user ? canManageCatalog(user.role) : false;
+  const canDelete = user ? canDeleteRecord(user.role) : false;
+  /** 含已作废：不过滤 is_active 才看得见作废的人，恢复功能才有入口 */
+  const [showArchived, setShowArchived] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmSpec | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -76,6 +81,7 @@ export function StaffLibrary({ guest = false }: { guest?: boolean }) {
         itemType: 'personnel',
         q: q.trim() || undefined,
         categoryId: categoryId || undefined,
+        isActive: showArchived ? 'all' : true,
         page,
         limit: PAGE_SIZE,
       });
@@ -86,7 +92,7 @@ export function StaffLibrary({ guest = false }: { guest?: boolean }) {
       setError(errorMessage(e));
       setStatus('error');
     }
-  }, [q, categoryId, page]);
+  }, [q, categoryId, page, showArchived]);
 
   useEffect(() => {
     void load();
@@ -133,6 +139,53 @@ export function StaffLibrary({ guest = false }: { guest?: boolean }) {
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  const askArchive = (it: ItemListItem) =>
+    setConfirm({
+      title: `作废「${it.name}」？`,
+      body: '作废后不再出现在人员库、嘉宾价和选品栏里，历史报价单不受影响。',
+      warn: '作废随时能恢复——打开「含已作废」就能把他找回来。',
+      confirmLabel: '作废',
+      run: async () => {
+        await api.archiveItem(it.id);
+        setConfirm(null);
+        setToast(`「${it.name}」已作废。要恢复就打开「含已作废」再点恢复。`);
+        void load();
+      },
+    });
+
+  const askRestore = (it: ItemListItem) =>
+    setConfirm({
+      title: `恢复「${it.name}」？`,
+      body: '恢复后重新出现在人员库里，他的价也都还在。',
+      confirmLabel: '恢复',
+      tone: 'primary',
+      run: async () => {
+        await api.restoreItem(it.id);
+        setConfirm(null);
+        setToast(`「${it.name}」已恢复。`);
+        void load();
+      },
+    });
+
+  const askDelete = (it: ItemListItem) =>
+    setConfirm({
+      title: `删掉「${it.name}」？`,
+      body: '删掉后这个人从库里消失，不会再回来。',
+      warn:
+        it.priceSupplierCount > 0
+          ? `他有 ${it.priceSupplierCount} 家的报价，会一起删掉。已经发出的报价单里的数字不变。如果只是暂时不用，用「作废」更好。`
+          : '删除不可恢复。如果只是暂时不用，用「作废」更合适。',
+      confirmLabel: '确认删掉',
+      run: async () => {
+        const res = await api.deleteItem(it.id);
+        setConfirm(null);
+        setToast(
+          res.priceCount > 0 ? `「${res.name}」已删除，连带删掉 ${res.priceCount} 条报价。` : `「${res.name}」已删除。`,
+        );
+        void load();
+      },
+    });
+
   return (
     <div className="page">
       <div className="page-head">
@@ -170,6 +223,10 @@ export function StaffLibrary({ guest = false }: { guest?: boolean }) {
           inputRef={searchRef}
           className="min-w-[280px]"
         />
+        <label className="inline-flex items-center gap-[var(--space-2)] t-xs t-3 ml-auto">
+          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          含已作废
+        </label>
       </div>
 
       <div className="flex items-center gap-[var(--space-2)] flex-wrap mt-[var(--space-4)]">
@@ -260,9 +317,11 @@ export function StaffLibrary({ guest = false }: { guest?: boolean }) {
                         </Td>
                         <Td>
                           <div className="truncate">{it.name}</div>
-                          <span className="cell-sub truncate">{it.spec ?? '—'}</span>
-                        </Td>
-                        <Td>
+                          <span className="cell-sub truncate">
+                            {!it.isActive ? <span className="badge badge--sm badge--neutral mr-[var(--space-2)]">已作废</span> : null}
+                            {it.spec ?? '—'}
+                          </span>
+                        </Td>                        <Td>
                           <span className="t-xs">{it.categoryName}</span>
                         </Td>
                         <Td>
@@ -334,6 +393,43 @@ export function StaffLibrary({ guest = false }: { guest?: boolean }) {
                             >
                               比价
                             </Link>
+                            {it.isActive ? (
+                              <button
+                                type="button"
+                                className="btn btn--link"
+                                title="作废后不再出现，随时能恢复"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  askArchive(it);
+                                }}
+                              >
+                                作废
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn--link"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  askRestore(it);
+                                }}
+                              >
+                                <IconRestore size={14} />
+                                恢复
+                              </button>
+                            )}
+                            {canDelete ? (
+                              <button
+                                type="button"
+                                className="btn btn--link t-danger"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  askDelete(it);
+                                }}
+                              >
+                                <IconTrash size={14} />
+                              </button>
+                            ) : null}
                           </div>
                         </Td>
                       </tr>
@@ -399,6 +495,7 @@ export function StaffLibrary({ guest = false }: { guest?: boolean }) {
       />
 
       <Toast message={toast} onClose={() => setToast(null)} />
+      <ConfirmModal spec={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

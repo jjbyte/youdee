@@ -11,7 +11,11 @@ import { Button } from '@/components/ui/button';
 import { SearchInput, Select } from '@/components/ui/field';
 import { Table, TableWrap, Td, Th } from '@/components/ui/table';
 import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
+import { ConfirmModal, type ConfirmSpec } from '@/components/ui/confirm-modal';
+import { Toast } from '@/components/ui/overlay';
 import { NewQuoteButton } from '@/components/new-quote-button';
+import { useMe } from '@/lib/use-me';
+import { canDeleteRecord } from '@/domain/permissions';
 import { IconQuote } from '@/components/icons';
 
 const PAGE_SIZE = 20;
@@ -44,6 +48,10 @@ export default function QuotesPage() {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const { user } = useMe();
+  const isAdmin = user ? canDeleteRecord(user.role) : false;
+  const [confirm, setConfirm] = useState<ConfirmSpec | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -95,6 +103,62 @@ export default function QuotesPage() {
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const afterChange = async (message: string) => {
+    setConfirm(null);
+    setToast(message);
+    await load();
+  };
+
+  /** 作废：成员也能做。草稿与已发出都能作废——草稿不能作废的话，成员建错一张单就永远清不掉 */
+  const askVoid = (r: QuoteListItem) =>
+    setConfirm({
+      title: `作废 ${r.quoteNo}？`,
+      body: (
+        <>
+          作废后这张单不再出现在{QUOTE_STATUS_LABELS[r.status]}里，挪到「已作废」筛选下。
+          {r.status === 'issued' ? '客户手里那份不受影响——它已经在客户手上了。' : ''}
+        </>
+      ),
+      warn: '作废随时能恢复。恢复后回到作废前的状态，金额和行明细都不会变。',
+      confirmLabel: '作废',
+      run: async () => {
+        await api.voidQuote(r.id);
+        await afterChange(`${r.quoteNo} 已作废。要反悔就点「恢复」。`);
+      },
+    });
+
+  const askRestore = (r: QuoteListItem) =>
+    setConfirm({
+      title: `恢复 ${r.quoteNo}？`,
+      body:
+        r.issuedAt !== null
+          ? '这张单当年真的发给过客户，恢复后回到「已发出」。'
+          : '这张单从来没发出过，恢复后回到「草稿」，可以接着编。',
+      warn: '恢复只改状态，金额和行明细都不变。',
+      confirmLabel: '恢复',
+      tone: 'primary',
+      run: async () => {
+        await api.restoreQuote(r.id);
+        await afterChange(`${r.quoteNo} 已恢复。`);
+      },
+    });
+
+  const askDelete = (r: QuoteListItem) =>
+    setConfirm({
+      title: `删掉 ${r.quoteNo}？`,
+      body: (
+        <>
+          删掉后这张单从所有列表里消失，<span className="fw-semi">不会再回来</span>。
+        </>
+      ),
+      warn: '删除不可恢复。如果只是这单不做了，用「作废」更合适——作废能恢复，而且台账还在。',
+      confirmLabel: '确认删掉',
+      run: async () => {
+        await api.deleteQuote(r.id);
+        await afterChange(`${r.quoteNo} 已删除。`);
+      },
+    });
 
   return (
     <div className="page">
@@ -154,7 +218,8 @@ export default function QuotesPage() {
         <span className="ml-auto t-xs t-3">
           草稿 <span className="num">{counts.draft ?? 0}</span> · 已发出{' '}
           <span className="num">{counts.issued ?? 0}</span>
-          {status === '' ? null : <span> · 已作废 5 张默认不列，筛选里可选</span>}
+          {/* 原来这里硬编码了「已作废 5 张」，删了几张之后这句话一直在骗人 */}
+          {status === 'void' ? null : <span> · 已作废的单在筛选里看</span>}
         </span>
       </div>
 
@@ -229,13 +294,50 @@ export default function QuotesPage() {
                         {r.eventDate ? <span className="cell-sub">活动 {formatDate(r.eventDate)}</span> : null}
                       </Td>
                       <Td align="right">
-                        <Link
-                          href={r.status === 'draft' ? `/quotes/${r.id}/edit` : `/quotes/${r.id}/preview`}
-                          className="btn btn--link"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {r.status === 'draft' ? '继续编' : '看客户版'}
-                        </Link>
+                        <div className="flex items-center justify-end gap-[var(--space-3)]">
+                          <Link
+                            href={r.status === 'draft' ? `/quotes/${r.id}/edit` : `/quotes/${r.id}/preview`}
+                            className="btn btn--link"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {r.status === 'draft' ? '继续编' : '看客户版'}
+                          </Link>
+                          {r.status === 'void' ? (
+                            <button
+                              type="button"
+                              className="btn btn--link"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                askRestore(r);
+                              }}
+                            >
+                              恢复
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn--link"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                askVoid(r);
+                              }}
+                            >
+                              作废
+                            </button>
+                          )}
+                          {isAdmin ? (
+                            <button
+                              type="button"
+                              className="btn btn--link t-danger"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                askDelete(r);
+                              }}
+                            >
+                              删除
+                            </button>
+                          ) : null}
+                        </div>
                       </Td>
                     </tr>
                   ))}
@@ -261,6 +363,9 @@ export default function QuotesPage() {
           </>
         ) : null}
       </div>
+
+      <ConfirmModal spec={confirm} onClose={() => setConfirm(null)} />
+      <Toast message={toast} onClose={() => setToast(null)} />
     </div>
   );
 }

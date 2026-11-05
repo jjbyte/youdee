@@ -118,3 +118,84 @@ export async function archivePrice(id: string, reason: string | null, actor: Cur
   });
   return { ...toPriceDTO(row!, tiers.get(id) ?? [], stale, today()), effective_state: state.state };
 }
+
+/**
+ * 恢复一条已归档的价（成员可用）。
+ *
+ * 归档时 EXCLUDE 约束把它从六维空间里放了出来（`WHERE status <> 'archived'`），
+ * 所以恢复**可能撞上这期间新录的同口径价**。撞上了不能硬改：两条价在同一段时间
+ * 同时有效，取价就变成"看数据库心情"。这里先查一次，把撞上的是哪家、哪段时间说出来，
+ * 让人自己决定是先关掉新的那条、还是不要恢复。
+ */
+export async function restorePrice(id: string, actor: CurrentUser): Promise<PriceDTO> {
+  const current = await getPriceRow(id);
+  if (!current) throw new AppError(40401, '这条价格不存在。', 404);
+  if (current.status !== 'archived') {
+    throw new AppError(40907, '这条价没被归档过，不需要恢复。', 409);
+  }
+  await tx(async (c) => {
+    const clash = await c.query<{ id: string; name: string; effective_from: string; effective_to: string | null }>(
+      `SELECT p.id, s.name,
+              p.effective_from::text AS effective_from,
+              p.effective_to::text   AS effective_to
+         FROM prices p JOIN suppliers s ON s.id = p.supplier_id
+        WHERE p.id <> $1
+          AND p.item_id = $2 AND p.supplier_id = $3 AND p.pricing_nature = $4
+          AND p.tax_included = $5 AND COALESCE(p.unit_mode, '') = COALESCE($6, '')
+          AND p.status <> 'archived'
+          AND daterange(p.effective_from, COALESCE(p.effective_to + 1, 'infinity'::date), '[)')
+              && daterange($7::date, COALESCE($8::date + 1, 'infinity'::date), '[)')
+        ORDER BY p.effective_from
+        LIMIT 1`,
+      [
+        id,
+        current.item_id,
+        current.supplier_id,
+        current.pricing_nature,
+        current.tax_included,
+        current.unit_mode,
+        current.effective_from,
+        current.effective_to,
+      ],
+    );
+    const hit = clash.rows[0];
+    if (hit) {
+      const span = hit.effective_to ? `${hit.effective_from} 至 ${hit.effective_to}` : `${hit.effective_from} 起`;
+      throw new AppError(
+        40902,
+        `恢复不了：${hit.name} 在这段时间（${span}）已经有一条有效的同口径价，两条并存会让取价不可预期。先把新的那条作废，再恢复这条。`,
+        409,
+        { detail: { conflict_price_id: hit.id } },
+      );
+    }
+    await c.query("UPDATE prices SET status='active', updated_at=now() WHERE id=$1", [id]);
+    await c.query(
+      `INSERT INTO price_change_logs (price_id, action, snapshot, prev_snapshot, changed_by, note)
+       VALUES ($1,'restored',$2::jsonb,$3::jsonb,$4,$5)`,
+      [id, JSON.stringify({ status: 'active' }), JSON.stringify({ status: 'archived' }), actor.id, '撤销作废'],
+    );
+  });
+  const row = await getPriceRow(id);
+  const tiers = await tiersByPriceIds([id]);
+  return toPriceDTO(row!, tiers.get(id) ?? [], await staleDaysThreshold(), today());
+}
+
+/**
+ * 真删除（仅管理员）。**连带删掉这条价的变更日志与附件**。
+ *
+ * 附件（报价截图、供应商链接）跟着价走是显然的；变更日志也一起删，是因为
+ * 它记的是"这条价怎么变过"，价本身没了之后这些记录只剩噪音，
+ * 而且 price_change_logs 的外键是 RESTRICT——不删它，价根本删不掉。
+ *
+ * 已发出的报价单不受影响：quote_items.price_id 是 ON DELETE SET NULL，
+ * 行上的成本单价与供应商名是快照。
+ */
+export async function deletePrice(id: string) {
+  const current = await getPriceRow(id);
+  if (!current) throw new AppError(40401, '这条价格不存在。', 404);
+  await tx(async (c) => {
+    await c.query('DELETE FROM price_change_logs WHERE price_id = $1', [id]);
+    await c.query('DELETE FROM prices WHERE id = $1', [id]);
+  });
+  return { deleted: true, id };
+}

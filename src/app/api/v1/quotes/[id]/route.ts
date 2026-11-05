@@ -25,8 +25,9 @@ export const PATCH = route(async (req, params) => {
   return ok(updated);
 });
 
+/** 删除：仅管理员，任意状态（软删，台账仍可在库里查证）。成员请用「作废」 */
 export const DELETE = route(async (_req, params) => {
-  await requireUser();
-  await deleteQuote(reqUuid(params.id, 'id'));
+  const actor = await requireUser();
+  await deleteQuote(reqUuid(params.id, 'id'), actor);
   return ok(null);
 });

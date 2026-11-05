@@ -156,11 +156,36 @@ export async function patchSupplier(id: string, input: Partial<SupplierInput>) {
 }
 
 export async function deleteSupplier(id: string) {
-  const current = await one<{ id: string }>('SELECT id FROM suppliers WHERE id = $1', [id]);
+  const current = await one<{ id: string; name: string }>('SELECT id, name FROM suppliers WHERE id = $1', [id]);
   if (!current) throw new AppError(40401, '这家供应商不存在。', 404);
-  const used = await one<{ n: string }>('SELECT count(*)::text AS n FROM prices WHERE supplier_id = $1', [id]);
-  if (Number(used?.n ?? 0) > 0) {
-    throw new AppError(40904, '这家供应商还有价格记录，不能删除。可以先停用（is_active=false）。', 409);
+  const used = await one<{ n: string; items: string }>(
+    'SELECT count(*)::text AS n, count(DISTINCT item_id)::text AS items FROM prices WHERE supplier_id = $1',
+    [id],
+  );
+  const priceCount = Number(used?.n ?? 0);
+  /**
+   * 有价就**拒绝**，不像物料那样连带删。
+   *
+   * 差别在爆炸半径：删一个物料只带走它自己那几家的价；删一家供应商会一次性带走
+   * 十几个物料上的价——那些物料的其他供应商报价还在，于是比价表里"最便宜的一家"
+   * 会静默换人，而没人知道原因。这条拒绝不是保守，是唯一能解释清楚的做法。
+   */
+  if (priceCount > 0) {
+    throw new AppError(
+      40904,
+      `这家供应商还有 ${priceCount} 条价格（涉及 ${used?.items ?? 0} 个物料），删掉会连带影响这些物料的比价。先删掉它的价，或者用「作废」。`,
+      409,
+      { detail: { price_count: priceCount, item_count: Number(used?.items ?? 0) } },
+    );
   }
   await q('DELETE FROM suppliers WHERE id = $1', [id]);
+  return { deleted: true, name: current.name };
+}
+
+/** 作废 / 恢复：只有 is_active 一位之差。作废后不再出现在录价与比价的可选供应商里 */
+export async function setSupplierActive(id: string, active: boolean) {
+  const row = await one<{ id: string; name: string }>('SELECT id, name FROM suppliers WHERE id = $1', [id]);
+  if (!row) throw new AppError(40401, '这家供应商不存在。', 404);
+  await q('UPDATE suppliers SET is_active = $2, updated_at = now() WHERE id = $1', [id, active]);
+  return { id: row.id, name: row.name, is_active: active };
 }

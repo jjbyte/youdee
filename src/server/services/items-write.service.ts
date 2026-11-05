@@ -4,7 +4,7 @@
  * 停用而非删除：历史报价单引用的主体名必须还能解析出来。
  * 有价格记录后不允许改基准单位（42204）：换单位等于把历史价全部换了口径。
  */
-import { one, q } from '../db';
+import { one, q, tx } from '../db';
 import { AppError } from '../http';
 import { ITEM_SELECT, getItemDetail, type ItemRow } from './items-read.service';
 
@@ -111,4 +111,62 @@ export async function deactivateItem(id: string) {
   if (!row) throw new AppError(40401, '这个计价主体不存在。', 404);
   await q('UPDATE items SET is_active = false, updated_at = now() WHERE id = $1', [id]);
   return { is_active: false };
+}
+
+/** 作废 / 恢复：同一个动作的两个方向，只有 is_active 一位之差 */
+export async function setItemActive(id: string, active: boolean) {
+  const row = await one<{ id: string; name: string }>('SELECT id, name FROM items WHERE id = $1', [id]);
+  if (!row) throw new AppError(40401, '这个计价主体不存在。', 404);
+  await q('UPDATE items SET is_active = $2, updated_at = now() WHERE id = $1', [id, active]);
+  // 返回体一律 snake_case（接口约定），前端边界统一转 camelCase——
+  // 这里写 isActive 的话，前端拿到的键名跟别处不一致，自检脚本也会读空
+  return { id: row.id, name: row.name, is_active: active };
+}
+
+/** 删之前先数清楚会连带删掉什么——确认框要写具体数字，否则等于让用户闭眼点 */
+export async function itemDeleteImpact(id: string) {
+  const row = await one<{ id: string; name: string; item_type: string }>(
+    'SELECT id, name, item_type FROM items WHERE id = $1',
+    [id],
+  );
+  if (!row) throw new AppError(40401, '这个计价主体不存在。', 404);
+  const counts = await one<{ prices: string; quotes: string }>(
+    `SELECT (SELECT count(*) FROM prices WHERE item_id = $1)::text AS prices,
+            (SELECT count(DISTINCT quote_id) FROM quote_items WHERE item_id = $1)::text AS quotes`,
+    [id],
+  );
+  return {
+    id: row.id,
+    name: row.name,
+    itemType: row.item_type,
+    priceCount: Number(counts?.prices ?? 0),
+    quoteCount: Number(counts?.quotes ?? 0),
+  };
+}
+
+/**
+ * 真删除（仅管理员）。**连带删掉这个主体自己的价格记录**。
+ *
+ * 为什么连带而不是拒绝（对比供应商那条是拒绝）：
+ *   价格是主体自己的属性，"删物料却留下它的价"会造出一批查不到主体的孤儿价，
+ *   它们既不参与比价（item 没了），又永远占着库——比连带删掉更难收拾。
+ *   供应商不一样：它被多个物料共用，删一家会连带删掉几十个物料的价，爆炸半径完全不同。
+ *
+ * 历史报价单不受影响：quote_items 的 item_id / price_id 是 ON DELETE SET NULL，
+ * 行上用 item_name_snapshot 等快照字段，客户手里那份的数字不会变。
+ */
+export async function deleteItem(id: string) {
+  const impact = await itemDeleteImpact(id);
+  await tx(async (c) => {
+    // price_change_logs 是 RESTRICT：不先删它，价就删不掉
+    await c.query(
+      `DELETE FROM price_change_logs
+        WHERE price_id IN (SELECT id FROM prices WHERE item_id = $1)`,
+      [id],
+    );
+    // price_tiers / price_attachments 是 CASCADE，跟着价一起走
+    await c.query('DELETE FROM prices WHERE item_id = $1', [id]);
+    await c.query('DELETE FROM items WHERE id = $1', [id]);
+  });
+  return { deleted: true, name: impact.name, priceCount: impact.priceCount };
 }

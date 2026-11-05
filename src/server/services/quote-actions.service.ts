@@ -12,7 +12,7 @@
 import { q, today, tx } from '../db';
 import { AppError } from '../http';
 import { calcLine } from '@/domain/quote-calc';
-import { canDuplicate, canIssue, canVoid } from '@/domain/quote-status';
+import { canDuplicate, canIssue, canRestore, canVoid } from '@/domain/quote-status';
 import type { CurrentUser } from '../auth/session';
 import {
   getQuoteRow,
@@ -97,7 +97,7 @@ export async function voidQuote(id: string, reason: string | null) {
   const quote = await getQuoteRow(id);
   if (!quote) throw new AppError(40401, '这张报价单不存在。', 404);
   if (!canVoid(quote.status as 'draft' | 'issued' | 'void')) {
-    throw new AppError(40907, '只有已发出的报价单可以作废；草稿请直接删除。', 409);
+    throw new AppError(40907, '这张单已经作废过了。', 409);
   }
   await q(
     `UPDATE quotes
@@ -106,6 +106,26 @@ export async function voidQuote(id: string, reason: string | null) {
       WHERE id=$1`,
     [id, reason ? `作废原因：${reason}` : null],
   );
+  return quoteDetail(id);
+}
+
+/**
+ * 撤销作废（成员可用）。
+ *
+ * 回到哪个状态**看 issued_at，不看调用方**：
+ *   有出单时间 = 这单真的发给过客户，恢复成「已发出」才是它的本来面目；
+ *   没有出单时间 = 它本来就是草稿，恢复成草稿继续编。
+ * 不能一律回到 issued：那样一张被作废的空草稿会变成"已发出但零行"，
+ * 而列表里再点进去看到的是客户版预览——一个空白的客户版。
+ */
+export async function restoreQuote(id: string) {
+  const quote = await getQuoteRow(id);
+  if (!quote) throw new AppError(40401, '这张报价单不存在。', 404);
+  if (!canRestore(quote.status as 'draft' | 'issued' | 'void')) {
+    throw new AppError(40907, '只有已作废的报价单可以恢复。', 409);
+  }
+  const backTo = quote.issued_at ? 'issued' : 'draft';
+  await q('UPDATE quotes SET status=$2, updated_at=now() WHERE id=$1', [id, backTo]);
   return quoteDetail(id);
 }
 

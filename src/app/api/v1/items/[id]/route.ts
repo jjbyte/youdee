@@ -1,7 +1,7 @@
-import { body, ok, optStr, requireAdmin, requireUser, reqStr, reqUuid } from '@/server/http';
+import { body, ok, optStr, requireAdmin, requireDelete, requireUser, reqStr, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { getItemDetail } from '@/server/services/items-read.service';
-import { deactivateItem, patchItem } from '@/server/services/items-write.service';
+import { deleteItem, itemDeleteImpact, patchItem } from '@/server/services/items-write.service';
 
 export const GET = route(async (_req, params) => {
   await requireUser();
@@ -26,8 +26,18 @@ export const PATCH = route(async (req, params) => {
   return ok(updated);
 });
 
-/** 停用而不是删除：历史报价单引用的主体名必须还能解析出来 */
+/**
+ * 真删除：仅管理员，连带删掉这个主体自己的价。
+ *
+ * 0.1.12 及以前这个方法接的是"停用"——名字叫 DELETE、行为却是停用，
+ * 管理员以为删干净了，其实还在库里躺着，只是被列表过滤掉了。
+ * 现在 DELETE 就是删，停用/作废走 /archive。
+ */
 export const DELETE = route(async (_req, params) => {
-  await requireAdmin('停用计价主体');
-  return ok(await deactivateItem(reqUuid(params.id, 'id')));
+  await requireDelete('删除计价主体');
+  const id = reqUuid(params.id, 'id');
+  // 先取影响面再删：返回值里带价格条数，前端用它显示"连带删掉 N 条价"
+  const impact = await itemDeleteImpact(id);
+  await deleteItem(id);
+  return ok(impact);
 });

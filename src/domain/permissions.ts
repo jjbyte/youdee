@@ -17,7 +17,7 @@ export function canCreatePrice(role: Role): boolean {
   return role === 'admin' || role === 'member';
 }
 
-/** 覆盖/停用已有价格、改折算系数与交易性质、刷新草稿、删主体删供应商：仅 admin */
+/** 覆盖已有价、改折算系数与交易性质、刷新草稿：仅 admin（作废/恢复不在此列，见 canArchive） */
 export function canOverridePrice(role: Role): boolean {
   return role === 'admin';
 }
@@ -29,6 +29,24 @@ export function canViewCost(_role: Role): boolean {
 
 /** 导出含成本的内部版：仅 admin。区分逻辑：屏幕可见是即时行为，导出文件是可转发资产 */
 export function canExportInternal(role: Role): boolean {
+  return role === 'admin';
+}
+
+/**
+ * 作废 / 恢复：**两种角色都可**（2026-11-05 客户要求）。
+ *
+ * 这里的分界不是"重要性"，是**可逆性**：
+ *   作废只是换个状态，一条「恢复」就回来了，误操作的代价是几秒钟；
+ *   删除是真的从库里消失，误操作的代价是一下午的重新录价。
+ * 把可逆动作也锁成管理员，结果不是更安全，是成员攒了一堆废单废料没人清，
+ * 或者干脆绕开系统在 Excel 里做——那才是最糟的安全状态。
+ */
+export function canArchive(role: Role): boolean {
+  return role === 'admin' || role === 'member';
+}
+
+/** 删除记录（报价单 / 物料 / 人员 / 物料价 / 供应商）：仅 admin，不可恢复 */
+export function canDeleteRecord(role: Role): boolean {
   return role === 'admin';
 }
 
@@ -61,8 +79,10 @@ export const ROLE_CAPABILITIES: RoleCapability[] = [
   { label: '屏幕上看成本与毛利', admin: true, member: true },
   { label: '手填成本（只影响本单）', admin: true, member: true },
   { label: '新建一条价（含版本化复制）', admin: true, member: true },
+  { label: '作废 / 恢复（可反悔）', admin: true, member: true },
   { label: '覆盖 / 停用已有价', admin: true, member: false },
   { label: '改交易性质 / 折算系数', admin: true, member: false },
+  { label: '删除报价单 / 物料 / 人员 / 价 / 供应商', admin: true, member: false },
   { label: '导出客户版', admin: true, member: true },
   { label: '导出内部版（含成本）', admin: true, member: false },
   { label: '供应商档案 / 分类字典', admin: true, member: false },

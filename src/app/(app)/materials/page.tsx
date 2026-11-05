@@ -15,7 +15,10 @@ import { AddToQuoteModal } from '@/components/add-to-quote-modal';
 import { NewItemButton } from '@/components/new-item-button';
 import { PriceEntryDrawer } from '@/components/price-entry-drawer';
 import { ItemEditDrawer } from '@/components/item-edit-drawer';
-import { IconPencil, IconPlus, IconQuote } from '@/components/icons';
+import { ConfirmModal, type ConfirmSpec } from '@/components/ui/confirm-modal';
+import { useMe } from '@/lib/use-me';
+import { canDeleteRecord } from '@/domain/permissions';
+import { IconArchive, IconPencil, IconPlus, IconQuote, IconRestore, IconTrash } from '@/components/icons';
 
 const PAGE_SIZE = 20;
 
@@ -38,6 +41,11 @@ export default function MaterialsPage() {
   const [toast, setToast] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const initialized = useRef(false);
+  const { user } = useMe();
+  const isAdmin = user ? canDeleteRecord(user.role) : false;
+  /** 已作废的默认不列。要看（或者要恢复回来）才打开它 */
+  const [showArchived, setShowArchived] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmSpec | null>(null);
 
   // 筛选条件从 URL 读一次（可分享/收藏），之后写回 URL 由 syncUrl 负责
   useEffect(() => {
@@ -84,6 +92,8 @@ export default function MaterialsPage() {
           q: q || undefined,
           categoryId: categoryId || undefined,
           supplierId: supplierId || undefined,
+          // 已作废的平时不出现；打开「含已作废」才一起捞出来，否则没法恢复
+          isActive: showArchived ? 'all' : true,
           page: targetPage,
           limit: PAGE_SIZE,
         });
@@ -99,7 +109,7 @@ export default function MaterialsPage() {
         setStatus('error');
       }
     },
-    [q, categoryId, supplierId, router],
+    [q, categoryId, supplierId, router, showArchived],
   );
 
   useEffect(() => {
@@ -137,6 +147,57 @@ export default function MaterialsPage() {
       return next;
     });
   }
+
+  /** 作废 / 恢复：成员也能做，所以按钮不看 isAdmin */
+  const askArchive = (r: ItemListItem) =>
+    setConfirm({
+      title: `作废「${r.name}」？`,
+      body: '作废后不再出现在物料库、选品栏和录价的可选物料里，历史报价单不受影响。',
+      warn: '作废随时能恢复——打开右上角「含已作废」就能把它找回来。',
+      confirmLabel: '作废',
+      run: async () => {
+        await api.archiveItem(r.id);
+        setConfirm(null);
+        setToast(`「${r.name}」已作废。要恢复就打开「含已作废」再点恢复。`);
+        await load(page);
+      },
+    });
+
+  const askRestoreItem = (r: ItemListItem) =>
+    setConfirm({
+      title: `恢复「${r.name}」？`,
+      body: '恢复后重新出现在物料库和选品栏里，它的价也都还在。',
+      confirmLabel: '恢复',
+      tone: 'primary',
+      run: async () => {
+        await api.restoreItem(r.id);
+        setConfirm(null);
+        setToast(`「${r.name}」已恢复。`);
+        await load(page);
+      },
+    });
+
+  const askDeleteItem = (r: ItemListItem) =>
+    setConfirm({
+      title: `删掉「${r.name}」？`,
+      body: '删掉后这个物料从库里消失，不会再回来。',
+      // 这句必须写具体数字：管理员点删除时唯一想知道的就是"会连带丢什么"
+      warn:
+        r.priceSupplierCount > 0
+          ? `这个物料有 ${r.priceSupplierCount} 家的报价，会一起删掉。已经发出的报价单里的数字不变（行上存的是快照）。如果只是不常用，用「作废」更好。`
+          : '删除不可恢复。如果只是暂时不用，用「作废」更合适。',
+      confirmLabel: '确认删掉',
+      run: async () => {
+        const res = await api.deleteItem(r.id);
+        setConfirm(null);
+        setToast(
+          res.priceCount > 0
+            ? `「${res.name}」已删除，连带删掉 ${res.priceCount} 条报价。`
+            : `「${res.name}」已删除。`,
+        );
+        await load(page);
+      },
+    });
 
   return (
     <div className="page">
@@ -198,6 +259,19 @@ export default function MaterialsPage() {
             清掉筛选
           </Button>
         ) : null}
+        {/*
+          已作废的默认不列。这个开关同时解决两件事：
+          ① 作废之后还看得见（否则用户会以为"什么都没发生"或者"数据丢了"）；
+          ② 想恢复一条的时候找得到它——没有这个开关，恢复功能等于不存在。
+        */}
+        <label className="inline-flex items-center gap-[var(--space-2)] t-xs t-3 ml-auto">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+          />
+          含已作废
+        </label>
       </div>
 
       {categories.length > 0 ? (
@@ -305,6 +379,8 @@ export default function MaterialsPage() {
                         <Link href={`/materials/${r.id}`} className="t-sm" style={{ color: 'var(--fg)' }}>
                           {r.name}
                         </Link>
+                        {/* 已作废的行必须自己能说明身份：只靠"开了筛选才出现"太隐晦 */}
+                        {!r.isActive ? <span className="badge badge--sm badge--neutral ml-[var(--space-2)]">已作废</span> : null}
                         {r.spec ? <span className="cell-sub">{r.spec}</span> : null}
                       </Td>
                       <Td className="t-3">{r.baseUnitName}</Td>
@@ -334,6 +410,24 @@ export default function MaterialsPage() {
                           <IconButton label={`编辑 ${r.name} 的档案`} onClick={() => setEditId(r.id)}>
                             <IconPencil size={16} />
                           </IconButton>
+                          {r.isActive ? (
+                            <IconButton label={`作废 ${r.name}（随时能恢复）`} onClick={() => askArchive(r)}>
+                              <IconArchive size={16} />
+                            </IconButton>
+                          ) : (
+                            <IconButton label={`恢复 ${r.name}`} onClick={() => askRestoreItem(r)}>
+                              <IconRestore size={16} />
+                            </IconButton>
+                          )}
+                          {isAdmin ? (
+                            <IconButton
+                              label={`删除 ${r.name}（不可恢复，仅管理员）`}
+                              className="t-danger"
+                              onClick={() => askDeleteItem(r)}
+                            >
+                              <IconTrash size={16} />
+                            </IconButton>
+                          ) : null}
                         </div>
                       </Td>
                     </tr>
@@ -445,6 +539,8 @@ export default function MaterialsPage() {
           </div>
         </div>
       ) : null}
+
+      <ConfirmModal spec={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

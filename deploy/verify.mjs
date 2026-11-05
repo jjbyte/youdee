@@ -450,6 +450,71 @@ async function main() {
     record('错误响应不含数据库术语', leaked.length === 0, leaked.length ? `泄漏：${leaked.join(', ')}` : '干净');
   }
 
+  // 12. 删除 vs 作废（v1.10）：删除是管理员专属，作废/恢复成员也能做。
+  //     这条边界坏掉的方式很安静：成员点到了删除，或者成员建错的草稿永远清不掉。
+  const mDelQuote = await call('DELETE', `/quotes/${quote.json?.data?.id}`, { as: 'member' });
+  record(
+    '成员删报价单被拒（40301）',
+    mDelQuote.json?.code === 40301,
+    `${mDelQuote.json?.code} ${mDelQuote.json?.message ?? ''}`,
+  );
+
+  const mDelItem = await call('DELETE', `/items/${truss.id}`, { as: 'member' });
+  record('成员删物料被拒（40301）', mDelItem.json?.code === 40301, `${mDelItem.json?.code} ${mDelItem.json?.message ?? ''}`);
+
+  // 作废/恢复整轮跑通，跑完把 truss 还原成在用状态
+  const mArcItem = await call('POST', `/items/${truss.id}/archive`, { as: 'member' });
+  const hiddenAfterArchive = await call('GET', `/items?item_type=material&limit=100`, { as: 'admin' });
+  const inActiveList = (hiddenAfterArchive.json?.data?.items ?? []).some((x) => x.id === truss.id);
+  const allList = await call('GET', `/items?item_type=material&is_active=all&limit=100`, { as: 'admin' });
+  const inAllList = (allList.json?.data?.items ?? []).some((x) => x.id === truss.id);
+  const mResItem = await call('POST', `/items/${truss.id}/restore`, { as: 'member' });
+  record(
+    '成员能作废物料：默认列表看不见、含已作废里还在、能恢复',
+    mArcItem.json?.data?.is_active === false &&
+      !inActiveList &&
+      inAllList &&
+      mResItem.json?.data?.is_active === true,
+    `作废=${mArcItem.json?.data?.is_active} 默认里=${inActiveList} 全部里=${inAllList} 恢复=${mResItem.json?.data?.is_active}`,
+  );
+
+  if (priceId) {
+    const mDelPrice = await call('DELETE', `/prices/${priceId}`, { as: 'member' });
+    record(
+      '成员删价格被拒（40301）',
+      mDelPrice.json?.code === 40301,
+      `${mDelPrice.json?.code} ${mDelPrice.json?.message ?? ''}`,
+    );
+    const mArcPrice = await call('POST', `/prices/${priceId}/archive`, { as: 'member', body: { reason: '自检' } });
+    const mResPrice = await call('POST', `/prices/${priceId}/restore`, { as: 'member' });
+    record(
+      '成员能作废并恢复价格（撞同口径时 40902 并说明原因）',
+      mArcPrice.json?.data?.status === 'archived' && (mResPrice.json?.code === 0 || mResPrice.json?.code === 40902),
+      `作废=${mArcPrice.json?.data?.status} 恢复=${mResPrice.json?.code === 0 ? 'ok' : mResPrice.json?.message}`,
+    );
+  }
+  if (firstSupplier) {
+    const mDelSup = await call('DELETE', `/suppliers/${firstSupplier.id}`, { as: 'member' });
+    record(
+      '成员删供应商被拒（40301）',
+      mDelSup.json?.code === 40301,
+      `${mDelSup.json?.code} ${mDelSup.json?.message ?? ''}`,
+    );
+  }
+
+  // 13. 分类字典可维护（v1.10）：管理员能新增+改名，成员不能
+  const stamp = String(Date.now()).slice(-5);
+  const newCat = await call('POST', '/categories', { as: 'admin', body: { domain: 'material', name: `自检分类${stamp}` } });
+  const catId = newCat.json?.data?.id;
+  record('管理员能新增分类', Boolean(catId), newCat.json?.message ?? '');
+  if (catId) {
+    const renamed = await call('PATCH', `/categories/${catId}`, { as: 'admin', body: { name: `自检改名${stamp}` } });
+    record('管理员能改分类名', renamed.json?.data?.name === `自检改名${stamp}`, renamed.json?.data?.name ?? '');
+    const byMember = await call('PATCH', `/categories/${catId}`, { as: 'member', body: { name: '成员改的' } });
+    record('成员改分类被拒（40301）', byMember.json?.code === 40301, `${byMember.json?.code} ${byMember.json?.message ?? ''}`);
+    await call('DELETE', `/categories/${catId}`, { as: 'admin' });
+  }
+
   console.log(`\n本次自检产生了 1 张已发出的报价单：${quote.json?.data?.quote_no ?? ''}（客户名「自检样例」），请按需作废。`);
 }
 

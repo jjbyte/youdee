@@ -10,6 +10,8 @@ import {
   ArrowUpDown,
   ArrowUpRight,
   Bell,
+  Archive,
+  ArchiveRestore,
   Building2,
   CalendarDays,
   Check,
@@ -105,6 +107,10 @@ export const IconSearch = icon(Search);
 export const IconPlus = icon(Plus);
 export const IconPencil = icon(Pencil);
 export const IconTrash = icon(Trash2);
+/** 作废：把记录收进归档，可恢复 */
+export const IconArchive = icon(Archive);
+/** 恢复：从归档拿回来 */
+export const IconRestore = icon(ArchiveRestore);
 export const IconCopy = icon(Copy);
 export const IconMore = icon(MoreHorizontal);
 export const IconDownload = icon(Download);

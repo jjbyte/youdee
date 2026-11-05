@@ -7,6 +7,7 @@
 import { AppError } from '../http';
 import { q, today, tx } from '../db';
 import { isExpired, canDelete } from '@/domain/quote-status';
+import { canDeleteRecord } from '@/domain/permissions';
 import type { CurrentUser } from '../auth/session';
 import {
   getQuoteRow,
@@ -287,11 +288,21 @@ export async function patchQuote(id: string, input: PatchQuoteInput) {
   return quoteDetail(id);
 }
 
-export async function deleteQuote(id: string): Promise<void> {
+export async function deleteQuote(id: string, actor: CurrentUser): Promise<void> {
   const row = await getQuoteRow(id);
   if (!row) throw new AppError(40401, '这张报价单不存在。', 404);
   if (!canDelete(row.status as 'draft' | 'issued' | 'void')) {
-    throw new AppError(40905, '只有草稿可以删除。已发出的报价单请用「作废」保留台账。', 409);
+    throw new AppError(40905, '这张报价单的状态不允许删除。', 409);
   }
-  await q('UPDATE quotes SET deleted_at = now() WHERE id = $1', [id]);
+  if (!canDeleteRecord(actor.role)) {
+    throw new AppError(40301, '只有管理员能删报价单。你可以用「作废」——作废之后随时能恢复。', 403);
+  }
+  /**
+   * 软删（deleted_at），不是 DELETE。
+   *
+   * 已发出的单被删掉之后，单号还得能被**查证**：客户拿着一张 2026-QT-0007 找过来问
+   * 「这单我们确认过没有」，答案不能因为管理员点过一次删除就变成"查无此单"。
+   * 软删让它在列表里消失，但单号、金额、行明细都还在库里。
+   */
+  await q('UPDATE quotes SET deleted_at = now(), updated_at = now() WHERE id = $1', [id]);
 }

@@ -1,7 +1,7 @@
-import { body, ok, optDate, optDecimal, optStr, requireOverridePrice, requireUser, reqUuid } from '@/server/http';
+import { body, ok, optDate, optDecimal, optStr, requireDelete, requireOverridePrice, requireUser, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { getPriceDetail } from '@/server/services/price-read.service';
-import { patchPrice } from '@/server/services/price-patch.service';
+import { deletePrice, patchPrice } from '@/server/services/price-patch.service';
 
 export const GET = route(async (_req, params) => {
   await requireUser();
@@ -32,4 +32,10 @@ export const PATCH = route(async (req, params) => {
     actor,
   );
   return ok(updated);
+});
+
+/** 真删除：仅管理员，连带删掉变更日志与附件。历史报价单不受影响（价格 id 是弱关联） */
+export const DELETE = route(async (_req, params) => {
+  await requireDelete('删除价格');
+  return ok(await deletePrice(reqUuid(params.id, 'id')));
 });

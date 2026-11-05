@@ -5,7 +5,7 @@ import { api, errorMessage, isApiError } from '@/lib/api';
 import type { QuoteListItem } from '@/lib/types';
 import { formatMoney, formatTimeRel } from '@/lib/format';
 import { Button } from '@/components/ui/button';
-import { Field, Input } from '@/components/ui/field';
+import { Field, Input, PasswordInput } from '@/components/ui/field';
 import { IconError } from '@/components/icons';
 
 export default function LoginPage() {
@@ -100,26 +100,15 @@ export default function LoginPage() {
             />
           </Field>
 
-          <Field
-            label="密码"
-            htmlFor="password"
-            aside={
-              <button
-                type="button"
-                className="btn btn--link t-xs"
-                onClick={() => setShowPassword((v) => !v)}
-              >
-                {showPassword ? '藏起来' : '露出来'}
-              </button>
-            }
-          >
-            <Input
+          <Field label="密码" htmlFor="password">
+            <PasswordInput
               id="password"
               className="login__input"
-              type={showPassword ? 'text' : 'password'}
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              visible={showPassword}
+              onToggleVisible={() => setShowPassword((v) => !v)}
               aria-invalid={error ? true : undefined}
             />
           </Field>

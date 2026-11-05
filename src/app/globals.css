@@ -402,6 +402,42 @@ button {
 }
 .search .input { padding-left: var(--space-9); }
 
+/* 框内右侧的图标按钮（密码框的「看密码」）。落在输入框边界之内，
+   人才看得出这个开关管的就是这个框，而不是页面上的另一个东西 */
+.input-affix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.input-affix .input { padding-right: var(--space-9); }
+.input-affix__toggle {
+  position: absolute;
+  right: var(--space-2);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-meta);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-standard),
+    background var(--motion-fast) var(--ease-standard);
+}
+.input-affix__toggle:hover { color: var(--fg); background: var(--gray-100); }
+/* 焦点环画在框内侧：图标本来就贴在输入框里，外扩的环会压到输入框的边框上，
+   看起来像两个框叠在一起 */
+.input-affix__toggle:focus-visible {
+  outline: none;
+  color: var(--fg);
+  background: var(--gray-100);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 /* ── 分段控件 / 开关 / chip ─────────────────────────────────── */
 .seg {
   display: inline-flex;
@@ -1224,7 +1260,8 @@ button {
   padding: var(--space-9) var(--space-8);
   background: var(--surface);
 }
-.login__form { width: 360px; display: flex; flex-direction: column; gap: var(--space-5); }
+/* 360px 是桌面上的舒适宽度；窄屏要能让位于视口，否则右侧的眼睛图标会被裁掉 */
+.login__form { width: min(360px, 100%); display: flex; flex-direction: column; gap: var(--space-5); }
 .login__input { height: 40px; }
 @media (max-width: 900px) {
   .login { grid-template-columns: 1fr; }

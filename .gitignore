@@ -37,6 +37,8 @@ coverage/
 # 构建/联调期间的临时脚本（agent 产出，非交付物；文件保留在本地但不入库）
 .workbuddy/*.mjs
 .workbuddy/*.out.txt
+# 联调截图（UI 核对用的过程产物）
+.workbuddy/shots/
 # agent 的工作笔记：本地记录，不是代码也不是文档，不进公开仓库
 .workbuddy/memory/
 

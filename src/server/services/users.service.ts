@@ -1,8 +1,11 @@
 /**
  * 账号管理（仅 admin）。
  *
- * 删除一律是「停用」：报价单里 created_by 会 ON DELETE SET NULL，
- * 真删会把"这单是谁出的"永久抹掉，而那是台账最需要的一条信息。
+ * 两种"删"并存，别混：
+ *   · `deactivateUser`（停用）= 登不进来，历史单据的署名照旧 —— 默认动作
+ *   · `deleteUser`（真删）= 从库里消失，报价单的 created_by 变 NULL
+ *     第二条只在**名下没有任何报价单**时才允许，否则台账会永久丢掉"谁出的这单"。
+ *     真删之后登录名可以重新建号，这是它唯一比停用强的地方（建错账号时有用）。
  */
 import { one, q } from '../db';
 import { AppError } from '../http';
@@ -199,4 +202,76 @@ export async function deactivateUser(id: string, actor: CurrentUser) {
   // token_version + 1：停用后已签发的令牌立刻失效，不用等 7 天自然过期
   await q('UPDATE users SET is_active = false, token_version = token_version + 1 WHERE id = $1', [id]);
   return { is_active: false };
+}
+
+export interface DeleteUserResult {
+  deleted: true;
+  /** 被清空署名的价格记录条数：删完之后要告诉管理员"这些记录还在，只是没人署名了" */
+  prices_unsigned: number;
+}
+
+/**
+ * 真删一个普通成员。
+ *
+ * 三条硬约束（都在服务端拦，不是只在界面上不显示按钮）：
+ *   1. 不能删自己 —— 删完就没人能操作了，和"把自己锁在门外"是同一类事故；
+ *   2. 只能删成员 —— 管理员先降权或停用，删管理员等于绕过"至少留一个管理员"的约束；
+ *   3. 名下不能有报价单 —— quotes.created_by 是 ON DELETE SET NULL，
+ *      真删会让那些单的「报价人」永久空白，而台账最需要的就是这条信息。
+ *      有单的账号请用停用：登不进来，署名还在。
+ *      （只数未删除的单：已经软删的单在列表里查不到，不该继续占着登录名。）
+ *
+ * 价格记录（prices.created_by / price_change_logs.changed_by）同样是 SET NULL，
+ * 但它们不构成"这张单是谁出的"这种不可替代的证据，所以只计数、不拦截、不静默。
+ */
+export async function deleteUser(id: string, actor: CurrentUser): Promise<DeleteUserResult> {
+  const current = await one<{ id: string; login: string; name: string; role: string }>(
+    'SELECT id, login, name, role FROM users WHERE id = $1',
+    [id],
+  );
+  if (!current) throw new AppError(40401, '这个账号不存在。', 404);
+  if (current.id === actor.id) {
+    throw new AppError(40904, '不能删除自己。要退出这个账号，请让另一个管理员操作。', 409);
+  }
+  if (current.role === 'admin') {
+    throw new AppError(
+      40904,
+      '管理员账号不能删除。先把它降成成员（或停用），确认没问题后再删。',
+      409,
+      { detail: { role: current.role } },
+    );
+  }
+
+  /**
+   * 只数**还查得到**的单（deleted_at IS NULL）：软删掉的单在列表里已经不出现，
+   * 为它保留一个登录名没有意义；但留在台账里那张单必须保住署名。
+   */
+  const quotes = await one<{ total: string; issued: string }>(
+    `SELECT count(*)::text AS total,
+            count(*) FILTER (WHERE status = 'issued')::text AS issued
+       FROM quotes WHERE created_by = $1 AND deleted_at IS NULL`,
+    [id],
+  );
+  const total = Number(quotes?.total ?? 0);
+  if (total > 0) {
+    const issued = Number(quotes?.issued ?? 0);
+    throw new AppError(
+      40906,
+      `「${current.name}」名下还有 ${total} 张报价单${issued > 0 ? `（其中 ${issued} 张已发出）` : ''}。`
+        + '删掉账号后这些单的「报价人」会永久变成空白，对账时查不回来。'
+        + '请改用「停用」：他立刻登不进来，但单据上还是他的名字。',
+      409,
+      { detail: { quote_count: total, issued_count: issued } },
+    );
+  }
+
+  const prices = await one<{ n: string }>(
+    `SELECT ((SELECT count(*) FROM prices WHERE created_by = $1)
+           + (SELECT count(*) FROM price_change_logs WHERE changed_by = $1))::text AS n`,
+    [id],
+  );
+
+  // sessions.user_id 是 ON DELETE CASCADE，登录会话随账号一起消失
+  await q('DELETE FROM users WHERE id = $1', [id]);
+  return { deleted: true, prices_unsigned: Number(prices?.n ?? 0) };
 }

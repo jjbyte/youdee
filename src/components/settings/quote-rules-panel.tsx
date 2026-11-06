@@ -15,7 +15,7 @@ const HINTS = {
   stale: '改小 → 提示变多；改大 → 提示变少。恰好在阈值当天算有效。',
   defaultMargin: '只影响新加的行，不改历史单。',
   tax: '这不是文案项，是取价项：新建单会按它取成本。已建好的单不受影响。',
-  validDays: '客户版页脚和列表页的「将过期」都用这个数。',
+  validDays: '新建单按「今天 + N 天」预填有效期；客户版抬头印的是单据自己存的那一天。',
 };
 
 /**
@@ -55,6 +55,11 @@ export function QuoteRulesPanel() {
 
   async function save() {
     if (!settings) return;
+    // 先在本地拦一次：让"天数填成 0"打到服务端再弹一句 400，体验上等于白填一遍表单
+    if (!Number.isInteger(settings.validDays) || settings.validDays < 1 || settings.validDays > 365) {
+      setError('报价有效期要填 1~365 之间的整数天数。');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -209,15 +214,18 @@ export function QuoteRulesPanel() {
               className="num"
               style={{ width: 88, textAlign: 'right' }}
               inputMode="numeric"
-              value="30"
-              readOnly
+              value={String(settings.validDays)}
               aria-label="报价有效期天数"
+              onChange={(e) =>
+                setSettings({ ...settings, validDays: Number(e.target.value.replace(/[^\d]/g, '')) || 0 })
+              }
             />
             <span className="t-xs t-3">天</span>
           </div>
         </Field>
         <p className="t-2xs t-3 mt-[var(--space-2)]">
-          这一项接口还没有对应字段，先只读展示默认 30 天；新单的 valid_until 由建单时按 30 天算。
+          取 1~365 天。改完只影响<b>之后新建</b>的单：每张单建好时就把「有效期到哪天」存进自己那一行了，
+          已经发出、甚至已经作废的单都不会被这一项改动带着走——否则上个月发出去的 PDF 和今天重打的不是同一份。
         </p>
       </div>
 

@@ -8,6 +8,7 @@ import { Field, Input } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
 import { UsersPanel } from '@/components/settings/users-panel';
 import { QuoteRulesPanel } from '@/components/settings/quote-rules-panel';
+import { TemplatesPanel } from '@/components/settings/templates-panel';
 import { CategoriesPanel } from '@/components/settings/categories-panel';
 
 type Section = 'users' | 'categories' | 'rules' | 'template' | 'export' | 'system';
@@ -66,6 +67,7 @@ export default function SettingsPage() {
 
           {active === 'template' ? (
             <div className="flex flex-col gap-[var(--space-5)]">
+              <TemplatesPanel />
               <div className="panel">
                 <div className="fw-semi t-sm mb-[var(--space-3)]">公司信息（印在客户版页脚）</div>
                 <CompanyForm />

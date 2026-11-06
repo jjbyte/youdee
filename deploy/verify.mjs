@@ -911,6 +911,166 @@ async function main() {
     record('显式传 tax_included=false 时仍能记成不含税（默认值不许盖掉用户的选择）', false, '同上');
   }
 
+  // 15. 报价单模板 / 报价有效期 / 删除成员（v1.21）
+  //     这三项的共同点是「改设置不许影响已经发出的单」——
+  //     靠人眼看是看不出来的，只能拿一张单出来，改设置、再读它，比对同一组值。
+  const tplStamp = String(Date.now()).slice(-5);
+  const originalSettings = await call('GET', '/settings/quote', { as: 'admin' });
+  const originalDays = originalSettings.json?.data?.valid_days;
+  const patchedDays = await call('PATCH', '/settings/quote', { as: 'admin', body: { valid_days: 45 } });
+  const rereadDays = await call('GET', '/settings/quote', { as: 'admin' });
+  record(
+    '报价有效期天数可改并能读回',
+    patchedDays.json?.data?.valid_days === 45 && rereadDays.json?.data?.valid_days === 45,
+    `写入=${patchedDays.json?.data?.valid_days} 读回=${rereadDays.json?.data?.valid_days}`,
+  );
+  const badDays = await call('PATCH', '/settings/quote', { as: 'admin', body: { valid_days: 0 } });
+  record('有效期 0 天被拒（1~365）', badDays.status === 400, badDays.json?.message ?? '');
+  if (typeof originalDays === 'number') {
+    await call('PATCH', '/settings/quote', { as: 'admin', body: { valid_days: originalDays } });
+  }
+
+  const newTpl = await call('POST', '/quote-templates', {
+    as: 'admin',
+    body: { name: `自检模板${tplStamp}`, supplier_name: `自检供应商${tplStamp}` },
+  });
+  const tplId = newTpl.json?.data?.id;
+  record('管理员能新建报价单模板', Boolean(tplId), newTpl.json?.message ?? '');
+  if (tplId) {
+    const dup = await call('POST', '/quote-templates', {
+      as: 'admin',
+      body: { name: `自检模板${tplStamp}`, supplier_name: 'x' },
+    });
+    record('同名模板被拒（409，不是静默覆盖）', dup.status === 409, dup.json?.message ?? '');
+
+    const memberTplList = await call('GET', '/quote-templates?active_only=1', { as: 'member' });
+    const memberCreateTpl = await call('POST', '/quote-templates', {
+      as: 'member',
+      body: { name: `成员模板${tplStamp}`, supplier_name: 'x' },
+    });
+    record(
+      '成员能读模板列表（建单要选）、但不能建模板（40301）',
+      Array.isArray(memberTplList.json?.data?.items) && memberCreateTpl.json?.code === 40301,
+      `${memberTplList.json?.data?.items?.length ?? '?'} 个 / ${memberCreateTpl.json?.code}`,
+    );
+
+    // 用这个模板建一张单，供应商名称必须当场快照进单据
+    const tplQuote = await call('POST', '/quotes', {
+      as: 'admin',
+      body: {
+        customer_name: '自检模板客户',
+        event_name: '自检模板活动',
+        valid_until: new Date(Date.now() + 15 * 864e5).toISOString().slice(0, 10),
+        template_id: tplId,
+      },
+    });
+    const tplQuoteId = tplQuote.json?.data?.id;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    record(
+      '建单时把模板的供应商名称快照进单据（含报价日期）',
+      tplQuote.json?.data?.template_supplier_name === `自检供应商${tplStamp}` &&
+        tplQuote.json?.data?.quote_date === todayStr,
+      `供应商=${tplQuote.json?.data?.template_supplier_name} 报价日期=${tplQuote.json?.data?.quote_date}`,
+    );
+
+    await call('PATCH', `/quote-templates/${tplId}`, { as: 'admin', body: { supplier_name: '改过的供应商名' } });
+    const afterTplEdit = await call('GET', `/quotes/${tplQuoteId}`, { as: 'admin' });
+    record(
+      '改模板不回写已经建好的单（快照不是视图）',
+      afterTplEdit.json?.data?.template_supplier_name === `自检供应商${tplStamp}`,
+      afterTplEdit.json?.data?.template_supplier_name ?? '',
+    );
+
+    const delTpl = await call('DELETE', `/quote-templates/${tplId}`, { as: 'admin' });
+    const afterTplDelete = await call('GET', `/quotes/${tplQuoteId}`, { as: 'admin' });
+    record(
+      '删模板后老单抬头仍印原供应商（只有 template_id 置空）',
+      delTpl.json?.data?.deleted === true &&
+        afterTplDelete.json?.data?.template_supplier_name === `自检供应商${tplStamp}` &&
+        afterTplDelete.json?.data?.template_id === null,
+      `删=${delTpl.json?.data?.deleted} 供应商=${afterTplDelete.json?.data?.template_supplier_name}`,
+    );
+
+    const list = await call('GET', '/quote-templates', { as: 'admin' });
+    const stillThere = (list.json?.data?.items ?? []).some((t) => t.id === tplId);
+    record('删掉的模板不再出现在列表里', !stillThere, `仍在=${stillThere}`);
+
+    if (tplQuoteId) await call('DELETE', `/quotes/${tplQuoteId}`, { as: 'admin' });
+  }
+
+  const tpls = await call('GET', '/quote-templates', { as: 'admin' });
+  const defaultTpl = (tpls.json?.data?.items ?? []).find((t) => t.is_default);
+  if (defaultTpl) {
+    const delDefault = await call('DELETE', `/quote-templates/${defaultTpl.id}`, { as: 'admin' });
+    record('默认模板不能删（409，先指别的为默认）', delDefault.status === 409, delDefault.json?.message ?? '');
+  }
+
+  // 删除成员：无单可删、有单拦住、管理员一律删不得
+  const delTag = String(Date.now()).slice(-5);
+  const mkUser = (login, role = 'member') =>
+    call('POST', '/users', {
+      as: 'admin',
+      body: { login, name: `自检${login}`, password: 'SelfcheckPass2026', role },
+    });
+  const loner = await mkUser(`selfcheck_del_${delTag}`);
+  const lonerId = loner.json?.data?.id;
+  const delLoner = lonerId ? await call('DELETE', `/users/${lonerId}?hard=1`, { as: 'admin' }) : null;
+  const lonerBack = await call('GET', `/users?q=selfcheck_del_${delTag}`, { as: 'admin' });
+  record(
+    '名下没有单据的普通成员可以真删',
+    delLoner?.json?.data?.deleted === true && (lonerBack.json?.data?.items ?? []).length === 0,
+    `${delLoner?.json?.code} / 剩余=${(lonerBack.json?.data?.items ?? []).length}`,
+  );
+
+  const owner = await mkUser(`selfcheck_own_${delTag}`);
+  const ownerId = owner.json?.data?.id;
+  if (ownerId) {
+    // 用这个成员的身份建一张单：真删必须被拦（created_by 会 SET NULL，署名永久丢失）
+    const asOwner = await call('POST', '/auth/login', {
+      as: 'owner',
+      body: { login: owner.json?.data?.login, password: 'SelfcheckPass2026' },
+    });
+    const ownerQuote = await call('POST', '/quotes', {
+      as: 'owner',
+      body: {
+        customer_name: '自检删人客户',
+        event_name: '自检删人活动',
+        valid_until: new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10),
+      },
+    });
+    const ownerQuoteId = ownerQuote.json?.data?.id;
+    const delOwner = await call('DELETE', `/users/${ownerId}?hard=1`, { as: 'admin' });
+    record(
+      '名下有报价单的成员真删被拦（409 并说明张数）',
+      delOwner.status === 409 && /\d+ 张报价单/.test(delOwner.json?.message ?? ''),
+      delOwner.json?.message ?? `code=${delOwner.json?.code}`,
+    );
+    const softDel = await call('DELETE', `/users/${ownerId}`, { as: 'admin' });
+    record(
+      '同一个账号仍可停用（默认 DELETE 语义没被真删顶掉）',
+      softDel.json?.data?.is_active === false,
+      JSON.stringify(softDel.json?.data ?? softDel.json?.message),
+    );
+    void asOwner;
+    if (ownerQuoteId) await call('DELETE', `/quotes/${ownerQuoteId}`, { as: 'admin' });
+    // 单据删掉后就能真删了（这也说明拦住的是"有单据"，不是"这个人")
+    const delOwnerRetry = await call('DELETE', `/users/${ownerId}?hard=1`, { as: 'admin' });
+    record(
+      '单据清掉后同一个成员可以真删',
+      delOwnerRetry.json?.data?.deleted === true,
+      delOwnerRetry.json?.message ?? JSON.stringify(delOwnerRetry.json?.data),
+    );
+  }
+
+  const tempAdmin = await mkUser(`selfcheck_adm_${delTag}`, 'admin');
+  const tempAdminId = tempAdmin.json?.data?.id;
+  if (tempAdminId) {
+    const delAdmin = await call('DELETE', `/users/${tempAdminId}?hard=1`, { as: 'admin' });
+    record('管理员账号不能真删（先降权或停用）', delAdmin.status === 409, delAdmin.json?.message ?? '');
+    await call('PATCH', `/users/${tempAdminId}`, { as: 'admin', body: { role: 'member' } });
+    await call('DELETE', `/users/${tempAdminId}?hard=1`, { as: 'admin' });
+  }
+
   // 自检单跑完自己删掉：它只是用来验证「出单」这一步，留着的话每跑一次列表里就多一张
   // 「自检样例」，跑三遍用户就分不清哪张是自己的单了。（导出那几项已经读完了，删了不影响。）
   const cleanup = await call('DELETE', `/quotes/${qid}`, { as: 'admin' });

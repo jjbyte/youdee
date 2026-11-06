@@ -71,7 +71,7 @@
 | 人员库 | `/staff` `/staff/:id` | 同上，按「场 / 天 / 小时」计价 |
 | 供应商库 | `/vendors` | 联系方式、开票信息、结算方式 |
 | 客户 / 项目 | `/guests` | 往来客户与历史项目 |
-| 设置 | `/settings` | 公司抬头、报价默认值（税口径 / 默认毛利率 / 预警线）、账号管理 |
+| 设置 | `/settings` | 公司抬头、报价默认值（税口径 / 默认毛利率 / 预警线 / 有效期天数）、报价单模板、账号管理 |
 
 ### 六条「不出错」的设计
 
@@ -112,7 +112,7 @@
 | 图表 | recharts | 3.10.1 | 价格趋势、毛利分布 |
 | 图标 | lucide-react | 1.67.0 | 全项目统一一套 SVG 描边图标，**不用 emoji 当图标** |
 
-规模（当前版本 0.1.20）：**17 张表 / 5 个迁移 / 59 个接口路由 / 12 个页面 / 104 条单测 / 71 项部署自检**。
+规模（当前版本 0.1.21）：**18 张表 / 6 个迁移 / 61 个接口路由 / 12 个页面 / 106 条单测 / 86 项部署自检**。
 
 ### 明确不做的事
 
@@ -234,7 +234,7 @@ src/components/
 | `prisma/migrations/*` | 每个迁移一个目录，`migration.sql` 手写。`EXCLUDE`、生成列、触发器 Prisma 生成不出来 |
 | `prisma/seed.ts` | 17 单位 / 8 供应商 / 35 分类 / 25 主体 / 48 条价格；**幂等**，已有用户就整段跳过 |
 | `tests/` | 只测 `domain/` 纯函数，不连库、不起服务，所以秒级跑完 |
-| `deploy/verify.mjs` | 部署后自检，71 项，逐项比对具体数值 |
+| `deploy/verify.mjs` | 部署后自检，86 项，逐项比对具体数值 |
 
 ### 几个「改了会影响哪里」的定位表
 
@@ -246,7 +246,8 @@ src/components/
 | 金额怎么算（四舍五入、毛利反算） | `src/domain/money.ts` / `quote-calc.ts` | 报价单、比价、导出 |
 | 接口报错的提示文案 | `src/server/http.ts` | 全部接口 |
 | 主题色、间距 | `design-system/design-tokens.css` | 全站 |
-| 默认税口径、默认毛利率、预警线 | 数据库 `app_settings`（界面上是「设置 → 报价」） | 建单、比价、预警 |
+| 默认税口径、默认毛利率、预警线、有效期天数 | 数据库 `app_settings`（界面上是「设置 → 比价与计价规则」） | 建单、比价、预警 |
+| 客户版抬头印的供应商名称 | 设置 → 报价单模板（建单时选模板，值快照进单据） | 只影响之后新建的单，历史单不变 |
 
 ---
 
@@ -343,7 +344,7 @@ npm run dev
 BASE_URL=http://localhost:3000 ADMIN_PASSWORD=youdee2026 MEMBER_PASSWORD=youdee2026 node deploy/verify.mjs
 ```
 
-71 项全过说明整条链路是通的（登录 → 比价 → 取价 → 建单 → 出单 → 导出 → 权限 → 约束）。它会自己清理产生的临时数据。
+86 项全过说明整条链路是通的（登录 → 比价 → 取价 → 建单 → 出单 → 导出 → 权限 → 约束）。它会自己清理产生的临时数据。
 
 ---
 
@@ -371,8 +372,8 @@ bash deploy/pack.sh
 产物在 `dist/`：
 
 ```
-dist/youdee-0.1.20-20261105.tar.gz
-dist/youdee-0.1.20-20261105.tar.gz.sha256
+dist/youdee-0.1.21-20261106.tar.gz
+dist/youdee-0.1.21-20261106.tar.gz.sha256
 ```
 
 包里是源码 + 部署脚本，**不含** `node_modules` / `.next` / `.env` / 上传的附件。
@@ -381,7 +382,7 @@ dist/youdee-0.1.20-20261105.tar.gz.sha256
 #### 第 3 步：上传
 
 ```bash
-scp dist/youdee-0.1.20-20261105.tar.gz root@你的服务器IP:/tmp/
+scp dist/youdee-0.1.21-20261106.tar.gz root@你的服务器IP:/tmp/
 ```
 
 服务器访问慢的话，先在本机传到中转（对象存储 / 内网跳板），再在服务器上 `wget`。
@@ -392,7 +393,7 @@ scp dist/youdee-0.1.20-20261105.tar.gz root@你的服务器IP:/tmp/
 
 ```bash
 mkdir -p /opt/youdee
-tar -xzf /tmp/youdee-0.1.20-20261105.tar.gz -C /opt/youdee
+tar -xzf /tmp/youdee-0.1.21-20261106.tar.gz -C /opt/youdee
 cd /opt/youdee
 chmod +x deploy/*.sh
 ls deploy/            # 确认脚本在
@@ -473,7 +474,7 @@ docker compose exec app node deploy/verify.mjs
 期望结尾：
 
 ```
-合计 71 项，通过 71，失败 0
+合计 86 项，通过 86，失败 0
 ```
 
 只看到「网页能打开」不算部署成功——这个系统最危险的缺陷全都不报错，只是数字不对（比价算出最低价、导出少一列、成员能改旧价）。
@@ -540,7 +541,7 @@ psql "postgresql://youdee:你的口令@127.0.0.1:5432/youdee" -c '\conninfo'
 
 ```bash
 sudo mkdir -p /opt/youdee && sudo chown $USER /opt/youdee
-tar -xzf youdee-0.1.20-20261105.tar.gz -C /opt/youdee
+tar -xzf youdee-0.1.21-20261106.tar.gz -C /opt/youdee
 cd /opt/youdee
 cp deploy/env.example .env
 vi .env
@@ -628,7 +629,7 @@ cd /opt/youdee && node deploy/verify.mjs
 [通过] 成员改旧价被拒 — 返回 40302
 [通过] 区间重叠被拦 — 人话提示，不含数据库术语
 ...
-合计 71 项，通过 71，失败 0
+合计 86 项，通过 86，失败 0
 ```
 
 自检会自己收尾：临时账号固定为 `selfcheck_temp`（首次建、之后复用），自检单跑完自动删除，不会往你的列表里堆垃圾数据。
@@ -732,7 +733,7 @@ npm run dev            # 开发服务器
 npm run build          # 生产构建
 npm run start          # 生产启动（需先 build）
 npm run typecheck      # 类型检查
-npm test               # 领域层单测（104 条）
+npm test               # 领域层单测（106 条）
 
 # 数据库（本地开发）
 npm run db:start       # 起本地 embedded-postgres（前台阻塞）
@@ -747,7 +748,7 @@ bash deploy/pack.sh            # 出交付包到 dist/
 bash deploy/deploy.sh root@IP  # 本机 → 远端一键（需 ssh 可达）
 sh deploy/remote-up.sh         # 远端：构建并启动（Docker）
 sh deploy/manual-deploy.sh     # 远端：构建并启动（裸机）
-node deploy/verify.mjs         # 部署后自检（71 项）
+node deploy/verify.mjs         # 部署后自检（86 项）
 ```
 
 ---

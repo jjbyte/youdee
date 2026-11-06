@@ -101,6 +101,8 @@ function writeCustomer(
       discountAmount: quote.discount_amount,
       totalPrice: quote.total_price,
       note: quote.note,
+      supplierName: quote.template_supplier_name,
+      quoteDate: quote.quote_date,
       operatorName: quote.created_by_name,
       operatorPhone: quote.created_by_phone,
       items: quote.items

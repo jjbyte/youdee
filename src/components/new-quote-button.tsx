@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Field, Input, Select } from '@/components/ui/field';
 import { Modal } from '@/components/ui/overlay';
 import { PROJECT_TYPE_LABELS, PROJECT_TYPE_ORDER } from '@/lib/labels';
-import type { ProjectType } from '@/lib/types';
+import type { ProjectType, QuoteTemplate } from '@/lib/types';
 import { IconPlus } from '@/components/icons';
 
 /**
@@ -19,6 +19,10 @@ import { IconPlus } from '@/components/icons';
  *
  * **没选类型时也要有值**：下拉上写着「未选（按默认 25%）」，那就真的按 25% 填进去。
  * 空着建单会让第一行加进来就报「这张单没有目标毛利率，无法反推」。
+ *
+ * 有效期与模板两个初值都来自服务端设置，不写死：
+ *   - 有效期 = 今天 + 设置里的「报价有效期天数」（改设置只影响之后新建的单）
+ *   - 模板 = 默认模板；抬头印的供应商名称在建单这一刻快照进单据，之后改模板不影响这张单
  */
 export function NewQuoteButton({
   label = '新建报价单',
@@ -39,6 +43,9 @@ export function NewQuoteButton({
   const [defaultMargin, setDefaultMargin] = useState('');
   const [typeMargins, setTypeMargins] = useState<Record<string, string>>({});
   const [validUntil, setValidUntil] = useState(addDaysISO(todayISO(), 30));
+  const [validDays, setValidDays] = useState(30);
+  const [templates, setTemplates] = useState<QuoteTemplate[]>([]);
+  const [templateId, setTemplateId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,8 +63,27 @@ export function NewQuoteButton({
         setDefaultMargin(fallback);
         // 只在用户还没动手时预填：接口回来前就敲了数字，不能被异步结果盖掉
         setMarginRate((prev) => (prev.trim() === '' ? fallback : prev));
+        // 有效期同理：用户已经改过日期就不动它
+        const days = Number(s.validDays);
+        if (Number.isFinite(days) && days > 0) {
+          setValidDays(days);
+          const next = addDaysISO(todayISO(), days);
+          setValidUntil((prev) => (prev === addDaysISO(todayISO(), 30) ? next : prev));
+        }
       })
       .catch(() => setTypeMargins({}));
+  }, []);
+
+  // 模板：任何登录用户都能读（成员也要建单）；失败就不选模板，服务端会落到默认模板
+  useEffect(() => {
+    api
+      .quoteTemplates({ activeOnly: true })
+      .then((r) => {
+        const list = r.items ?? [];
+        setTemplates(list);
+        setTemplateId((prev) => prev || (list.find((t) => t.isDefault) ?? list[0])?.id || '');
+      })
+      .catch(() => setTemplates([]));
   }, []);
 
   function pickType(t: '' | ProjectType) {
@@ -91,6 +117,7 @@ export function NewQuoteButton({
         projectType: projectType || null,
         targetMarginRate: rate === null ? null : String(rate / 100),
         validUntil,
+        templateId: templateId || null,
       });
       setOpen(false);
       router.push(`/quotes/${quote.id}/edit`);
@@ -143,7 +170,7 @@ export function NewQuoteButton({
             <Field label="活动日期" htmlFor="q-date">
               <Input id="q-date" type="date" value={eventDate} onChange={(e) => setEventDate(e.target.value)} />
             </Field>
-            <Field label="报价有效期" htmlFor="q-valid" required>
+            <Field label="报价有效期" htmlFor="q-valid" required hint={`按设置里的 ${validDays} 天预填，可以改。`}>
               <Input
                 id="q-valid"
                 type="date"
@@ -194,6 +221,28 @@ export function NewQuoteButton({
                 <span className="t-xs t-3">%</span>
               </div>
             </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-[var(--space-4)]">
+            <Field
+              label="报价单模板"
+              htmlFor="q-template"
+              hint={
+                templates.length === 0
+                  ? '还没有可用模板，抬头「供应商名称」会印成「—」。'
+                  : '决定客户版抬头印的供应商名称；建好后不受模板改动影响。'
+              }
+            >
+              <Select id="q-template" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+                {templates.length === 0 ? <option value="">（没有可用模板）</option> : null}
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                    {t.supplierName ? `（${t.supplierName}）` : ''}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <div />
           </div>
           {error ? (
             <div className="field-error" role="alert">

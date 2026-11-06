@@ -1,4 +1,4 @@
-import { body, ok, optDate, optDecimal, optStr, requireUser, reqDate, reqStr, searchParams } from '@/server/http';
+import { body, ok, optDate, optDecimal, optStr, optUuid, requireUser, reqDate, reqStr, searchParams } from '@/server/http';
 import { dateParam, enumParam, pageQuery, sortClause } from '@/server/params';
 import { route } from '@/server/wrap';
 import { createQuote, listQuotes } from '@/server/services/quote.service';
@@ -54,6 +54,7 @@ export const POST = route(async (req) => {
     target_margin_rate: optDecimal(b.target_margin_rate, '目标毛利率'),
     discount_amount: optDecimal(b.discount_amount, '优惠金额'),
     note: optStr(b.note, 2000),
+    template_id: optUuid(b.template_id, '报价单模板'),
   });
   return ok(created, 201);
 });

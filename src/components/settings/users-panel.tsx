@@ -190,6 +190,10 @@ export function UsersPanel({ currentUserId }: { currentUserId: string | null }) 
           setEditing(null);
         }}
         onSaved={onSaved}
+        onDeleted={(id, note) => {
+          setUsers((list) => (list ? list.filter((x) => x.id !== id) : list));
+          setFlash(note);
+        }}
       />
     </div>
   );

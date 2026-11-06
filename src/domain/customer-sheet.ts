@@ -116,6 +116,16 @@ export interface SheetQuoteInput {
   totalPrice: string;
   note?: string | null;
   /**
+   * 供应商名称 —— 来自建单时选的模板，**已经快照**在单据上。
+   * 打印时不再回查模板：模板改了、模板删了，这张单印出来还是当初那家。
+   */
+  supplierName?: string | null;
+  /**
+   * 报价日期（= 建单日）。与「活动日期」是两件事：一个是单子什么时候出的，
+   * 一个是活动什么时候办。客户对账时认的是前者。
+   */
+  quoteDate?: string | null;
+  /**
    * 报价人（谁做的这张单）与他的电话。
    *
    * 客户拿单子最先问的是「这个桁架几米」，接电话的得是当初报价的那个人。
@@ -213,15 +223,30 @@ export function buildCustomerSheet(
 
   const operatorName = quote.operatorName?.trim() ?? '';
   const operatorPhone = quote.operatorPhone?.trim() ?? '';
+  const supplierName = quote.supplierName?.trim() ?? '';
+  const quoteDate = quote.quoteDate?.trim() ?? '';
+  /**
+   * 抬头四组（+ 有报价人时第五组），一行两格。顺序是按「客户拿到单子会先看什么」排的：
+   *   谁出的（单号+供应商）→ 给谁做的（客户+项目）→ 两个日期 → 有效期与口径 → 找谁问。
+   *
+   * 空值只允许落在**右格**：左格空着会让右边那格看起来像掉了一行（没填活动日期时
+   * 「税口径」单独飘在右边）。所以两个日期并排、有效期与税口径并排。
+   *
+   * 供应商名称缺失时给破折号而不是留空：空着看起来像漏印，破折号是"这里本来就没有"。
+   */
   const meta: Array<[string, string]> = [
-    [`报价单号：${quote.quoteNo}  V${quote.version}`, `报价有效期：${quote.validUntil}`],
-    [`客户：${quote.customerName}`, `活动：${quote.eventName}`],
+    [`报价单号：${quote.quoteNo}  V${quote.version}`, `供应商名称：${supplierName || '—'}`],
+    [`客户名称：${quote.customerName}`, `项目名称：${quote.eventName}`],
     [
+      quoteDate ? `报价日期：${quoteDate}` : '',
       quote.eventDate ? `活动日期：${quote.eventDate}` : '',
+    ],
+    [
+      `报价有效期：${quote.validUntil}`,
       `税口径：${TAX_LABEL[quote.taxStatement] ?? quote.taxStatement}`,
     ],
   ];
-  // 第 4 行只在真有报价人信息时出现：空行会把下面表格往下推一段，而且看着像漏填
+  // 第 5 行只在真有报价人信息时出现：空行会把下面表格往下推一段，而且看着像漏填
   if (operatorName || operatorPhone) {
     meta.push([operatorName ? `报价人：${operatorName}` : '', operatorPhone ? `联系电话：${operatorPhone}` : '']);
   }

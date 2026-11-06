@@ -14,6 +14,7 @@ import {
   marginThresholds,
   setSetting,
   staleDaysThreshold,
+  validDaysDefault,
 } from '../store/settings.store';
 
 export interface CompanyProfile {
@@ -71,6 +72,8 @@ export interface QuoteSettingsDTO {
   }>;
   tax_statement_default: 'inclusive' | 'exclusive';
   default_terms: string | null;
+  /** 新建单的报价有效期天数；已建好的单存着自己的 valid_until，不会被这项改动影响 */
+  valid_days: number;
 }
 
 /**
@@ -90,6 +93,7 @@ export interface QuoteSettingsPatch {
   }>;
   tax_statement_default?: 'inclusive' | 'exclusive';
   default_terms?: string | null;
+  valid_days?: number;
 }
 
 export async function getQuoteSettings(): Promise<QuoteSettingsDTO> {
@@ -112,6 +116,7 @@ export async function getQuoteSettings(): Promise<QuoteSettingsDTO> {
     })),
     tax_statement_default: await defaultTaxBasis(),
     default_terms: await getSetting<string | null>('default_terms', null),
+    valid_days: await validDaysDefault(),
   };
 }
 
@@ -147,6 +152,14 @@ export async function patchQuoteSettings(
   }
   if (input.default_terms !== undefined) {
     await setSetting('default_terms', input.default_terms, actor.id);
+  }
+  if (input.valid_days !== undefined) {
+    const n = Number(input.valid_days);
+    // 1~365：0 天等于"建单即过期"，大于一年则失去"报价有时效"的意义
+    if (!Number.isFinite(n) || n < 1 || n > 365) {
+      throw new AppError(40001, '报价有效期必须是 1~365 之间的天数。', 400, { field: 'valid_days' });
+    }
+    await setSetting('quote_valid_days_default', Math.trunc(n), actor.id);
   }
   if (input.margin_thresholds !== undefined) {
     // 整数组覆盖：不做增量合并，避免"少传一个就被默认值悄悄改回去"

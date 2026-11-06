@@ -456,7 +456,8 @@ async function main() {
       ['default_margin_warn_rate', 0.25],
       ['tax_statement_default', 'inclusive'],
       ['quote_no_prefix', 'YD'],
-      ['quote_valid_days_default', 15],
+      // 新建单按「今天 + N 天」预填有效期；30 与设置页一贯显示的默认值一致
+      ['quote_valid_days_default', 30],
       ['price_book_min_effective_count', 150],
       ['org_name', '有底活动'],
       ['seeded_at', today],

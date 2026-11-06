@@ -88,6 +88,8 @@ export default function QuotePreviewPage() {
         discountAmount: quote.discountAmount,
         totalPrice: quote.totalPrice,
         note: quote.note,
+        supplierName: quote.templateSupplierName,
+        quoteDate: quote.quoteDate,
         operatorName: quote.createdByName,
         operatorPhone: quote.createdByPhone,
         items: quote.items

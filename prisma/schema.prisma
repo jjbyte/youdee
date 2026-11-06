@@ -47,12 +47,34 @@ model User {
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  pricesCreated  Price[]          @relation("PriceCreatedBy")
-  quotesCreated  Quote[]          @relation("QuoteCreatedBy")
-  logs           PriceChangeLog[]
-  notifications  Notification[]
+  pricesCreated    Price[]          @relation("PriceCreatedBy")
+  quotesCreated    Quote[]          @relation("QuoteCreatedBy")
+  templatesCreated QuoteTemplate[]  @relation("TemplateCreatedBy")
+  logs             PriceChangeLog[]
+  notifications    Notification[]
 
   @@map("users")
+}
+
+/// 报价单模板：一套固定的「供应商名称 + 抬头」配置。
+/// 客户名称由单据带出，项目名称/日期/有效期/报价人都是算出来的——
+/// 模板里能配的只有那些**每张单都一样**的东西，别把可变量塞进来。
+model QuoteTemplate {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @db.VarChar(60)
+  /// 印在客户版抬头的「供应商名称」；建单时快照到 quotes.template_supplier_name
+  supplierName String   @map("supplier_name") @db.VarChar(120)
+  isDefault    Boolean  @default(false) @map("is_default")
+  isActive     Boolean  @default(true) @map("is_active")
+  sortOrder    Int      @default(100) @map("sort_order")
+  createdBy    String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdByUser User?   @relation("TemplateCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  quotes        Quote[]
+
+  @@map("quote_templates")
 }
 
 /// 供应商。type 五值：online / factory / rental / freelancer / internal
@@ -285,6 +307,10 @@ model Quote {
   /// 口径声明（快照）：inclusive | exclusive
   taxStatement       String    @map("tax_statement") @db.VarChar(20)
   note               String?   @db.Text
+  /// 建单时选的模板；只作追溯用，抬头实际印的是下面的快照
+  templateId         String?   @map("template_id") @db.Uuid
+  /// 快照：供应商名称。改模板不回写历史单
+  templateSupplierName String? @map("template_supplier_name") @db.VarChar(120)
   createdBy          String?   @map("created_by") @db.Uuid
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -292,6 +318,7 @@ model Quote {
   deletedAt          DateTime? @map("deleted_at") @db.Timestamptz(3)
 
   createdByUser User?        @relation("QuoteCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  template      QuoteTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   derivedFrom   Quote?       @relation("QuoteVersion", fields: [derivedFromQuoteId], references: [id], onDelete: SetNull)
   versions      Quote[]      @relation("QuoteVersion")
   items         QuoteItem[]

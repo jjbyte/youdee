@@ -57,9 +57,15 @@ export async function quoteNoPrefix(): Promise<string> {
   return await getSetting<string>('quote_no_prefix', 'YD');
 }
 
+/**
+ * 报价有效期天数：新建单按「今天 + N 天」预填。
+ *
+ * 默认 30 天是界面上一贯写着的数——如果这里兜 15，设置页显示 30、
+ * 实际落 15，就成了"界面上写的默认值不算数"那一类事故。
+ */
 export async function validDaysDefault(): Promise<number> {
-  const n = Number(await getSetting<number>('quote_valid_days_default', 15));
-  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 15;
+  const n = Number(await getSetting<number>('quote_valid_days_default', 30));
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 30;
 }
 
 export interface MarginThresholdRow {

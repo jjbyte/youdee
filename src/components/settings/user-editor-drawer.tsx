@@ -31,6 +31,7 @@ export function UserEditorDrawer({
   currentUserId,
   onClose,
   onSaved,
+  onDeleted,
 }: {
   open: boolean;
   /** null = 新建 */
@@ -38,6 +39,8 @@ export function UserEditorDrawer({
   currentUserId: string | null;
   onClose: () => void;
   onSaved: (u: UserRecord, created: boolean) => void;
+  /** 真删成功后把它从列表里摘掉（不整表重拉，避免刚删的那行跳位置） */
+  onDeleted?: (id: string, note: string) => void;
 }) {
   const isCreate = !user;
   const isSelf = !!user && user.id === currentUserId;
@@ -50,6 +53,7 @@ export function UserEditorDrawer({
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -60,6 +64,7 @@ export function UserEditorDrawer({
     setIsActive(user ? user.isActive : true);
     setPassword('');
     setError(null);
+    setConfirmDelete(false);
   }, [open, user]);
 
   async function submit() {
@@ -110,6 +115,32 @@ export function UserEditorDrawer({
     }
   }
 
+  /**
+   * 真删。服务端会先查名下有没有报价单：
+   * 有就 409 并说明张数——那时正确做法是停用，而不是把错误信息当障碍绕过去。
+   */
+  async function remove() {
+    if (!user) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.deleteUser(user.id);
+      // 价格记录仍在、只是署名没了——这句话必须让人看见，不能静默
+      onDeleted?.(
+        user.id,
+        r.pricesUnsigned > 0
+          ? `已删除「${user.name}」。历史价格记录保留，其中 ${r.pricesUnsigned} 条的录入人署名已清空。`
+          : `已删除「${user.name}」，登录名可以重新建号。`,
+      );
+      onClose();
+    } catch (e) {
+      setError(errorMessage(e));
+      setConfirmDelete(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const denied = deniedCapabilities(role);
 
   return (
@@ -121,6 +152,11 @@ export function UserEditorDrawer({
       closeOnScrim={false}
       footer={
         <>
+          {!isCreate && !isSelf && user?.role === 'member' ? (
+            <Button variant="danger" size="sm" onClick={() => setConfirmDelete(true)} disabled={busy}>
+              删除成员
+            </Button>
+          ) : null}
           <span style={{ flex: 1 }} />
           <Button variant="secondary" onClick={onClose}>
             取消
@@ -248,6 +284,25 @@ export function UserEditorDrawer({
             placeholder={isCreate ? '' : '不改就留空'}
           />
         </Field>
+
+        {confirmDelete ? (
+          <Note tone="danger">
+            <div className="fw-semi mb-[var(--space-2)]">确定删除「{user?.name}」这个账号？</div>
+            <p className="t-xs">
+              删掉之后这个账号从库里消失，同名登录名可以重新建一个。这是不可逆的。
+              如果他名下已经有报价单，系统会拦住并告诉你张数——那种情况请改用上面的「启用」开关停用：
+              他立刻登不进来，单据上还是他的名字。
+            </p>
+            <div className="flex gap-[var(--space-2)] mt-[var(--space-3)]">
+              <Button variant="danger" size="sm" loading={busy} onClick={() => void remove()}>
+                确认删除
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setConfirmDelete(false)}>
+                算了
+              </Button>
+            </div>
+          </Note>
+        ) : null}
 
         {error ? (
           <div className="field-error" role="alert">

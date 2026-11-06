@@ -39,6 +39,7 @@ export const PATCH = route(async (req) => {
         ? b.tax_statement_default
         : undefined,
       default_terms: b.default_terms === undefined ? undefined : optStr(b.default_terms, 2000),
+      valid_days: b.valid_days === undefined ? undefined : Number(b.valid_days),
       margin_thresholds: thresholds,
     } satisfies QuoteSettingsPatch,
     actor,

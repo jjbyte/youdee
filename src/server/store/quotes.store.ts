@@ -35,6 +35,9 @@ export interface QuoteRow extends QueryResultRow {
   min_line_margin: string | null;
   tax_statement: string;
   note: string | null;
+  template_id: string | null;
+  /** 建单时从模板快照下来的供应商名称；改模板不回写 */
+  template_supplier_name: string | null;
   created_by: string | null;
   created_at: Date;
   updated_at: Date;

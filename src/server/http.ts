@@ -294,6 +294,12 @@ export function reqUuid(v: unknown, field: string): string {
   return v as string;
 }
 
+/** 可选 id：空串 / null / undefined 都当「没选」，不会把空串当非法 uuid 拒掉 */
+export function optUuid(v: unknown, field: string): string | null {
+  if (v === null || v === undefined || v === '') return null;
+  return reqUuid(v, field);
+}
+
 /** 数量/金额字符串：只接受十进制，拒绝科学计数法与空值 */
 export function reqDecimal(v: unknown, field: string): string {
   const s = typeof v === 'number' ? String(v) : typeof v === 'string' ? v.trim() : '';

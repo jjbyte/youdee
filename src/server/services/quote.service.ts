@@ -28,8 +28,14 @@ import {
   type MarginThresholdRow,
 } from '../store/settings.store';
 import { patchQuoteTaxBasis } from './tax.service';
+import { resolveTemplateForCreate } from './templates.service';
 import { addDays } from '../dates';
 import { paginated, type PageQuery } from '../params';
+
+/** 本地时区的 yyyy-mm-dd：报价日期要和「今天」用同一把尺子，不能拿 UTC 切 */
+function localDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 export interface QuoteWarnInfo {
   used: number;
@@ -124,6 +130,11 @@ export async function quoteDetail(id: string) {
     currency: row.currency,
     tax_statement: row.tax_statement,
     note: row.note,
+    template_id: row.template_id,
+    /** 快照值，不是当前模板的值：模板改了，这张单印出来还是当初那家供应商 */
+    template_supplier_name: row.template_supplier_name,
+    /** 报价日期 = 建单日（本地时区），客户对账时认这个而不是活动日期 */
+    quote_date: localDateStr(row.created_at),
     updated_at: row.updated_at.toISOString(),
     items: items.map(quoteItemDto),
   };
@@ -185,6 +196,8 @@ export interface CreateQuoteInput {
   target_margin_rate?: string | null;
   discount_amount?: string | null;
   note?: string | null;
+  /** 报价单模板；不传就用默认模板（服务器自己决定，前端不必猜） */
+  template_id?: string | null;
 }
 
 export async function createQuote(actor: CurrentUser, input: CreateQuoteInput) {
@@ -202,14 +215,20 @@ export async function createQuote(actor: CurrentUser, input: CreateQuoteInput) {
    */
   const marginRate =
     input.target_margin_rate ?? (await defaultTargetMarginRate(input.project_type ?? null)).toFixed(4);
+  /**
+   * 模板与供应商名称在建单这一瞬间**一次定死**：template_supplier_name 是快照，
+   * 之后改模板、删模板都不会回头改这张单。传了非法/停用的模板会报错而不是
+   * 悄悄回落到默认模板——那会让客户收到的单子悄悄换了家供应商。
+   */
+  const template = await resolveTemplateForCreate(input.template_id ?? null);
   const newId = await tx(async (c) => {
     const quoteNo = await nextQuoteNo(c, prefix);
     const r = await c.query<{ id: string }>(
       `INSERT INTO quotes (quote_no, version, customer_name, event_name, event_date, valid_until, status,
                            project_type, currency, target_margin_rate, discount_amount,
                            total_cost, total_price, total_profit, margin_rate, min_line_margin,
-                           tax_statement, note, created_by)
-       VALUES ($1, 1, $2, $3, $4, $5, 'draft', $6, 'CNY', $7, $8, 0, 0, 0, 0, NULL, $9, $10, $11)
+                           tax_statement, note, template_id, template_supplier_name, created_by)
+       VALUES ($1, 1, $2, $3, $4, $5, 'draft', $6, 'CNY', $7, $8, 0, 0, 0, 0, NULL, $9, $10, $11, $12, $13)
        RETURNING id`,
       [
         quoteNo,
@@ -222,6 +241,8 @@ export async function createQuote(actor: CurrentUser, input: CreateQuoteInput) {
         discount,
         taxStatement,
         input.note ?? null,
+        template.id,
+        template.supplier_name,
         actor.id,
       ],
     );

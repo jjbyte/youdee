@@ -392,6 +392,25 @@ export interface QuoteDetail extends QuoteListItem {
   note: string | null;
   updatedAt: string;
   items: QuoteItem[];
+  /** 建单时选的模板（追溯用） */
+  templateId: string | null;
+  /** 快照：抬头印的供应商名称。改模板不会改这个值 */
+  templateSupplierName: string | null;
+  /** 报价日期 = 建单日（yyyy-mm-dd），和活动日期不是一回事 */
+  quoteDate: string;
+}
+
+/** 报价单模板：一套固定的抬头配置，建单时选一个 */
+export interface QuoteTemplate {
+  id: string;
+  name: string;
+  /** 印在客户版抬头的供应商名称 */
+  supplierName: string;
+  isDefault: boolean;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RiskCheckResult {
@@ -458,6 +477,8 @@ export interface QuoteSettings {
   }>;
   taxStatementDefault: TaxBasis;
   defaultTerms: string | null;
+  /** 报价有效期天数：新建单按「今天 + N 天」预填有效期，改它不动已建好的单 */
+  validDays: number;
 }
 
 export interface CompanyProfile {

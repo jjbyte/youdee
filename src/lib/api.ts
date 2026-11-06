@@ -30,6 +30,7 @@ import type {
   QuoteItem,
   QuoteListItem,
   QuoteSettings,
+  QuoteTemplate,
   QuoteTotals,
   RiskCheckResult,
   Supplier,
@@ -350,6 +351,26 @@ export const api = {
     request<UserRecord>(`/users/${id}`, { method: 'PATCH', body }),
   /** 停用（不删）。报价单里的 created_by 要能一直解析出是谁出的单 */
   deactivateUser: (id: string) => request<{ isActive: boolean }>(`/users/${id}`, { method: 'DELETE' }),
+  /**
+   * 真删成员（不可逆）。名下还有报价单时服务端会 409 并给出张数——
+   * 那时应当改用 deactivateUser，别把错误吞掉当作删成功了。
+   */
+  deleteUser: (id: string) =>
+    request<{ deleted: boolean; pricesUnsigned: number }>(`/users/${id}?hard=1`, { method: 'DELETE' }),
+
+  // ── 报价单模板 ──
+  quoteTemplates: (params: { activeOnly?: boolean } = {}) =>
+    request<{ items: QuoteTemplate[] }>(
+      `/quote-templates${qs({ active_only: params.activeOnly ? 1 : undefined })}`,
+    ),
+  createQuoteTemplate: (body: { name: string; supplierName?: string; isDefault?: boolean; isActive?: boolean }) =>
+    request<QuoteTemplate>('/quote-templates', { method: 'POST', body }),
+  updateQuoteTemplate: (
+    id: string,
+    body: { name?: string; supplierName?: string; isDefault?: boolean; isActive?: boolean },
+  ) => request<QuoteTemplate>(`/quote-templates/${id}`, { method: 'PATCH', body }),
+  deleteQuoteTemplate: (id: string) =>
+    request<{ deleted: boolean }>(`/quote-templates/${id}`, { method: 'DELETE' }),
   /** 0.1.11 起顶栏不再有铃铛（没有列表页，点了没反应）；接口留着，接回界面时不用改后端 */
   unreadCount: () => request<{ unread: number }>('/notifications/unread-count'),
 

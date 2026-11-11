@@ -9,6 +9,7 @@
  * 更重要的是历史单必须自洽 —— 一年后打开它，金额不能依赖"当时的目标毛利率"。
  */
 import type { PoolClient, QueryResultRow } from 'pg';
+import type { TemplateLayout } from '@/domain/template-layout';
 import { pool, q } from '../db';
 import { calcQuote, type CalcLineInput, type CalcQuoteResult } from '@/domain/quote-calc';
 import { AppError } from '../http';
@@ -38,6 +39,8 @@ export interface QuoteRow extends QueryResultRow {
   template_id: string | null;
   /** 建单时从模板快照下来的供应商名称；改模板不回写 */
   template_supplier_name: string | null;
+  /** 建单时从模板快照下来的版式（列序 / 表头 / 抬头排布）；null = 默认版式 */
+  template_layout: TemplateLayout | null;
   created_by: string | null;
   created_at: Date;
   updated_at: Date;

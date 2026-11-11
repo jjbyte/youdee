@@ -36,6 +36,7 @@ import type {
   Supplier,
   UserRecord,
 } from './types';
+import type { LayoutIssue as TemplateLayoutIssue } from '@/domain/template-layout';
 
 export const API_BASE = '/api/v1';
 
@@ -44,14 +45,17 @@ export class ApiError extends Error {
   readonly status: number;
   readonly data: unknown;
   readonly field?: string;
+  /** 服务端把可逐条展示的问题放在 detail 里（如模板解析的报告） */
+  readonly detail?: unknown;
 
-  constructor(code: number, message: string, status: number, data: unknown, field?: string) {
+  constructor(code: number, message: string, status: number, data: unknown, field?: string, detail?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
     this.data = data;
     this.field = field;
+    this.detail = detail;
   }
 }
 
@@ -87,6 +91,7 @@ interface Envelope {
   data?: unknown;
   message?: string;
   field?: string;
+  detail?: unknown;
 }
 
 export interface RequestOptions {
@@ -97,14 +102,20 @@ export interface RequestOptions {
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, signal } = opts;
+  /**
+   * FormData 直接交给 fetch：它要自己生成 multipart 边界，
+   * 手写 Content-Type 会把边界写错，服务端 req.formData() 直接读不出来。
+   * 同时也不能走 deepSnake——文件字段不是键值对。
+   */
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
       method,
       credentials: 'same-origin',
       cache: 'no-store',
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(deepSnake(body)),
+      headers: body === undefined || isForm ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(deepSnake(body)),
       signal,
     });
   } catch (e) {
@@ -134,7 +145,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
       payload.message && String(payload.message).trim()
         ? String(payload.message)
         : `这次没成（${code}），稍后重试。`;
-    throw new ApiError(code, message, res.status, deepCamel(payload.data), payload.field);
+    throw new ApiError(code, message, res.status, deepCamel(payload.data), payload.field, deepCamel(payload.detail));
   }
   return deepCamel<T>(payload.data);
 }
@@ -371,6 +382,20 @@ export const api = {
   ) => request<QuoteTemplate>(`/quote-templates/${id}`, { method: 'PATCH', body }),
   deleteQuoteTemplate: (id: string) =>
     request<{ deleted: boolean }>(`/quote-templates/${id}`, { method: 'DELETE' }),
+  /**
+   * 上传 Excel 版式。带 templateId = 给已有模板换版式；不带 = 新建。
+   * 解析不通过时服务端会 422 并把逐条问题放在 data.issues 里。
+   */
+  importQuoteTemplate: (form: FormData) =>
+    request<{ template: QuoteTemplate; issues: TemplateLayoutIssue[] }>('/quote-templates/import', {
+      method: 'POST',
+      body: form,
+    }),
+  /** 样例模板：下载后在 Excel 里改，改完传回来 */
+  downloadTemplateSample: () => request<Blob>('/quote-templates/sample.xlsx'),
+  /** 退回系统默认版式（不删模板，只是不再用上传的那份） */
+  resetTemplateLayout: (id: string) =>
+    request<QuoteTemplate>(`/quote-templates/${id}`, { method: 'PATCH', body: { resetLayout: true } }),
   /** 0.1.11 起顶栏不再有铃铛（没有列表页，点了没反应）；接口留着，接回界面时不用改后端 */
   unreadCount: () => request<{ unread: number }>('/notifications/unread-count'),
 

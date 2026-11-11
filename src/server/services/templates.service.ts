@@ -11,11 +11,15 @@
 import { q, tx } from '../db';
 import { AppError } from '../http';
 import type { CurrentUser } from '../auth/session';
+import type { TemplateLayout } from '@/domain/template-layout';
 
 export interface QuoteTemplateRow {
   id: string;
   name: string;
   supplier_name: string;
+  /** Excel 解析出的版式；null = 系统默认版式 */
+  layout: TemplateLayout | null;
+  source_file: string | null;
   is_default: boolean;
   is_active: boolean;
   sort_order: number;
@@ -27,6 +31,8 @@ export interface QuoteTemplateDTO {
   id: string;
   name: string;
   supplier_name: string;
+  layout: TemplateLayout | null;
+  source_file: string | null;
   is_default: boolean;
   is_active: boolean;
   sort_order: number;
@@ -39,6 +45,8 @@ function dto(r: QuoteTemplateRow): QuoteTemplateDTO {
     id: r.id,
     name: r.name,
     supplier_name: r.supplier_name,
+    layout: r.layout ?? null,
+    source_file: r.source_file,
     is_default: r.is_default,
     is_active: r.is_active,
     sort_order: r.sort_order,
@@ -47,7 +55,7 @@ function dto(r: QuoteTemplateRow): QuoteTemplateDTO {
   };
 }
 
-const SELECT = `SELECT id, name, supplier_name, is_default, is_active, sort_order, created_at, updated_at`;
+const SELECT = `SELECT id, name, supplier_name, layout, source_file, is_default, is_active, sort_order, created_at, updated_at`;
 
 /**
  * 默认在前，其余按 sort_order 再按创建时间——
@@ -92,6 +100,8 @@ async function assertNameFree(name: string, exceptId: string | null): Promise<vo
 export interface CreateTemplateInput {
   name: string;
   supplier_name?: string;
+  layout?: TemplateLayout | null;
+  source_file?: string | null;
   is_default?: boolean;
   is_active?: boolean;
   sort_order?: number;
@@ -105,10 +115,19 @@ export async function createTemplate(input: CreateTemplateInput, actor: CurrentU
   const created = await tx(async (c) => {
     if (isDefault) await c.query('UPDATE quote_templates SET is_default = false WHERE is_default');
     const r = await c.query<QuoteTemplateRow>(
-      `INSERT INTO quote_templates (name, supplier_name, is_default, is_active, sort_order, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       RETURNING id, name, supplier_name, is_default, is_active, sort_order, created_at, updated_at`,
-      [name, (input.supplier_name ?? '').trim(), isDefault, input.is_active !== false, input.sort_order ?? 100, actor.id],
+      `INSERT INTO quote_templates (name, supplier_name, layout, source_file, is_default, is_active, sort_order, created_by)
+       VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8)
+       RETURNING id, name, supplier_name, layout, source_file, is_default, is_active, sort_order, created_at, updated_at`,
+      [
+        name,
+        (input.supplier_name ?? '').trim(),
+        input.layout ? JSON.stringify(input.layout) : null,
+        input.source_file ?? null,
+        isDefault,
+        input.is_active !== false,
+        input.sort_order ?? 100,
+        actor.id,
+      ],
     );
     return r.rows[0]!;
   });
@@ -118,6 +137,9 @@ export async function createTemplate(input: CreateTemplateInput, actor: CurrentU
 export interface PatchTemplateInput {
   name?: string;
   supplier_name?: string;
+  /** undefined = 不动；null = 退回系统默认版式 */
+  layout?: TemplateLayout | null;
+  source_file?: string | null;
   is_default?: boolean;
   is_active?: boolean;
   sort_order?: number;
@@ -144,6 +166,7 @@ export async function patchTemplate(
     }
   }
 
+  const touchLayout = input.layout !== undefined;
   const updated = await tx(async (c) => {
     if (input.is_default === true) await c.query('UPDATE quote_templates SET is_default = false WHERE id <> $1', [id]);
     // 默认模板必须同时是启用的：一个"默认但停用"的模板会让新建单直接 400
@@ -151,9 +174,16 @@ export async function patchTemplate(
       input.is_active !== undefined ? input.is_active : input.is_default === true ? true : current.is_active;
     const r = await c.query<QuoteTemplateRow>(
       `UPDATE quote_templates
-          SET name = $2, supplier_name = $3, is_default = $4, is_active = $5, sort_order = $6, updated_at = now()
+          SET name = $2,
+              supplier_name = $3,
+              is_default = $4,
+              is_active = $5,
+              sort_order = $6,
+              layout = CASE WHEN $7::boolean THEN $8::jsonb ELSE layout END,
+              source_file = CASE WHEN $7::boolean THEN $9 ELSE source_file END,
+              updated_at = now()
         WHERE id = $1
-        RETURNING id, name, supplier_name, is_default, is_active, sort_order, created_at, updated_at`,
+        RETURNING id, name, supplier_name, layout, source_file, is_default, is_active, sort_order, created_at, updated_at`,
       [
         id,
         nextName,
@@ -161,6 +191,9 @@ export async function patchTemplate(
         input.is_default !== undefined ? input.is_default : current.is_default,
         nextActive,
         input.sort_order !== undefined ? input.sort_order : current.sort_order,
+        touchLayout,
+        input.layout ? JSON.stringify(input.layout) : null,
+        touchLayout ? (input.source_file ?? null) : null,
       ],
     );
     return r.rows[0]!;
@@ -205,10 +238,10 @@ export async function deleteTemplate(id: string): Promise<{ deleted: true }> {
  */
 export async function resolveTemplateForCreate(
   templateId: string | null | undefined,
-): Promise<{ id: string | null; supplier_name: string | null }> {
+): Promise<{ id: string | null; supplier_name: string | null; layout: TemplateLayout | null }> {
   if (templateId) {
-    const rows = await q<{ id: string; supplier_name: string; is_active: boolean }>(
-      'SELECT id, supplier_name, is_active FROM quote_templates WHERE id = $1',
+    const rows = await q<{ id: string; supplier_name: string; layout: TemplateLayout | null; is_active: boolean }>(
+      'SELECT id, supplier_name, layout, is_active FROM quote_templates WHERE id = $1',
       [templateId],
     );
     const t = rows[0];
@@ -216,12 +249,12 @@ export async function resolveTemplateForCreate(
     if (!t.is_active) {
       throw new AppError(40003, '这个模板已停用，换一个模板再建单。', 400, { field: 'template_id' });
     }
-    return { id: t.id, supplier_name: t.supplier_name };
+    return { id: t.id, supplier_name: t.supplier_name, layout: t.layout ?? null };
   }
-  const rows = await q<{ id: string; supplier_name: string }>(
-    `SELECT id, supplier_name FROM quote_templates WHERE is_active
+  const rows = await q<{ id: string; supplier_name: string; layout: TemplateLayout | null }>(
+    `SELECT id, supplier_name, layout FROM quote_templates WHERE is_active
       ORDER BY is_default DESC, sort_order, created_at LIMIT 1`,
   );
   const t = rows[0];
-  return { id: t?.id ?? null, supplier_name: t?.supplier_name ?? null };
+  return { id: t?.id ?? null, supplier_name: t?.supplier_name ?? null, layout: t?.layout ?? null };
 }

@@ -133,6 +133,8 @@ export async function quoteDetail(id: string) {
     template_id: row.template_id,
     /** 快照值，不是当前模板的值：模板改了，这张单印出来还是当初那家供应商 */
     template_supplier_name: row.template_supplier_name,
+    /** 版式快照：模板换了列序或抬头，历史单重打仍是当初的样子 */
+    template_layout: row.template_layout,
     /** 报价日期 = 建单日（本地时区），客户对账时认这个而不是活动日期 */
     quote_date: localDateStr(row.created_at),
     updated_at: row.updated_at.toISOString(),
@@ -227,8 +229,8 @@ export async function createQuote(actor: CurrentUser, input: CreateQuoteInput) {
       `INSERT INTO quotes (quote_no, version, customer_name, event_name, event_date, valid_until, status,
                            project_type, currency, target_margin_rate, discount_amount,
                            total_cost, total_price, total_profit, margin_rate, min_line_margin,
-                           tax_statement, note, template_id, template_supplier_name, created_by)
-       VALUES ($1, 1, $2, $3, $4, $5, 'draft', $6, 'CNY', $7, $8, 0, 0, 0, 0, NULL, $9, $10, $11, $12, $13)
+                           tax_statement, note, template_id, template_supplier_name, template_layout, created_by)
+       VALUES ($1, 1, $2, $3, $4, $5, 'draft', $6, 'CNY', $7, $8, 0, 0, 0, 0, NULL, $9, $10, $11, $12, $13::jsonb, $14)
        RETURNING id`,
       [
         quoteNo,
@@ -243,6 +245,7 @@ export async function createQuote(actor: CurrentUser, input: CreateQuoteInput) {
         input.note ?? null,
         template.id,
         template.supplier_name,
+        template.layout ? JSON.stringify(template.layout) : null,
         actor.id,
       ],
     );

@@ -15,6 +15,7 @@
  */
 import { formatMoney, formatQty } from '@/lib/format';
 import { fmtAmount, parseAmount } from './money';
+import { placeholderNames, type TemplateColumnKey, type TemplateLayout } from './template-layout';
 
 export type SheetLayout = 'detailed' | 'brief';
 
@@ -42,7 +43,7 @@ export type SheetTaxBasis = 'inclusive' | 'exclusive';
 export type SheetAlign = 'left' | 'right' | 'center';
 
 export interface SheetColumn {
-  key: 'no' | 'name' | 'spec' | 'remark' | 'unit' | 'qty' | 'unitPrice' | 'amount';
+  key: TemplateColumnKey;
   header: string;
   /** Excel 列宽（字符数）。HTML 侧按占比换算成百分比，两边列宽比例因此一致 */
   width: number;
@@ -86,6 +87,35 @@ export function sheetColumns(opts: SheetOptions): SheetColumn[] {
     cols.push({ key: 'remark', header: '备注', width: 24, align: 'left', wrap: true });
   }
   return cols;
+}
+
+/**
+ * 每一列的固有属性：对齐、是否金额、是否折行。
+ *
+ * 这三项**不允许模板改**。对齐跟着数据类型走——金额被左对齐、序号被右对齐，
+ * 客户第一眼就会觉得这张表是临时拼的；折行只给文字列，数字列折成两行后
+ * 「1,234.00」会断在逗号处，客户会按两笔读。
+ * 模板能改的是：有哪些列、什么顺序、表头写什么、多宽。
+ */
+const COLUMN_TRAITS: Record<TemplateColumnKey, Pick<SheetColumn, 'align' | 'money' | 'wrap'>> = {
+  no: { align: 'center' },
+  name: { align: 'left', wrap: true },
+  spec: { align: 'left', wrap: true },
+  unit: { align: 'left' },
+  qty: { align: 'right' },
+  unitPrice: { align: 'right', money: true },
+  amount: { align: 'right', money: true },
+  remark: { align: 'left', wrap: true },
+};
+
+/** 模板定的列 → 渲染用的列定义。顺序、表头、列宽来自模板，其余取固有属性 */
+function columnsFromLayout(layout: TemplateLayout): SheetColumn[] {
+  return layout.columns.map((c) => ({
+    key: c.key,
+    header: c.header,
+    width: c.width,
+    ...COLUMN_TRAITS[c.key],
+  }));
 }
 
 export interface SheetItemInput {
@@ -155,11 +185,25 @@ export interface SheetGroup {
   rows: SheetRow[];
 }
 
+/** 抬头里的一格。colSpan=2 表示这一行只有它，占满整宽 */
+export interface SheetMetaCell {
+  text: string;
+  colSpan: 1 | 2;
+  align: SheetAlign;
+  bold?: boolean;
+}
+
 export interface CustomerSheet {
   title: string;
   subtitle: string;
-  /** 抬头三行，左/右两列。空串表示这一格留空 */
-  meta: Array<[string, string]>;
+  /**
+   * 抬头行，每行一到两格。
+   *
+   * 从「三行固定的左/右两栏」改成网格，是因为模板允许管理员在 Excel 里
+   * 调抬头排布：一行放一个字段、两个字段、换顺序、插一行固定文字。
+   * 没有模板时这里仍然是原来的四到五行、每行两格，输出与改造前一致。
+   */
+  metaRows: SheetMetaCell[][];
   columns: SheetColumn[];
   groups: SheetGroup[];
   totalLabel: string;
@@ -180,12 +224,83 @@ export function sheetTaxLine(tax: SheetTaxBasis): string {
   return tax === 'inclusive' ? '以上报价为含税价，税率另计' : '以上报价为不含税价，税额另计';
 }
 
+interface MetaCtx {
+  quote: SheetQuoteInput;
+  company: { name?: string | null; address?: string | null; phone?: string | null };
+}
+
+/** 抬头占位符 → 实际值。没认出来的一律空串：宁可少印，也不把 {{xxx}} 印到客户脸上 */
+function metaValue(name: string, { quote, company }: MetaCtx): string {
+  switch (name) {
+    case '报价单号':
+      return quote.quoteNo;
+    case '版本':
+      return `V${quote.version}`;
+    case '供应商名称':
+      return quote.supplierName?.trim() || '—';
+    case '客户名称':
+      return quote.customerName;
+    case '项目名称':
+      return quote.eventName;
+    case '报价日期':
+      return quote.quoteDate?.trim() || '';
+    case '活动日期':
+      return quote.eventDate ?? '';
+    case '报价有效期':
+      return quote.validUntil;
+    case '税口径':
+      return TAX_LABEL[quote.taxStatement] ?? quote.taxStatement;
+    case '报价人':
+      return quote.operatorName?.trim() || '';
+    case '联系电话':
+      return quote.operatorPhone?.trim() || '';
+    case '公司名称':
+      return company.name?.trim() || '';
+    case '公司地址':
+      return company.address?.trim() || '';
+    case '公司电话':
+      return company.phone?.trim() || '';
+    default:
+      return '';
+  }
+}
+
+/**
+ * 渲染一格抬头。
+ *
+ * 一格里的占位符**全部**为空、剩下的又只是「活动日期：」这种半截标签时整格返回空——
+ * 否则客户会看到一行只有冒号的抬头，像漏填了。这条规则与没有模板时的
+ * 「空值不出现」保持一致。
+ */
+export function renderTemplateText(tpl: string, ctx: MetaCtx): string {
+  const names = placeholderNames(tpl);
+  if (names.length > 0) {
+    const values = names.map((n) => metaValue(n, ctx));
+    if (values.every((v) => v === '')) {
+      const literal = tpl.replace(/\{\{[^{}]*\}\}/g, '').trim();
+      if (literal === '' || /[：:]$/.test(literal)) return '';
+    }
+  }
+  return tpl
+    .replace(/\{\{\s*([^{}]*?)\s*\}\}/g, (_, raw) => metaValue(String(raw).trim(), ctx))
+    .trim();
+}
+
 export function buildCustomerSheet(
   quote: SheetQuoteInput,
   company: { name?: string | null; address?: string | null; phone?: string | null },
   opts: SheetOptions = SHEET_OPTIONS_DEFAULT,
+  layout: TemplateLayout | null = null,
 ): CustomerSheet {
-  const columns = sheetColumns(opts);
+  /**
+   * 有模板时列集合由模板决定，「详细/精简」「显示单价」两个开关随之失效：
+   * 模板里没写单价列就是不印，界面上再勾也不该冒出来。
+   * 分组与优惠不改列，照常受开关控制。
+   */
+  const columns = layout ? columnsFromLayout(layout) : sheetColumns(opts);
+  const hasCol = (k: TemplateColumnKey) => columns.some((c) => c.key === k);
+  const withRemark = hasCol('remark');
+  const withUnitPrice = hasCol('unitPrice');
 
   // 分组：分类名做键，出现顺序即分组顺序（报价员排行序时已经把分类排好了）
   const groups: SheetGroup[] = [];
@@ -221,40 +336,68 @@ export function buildCustomerSheet(
    */
   const lineSum = fmtAmount(quote.items.reduce((a, it) => a + parseAmount(it.amount), 0n));
 
+  const ctx: MetaCtx = { quote, company };
   const operatorName = quote.operatorName?.trim() ?? '';
   const operatorPhone = quote.operatorPhone?.trim() ?? '';
-  const supplierName = quote.supplierName?.trim() ?? '';
-  const quoteDate = quote.quoteDate?.trim() ?? '';
-  /**
-   * 抬头四组（+ 有报价人时第五组），一行两格。顺序是按「客户拿到单子会先看什么」排的：
-   *   谁出的（单号+供应商）→ 给谁做的（客户+项目）→ 两个日期 → 有效期与口径 → 找谁问。
-   *
-   * 空值只允许落在**右格**：左格空着会让右边那格看起来像掉了一行（没填活动日期时
-   * 「税口径」单独飘在右边）。所以两个日期并排、有效期与税口径并排。
-   *
-   * 供应商名称缺失时给破折号而不是留空：空着看起来像漏印，破折号是"这里本来就没有"。
-   */
-  const meta: Array<[string, string]> = [
-    [`报价单号：${quote.quoteNo}  V${quote.version}`, `供应商名称：${supplierName || '—'}`],
-    [`客户名称：${quote.customerName}`, `项目名称：${quote.eventName}`],
-    [
-      quoteDate ? `报价日期：${quoteDate}` : '',
-      quote.eventDate ? `活动日期：${quote.eventDate}` : '',
-    ],
-    [
-      `报价有效期：${quote.validUntil}`,
-      `税口径：${TAX_LABEL[quote.taxStatement] ?? quote.taxStatement}`,
-    ],
-  ];
-  // 第 5 行只在真有报价人信息时出现：空行会把下面表格往下推一段，而且看着像漏填
-  if (operatorName || operatorPhone) {
-    meta.push([operatorName ? `报价人：${operatorName}` : '', operatorPhone ? `联系电话：${operatorPhone}` : '']);
+
+  let title: string;
+  let subtitle: string;
+  let metaRows: SheetMetaCell[][];
+
+  if (layout) {
+    const titleRow = layout.meta.find((r) => r.kind === 'title');
+    const subtitleRow = layout.meta.find((r) => r.kind === 'subtitle');
+    title = (titleRow ? renderTemplateText(titleRow.cells[0]?.text ?? '', ctx) : '') || company.name?.trim() || '报价单';
+    // 模板没写副标题就不印：这一行是版面的一部分，不是必须内容
+    subtitle = subtitleRow ? renderTemplateText(subtitleRow.cells[0]?.text ?? '', ctx) : '';
+    metaRows = [];
+    for (const r of layout.meta) {
+      if (r.kind !== 'line') continue;
+      const cells: SheetMetaCell[] = [];
+      for (const c of r.cells) {
+        const text = renderTemplateText(c.text, ctx);
+        if (text) cells.push({ text, colSpan: c.colSpan, align: c.align, bold: c.bold });
+      }
+      if (cells.length) metaRows.push(cells);
+    }
+  } else {
+    title = company.name?.trim() || '报价单';
+    subtitle = `${quote.eventName}活动报价 · 单号 ${quote.quoteNo} V${quote.version}`;
+    const cell = (text: string, align: SheetAlign = 'left'): SheetMetaCell => ({ text, colSpan: 1, align });
+    const supplierName = quote.supplierName?.trim() ?? '';
+    const quoteDate = quote.quoteDate?.trim() ?? '';
+    /**
+     * 抬头四组（+ 有报价人时第五组），一行两格。顺序是按「客户拿到单子会先看什么」排的：
+     *   谁出的（单号+供应商）→ 给谁做的（客户+项目）→ 两个日期 → 有效期与口径 → 找谁问。
+     * 空值只允许落在**右格**：左格空着会让右边那格看起来像掉了一行。
+     * 供应商名称缺失时给破折号而不是留空：空着看起来像漏印。
+     * 右格右对齐由数据带着走（原来是 CSS 的 :last-child 干的，模板可改排布后不行了）。
+     */
+    metaRows = [
+      [cell(`报价单号：${quote.quoteNo}  V${quote.version}`), cell(`供应商名称：${supplierName || '—'}`, 'right')],
+      [cell(`客户名称：${quote.customerName}`), cell(`项目名称：${quote.eventName}`, 'right')],
+      [
+        cell(quoteDate ? `报价日期：${quoteDate}` : ''),
+        cell(quote.eventDate ? `活动日期：${quote.eventDate}` : '', 'right'),
+      ],
+      [
+        cell(`报价有效期：${quote.validUntil}`),
+        cell(`税口径：${TAX_LABEL[quote.taxStatement] ?? quote.taxStatement}`, 'right'),
+      ],
+    ];
+    // 第 5 行只在真有报价人信息时出现：空行会把下面表格往下推一段，而且看着像漏填
+    if (operatorName || operatorPhone) {
+      metaRows.push([
+        cell(operatorName ? `报价人：${operatorName}` : ''),
+        cell(operatorPhone ? `联系电话：${operatorPhone}` : '', 'right'),
+      ]);
+    }
   }
 
   return {
-    title: company.name?.trim() || '报价单',
-    subtitle: `${quote.eventName}活动报价 · 单号 ${quote.quoteNo} V${quote.version}`,
-    meta,
+    title,
+    subtitle,
+    metaRows,
     columns,
     groups,
     totalLabel: opts.showDiscount ? '报价合计' : '合计',
@@ -267,17 +410,15 @@ export function buildCustomerSheet(
 
   function row(it: SheetItemInput): SheetRow {
     const remark = it.remark?.trim() ?? '';
-    const detailed = opts.layout === 'detailed';
     return {
       no: 0,
-      // 详细档有独立的备注列，项目名就不再驮一段括号——同一句话印两遍，
-      // 客户会以为是两条不同的说明
-      name: detailed || !remark ? it.name : `${it.name}（${remark}）`,
+      // 有独立备注列时，项目名就不再驮一段括号——同一句话印两遍，客户会以为是两条说明
+      name: withRemark || !remark ? it.name : `${it.name}（${remark}）`,
       spec: it.spec?.trim() || '—',
-      remark: detailed ? remark : '',
+      remark: withRemark ? remark : '',
       unit: it.unit,
       qty: it.qty,
-      unitPrice: opts.showUnitPrice ? it.unitPrice : null,
+      unitPrice: withUnitPrice ? it.unitPrice : null,
       amount: it.amount,
     };
   }

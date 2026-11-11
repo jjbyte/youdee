@@ -6,6 +6,7 @@
  *
  * 金额一律是**字符串**（decimal），前端不做浮点运算，只做展示。
  */
+import type { TemplateLayout } from '@/domain/template-layout';
 
 export type Role = 'admin' | 'member';
 export type ItemType = 'material' | 'personnel';
@@ -396,6 +397,8 @@ export interface QuoteDetail extends QuoteListItem {
   templateId: string | null;
   /** 快照：抬头印的供应商名称。改模板不会改这个值 */
   templateSupplierName: string | null;
+  /** 快照：版式（列序 / 表头 / 抬头排布）。null = 系统默认版式 */
+  templateLayout: TemplateLayout | null;
   /** 报价日期 = 建单日（yyyy-mm-dd），和活动日期不是一回事 */
   quoteDate: string;
 }
@@ -406,6 +409,10 @@ export interface QuoteTemplate {
   name: string;
   /** 印在客户版抬头的供应商名称 */
   supplierName: string;
+  /** Excel 解析出的版式；null = 系统默认版式 */
+  layout: TemplateLayout | null;
+  /** 上传的原始 xlsx 路径（存档用） */
+  sourceFile: string | null;
   isDefault: boolean;
   isActive: boolean;
   sortOrder: number;

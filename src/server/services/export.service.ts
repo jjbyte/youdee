@@ -120,6 +120,8 @@ function writeCustomer(
     },
     company,
     opts,
+    // 版式取建单时的快照，不取模板现值：模板后来改了列序，这张单重打仍是原样
+    quote.template_layout,
   );
 
   const ws = wb.addWorksheet('报价单', { views: [{ state: 'frozen', ySplit: 1 }] });
@@ -138,9 +140,24 @@ function writeCustomer(
   ws.mergeCells(sub.number, 1, sub.number, colCount);
 
   const splitAt = Math.max(1, Math.floor(colCount / 2));
-  for (const [left, right] of sheet.meta) {
-    const r = ws.addRow([left, ...Array(Math.max(0, colCount - 1)).fill('')]);
-    if (right) r.getCell(splitAt + 1).value = right;
+  for (const metaRow of sheet.metaRows) {
+    const r = ws.addRow([]);
+    const only = metaRow[0];
+    // 单格整行（模板里一行只放一个字段）：合并整行，别在右半边留一片空白
+    if (metaRow.length === 1 && only && only.colSpan === 2) {
+      const c = r.getCell(1);
+      c.value = only.text || null;
+      c.alignment = { horizontal: only.align };
+      if (only.bold) c.font = { bold: true };
+      ws.mergeCells(r.number, 1, r.number, colCount);
+      continue;
+    }
+    metaRow.forEach((cell, i) => {
+      const c = r.getCell(i === 0 ? 1 : splitAt + 1);
+      c.value = cell.text || null;
+      c.alignment = { horizontal: cell.align };
+      if (cell.bold) c.font = { bold: true };
+    });
     if (colCount > 2) {
       ws.mergeCells(r.number, 1, r.number, splitAt);
       ws.mergeCells(r.number, splitAt + 1, r.number, colCount);

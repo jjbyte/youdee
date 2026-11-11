@@ -74,6 +74,9 @@ export default function QuotePreviewPage() {
     [layout, grouped, showUnitPrice, showDiscount],
   );
 
+  /** 建单时选了带 Excel 版式的模板：列已经定死，两个列相关开关失效 */
+  const hasCustomLayout = !!quote?.templateLayout;
+
   const sheet = useMemo(() => {
     if (!quote) return null;
     return buildCustomerSheet(
@@ -107,6 +110,8 @@ export default function QuotePreviewPage() {
       },
       company ?? {},
       sheetOptions,
+      // 建单时快照的版式；没有就是系统默认版式
+      quote.templateLayout ?? null,
     );
   }, [quote, company, sheetOptions]);
 
@@ -155,6 +160,11 @@ export default function QuotePreviewPage() {
             <div className="fw-semi t-sm mb-[var(--space-3)]">客户版排版</div>
 
             <div className="flex flex-col gap-[var(--space-4)]">
+              {/*
+                列集合由建单时选的模板决定后，「详细/精简」与「显示单价」就不再是开关：
+                模板里没有单价列，勾了也不该冒出来。这里置灰并说明原因，而不是把开关藏掉——
+                藏掉会让人以为功能丢了。
+              */}
               <div className="flex flex-col gap-[var(--space-2)]">
                 <span className="label">版式</span>
                 <Segmented<'detailed' | 'brief'>
@@ -166,6 +176,9 @@ export default function QuotePreviewPage() {
                   ]}
                   onChange={setLayout}
                 />
+                {hasCustomLayout ? (
+                  <span className="t-2xs t-3">列由这份报价单的模板决定，这里的版式选择不生效。</span>
+                ) : null}
               </div>
 
               <label className="inline-flex items-center gap-[var(--space-2)] t-sm">
@@ -173,13 +186,21 @@ export default function QuotePreviewPage() {
                 按分类分组
               </label>
 
-              <label className="inline-flex items-center gap-[var(--space-2)] t-sm">
+              <label
+                className={
+                  hasCustomLayout
+                    ? 'inline-flex items-center gap-[var(--space-2)] t-sm t-3'
+                    : 'inline-flex items-center gap-[var(--space-2)] t-sm'
+                }
+              >
                 <input
                   type="checkbox"
                   checked={showUnitPrice}
+                  disabled={hasCustomLayout}
                   onChange={(e) => setShowUnitPrice(e.target.checked)}
                 />
                 显示单价
+                {hasCustomLayout ? <span className="t-2xs">（模板没这一列）</span> : null}
               </label>
 
               <label className="inline-flex items-center gap-[var(--space-2)] t-sm">

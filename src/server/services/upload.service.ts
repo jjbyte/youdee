@@ -75,3 +75,18 @@ export function assetUrl(stored: string): string {
   if (/^https?:\/\//i.test(stored)) return stored;
   return stored.startsWith('/') ? stored : `/${stored}`;
 }
+
+/**
+ * 落盘一段已经校验过的二进制（目前只有模板 xlsx 用）。
+ *
+ * 与 `saveUpload` 分开：那个的类型判断是图片/PDF 白名单，xlsx 的魔数是 ZIP，
+ * 直接把 ZIP 加进白名单等于允许上传任意压缩包。xlsx 的校验在
+ * `template-file.service.assertXlsx` 里单独做，做到结构级。
+ */
+export async function saveBuffer(buf: Buffer, subdir: string, ext: string): Promise<{ storageKey: string }> {
+  const dir = path.join(/*turbopackIgnore: true*/ process.cwd(), UPLOAD_DIR, subdir);
+  await mkdir(dir, { recursive: true });
+  const name = `${randomUUID()}.${ext}`;
+  await writeFile(path.join(/*turbopackIgnore: true*/ dir, name), buf);
+  return { storageKey: `${subdir}/${name}` };
+}

@@ -26,14 +26,24 @@ export function PaperSheet({ sheet }: { sheet: CustomerSheet }) {
   return (
     <div className="paper">
       <h1>{sheet.title}</h1>
-      <div className="paper-sub">{sheet.subtitle}</div>
+      {sheet.subtitle ? <div className="paper-sub">{sheet.subtitle}</div> : null}
 
       <table className="paper-meta">
         <tbody>
-          {sheet.meta.map(([left, right], i) => (
+          {sheet.metaRows.map((row, i) => (
             <tr key={i}>
-              <td>{left}</td>
-              <td>{right}</td>
+              {row.map((cell, j) => (
+                <td
+                  key={j}
+                  colSpan={cell.colSpan}
+                  className={cell.bold ? 'fw-semi' : undefined}
+                  style={{ textAlign: cell.align }}
+                >
+                  {cell.text}
+                </td>
+              ))}
+              {/* 一行只有左格时补一个空格子：不补的话这张表只剩一列，下面的行会跟着错位 */}
+              {row.length === 1 && row[0]?.colSpan === 1 ? <td aria-hidden="true" /> : null}
             </tr>
           ))}
         </tbody>

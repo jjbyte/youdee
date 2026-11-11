@@ -88,7 +88,7 @@ describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
 
   it('抬头四行与 Excel 的合并单元格一一对应', () => {
     const s = buildCustomerSheet(quote(), company);
-    expect(s.meta).toEqual([
+    expect(s.metaRows.map((r) => r.map((c) => c.text))).toEqual([
       ['报价单号：YD-2614  V1', '供应商名称：杭州星芒活动策划'],
       ['客户名称：星海科技', '项目名称：2026 年会'],
       ['报价日期：2026-11-06', '活动日期：2026-12-20'],
@@ -98,13 +98,13 @@ describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
 
   it('供应商名称缺失时印破折号，不留一格空白（空白看着像漏印）', () => {
     const s = buildCustomerSheet(quote({ supplierName: '  ' }), company);
-    expect(s.meta[0]?.[1]).toBe('供应商名称：—');
+    expect(s.metaRows[0]?.[1]?.text).toBe('供应商名称：—');
   });
 
   it('缺活动日期时只有右格空着，税口径不会被挤到左边单独飘一行', () => {
     const s = buildCustomerSheet(quote({ eventDate: null, quoteDate: null }), company);
-    expect(s.meta[2]).toEqual(['', '']);
-    expect(s.meta[3]).toEqual(['报价有效期：2026-12-05', '税口径：含税']);
+    expect(s.metaRows[2]?.map((c) => c.text)).toEqual(['', '']);
+    expect(s.metaRows[3]?.map((c) => c.text)).toEqual(['报价有效期：2026-12-05', '税口径：含税']);
   });
 
   it('优惠为 0 时不出现优惠行；关掉折扣连合计文案一起变', () => {
@@ -175,24 +175,26 @@ describe('customer-sheet — 打印与 Excel 的同一份版面', () => {
 });
 
 describe('customer-sheet — 报价人（操作人员）在抬头', () => {
+  const texts = (s: ReturnType<typeof buildCustomerSheet>) => s.metaRows.map((r) => r.map((c) => c.text));
+
   it('有姓名与电话时，抬头多一行「报价人 / 联系电话」', () => {
     const s = buildCustomerSheet(quote({ operatorName: '王小明', operatorPhone: '0571-8888 6677' }), company);
-    expect(s.meta).toHaveLength(5);
-    expect(s.meta[4]).toEqual(['报价人：王小明', '联系电话：0571-8888 6677']);
+    expect(s.metaRows).toHaveLength(5);
+    expect(texts(s)[4]).toEqual(['报价人：王小明', '联系电话：0571-8888 6677']);
   });
 
   it('只有姓名（账号没填电话）时，右格留空而不是写半个「联系电话：」', () => {
     const s = buildCustomerSheet(quote({ operatorName: '王小明', operatorPhone: null }), company);
-    expect(s.meta[4]).toEqual(['报价人：王小明', '']);
+    expect(texts(s)[4]).toEqual(['报价人：王小明', '']);
   });
 
   it('创建人已删、电话也没有时整行不出现，不留一个空抬头', () => {
     const s = buildCustomerSheet(quote({ operatorName: null, operatorPhone: null }), company);
-    expect(s.meta).toHaveLength(4);
+    expect(s.metaRows).toHaveLength(4);
   });
 
   it('空白字符串按没填处理（老数据里是空格不是 null）', () => {
     const s = buildCustomerSheet(quote({ operatorName: '  ', operatorPhone: '  ' }), company);
-    expect(s.meta).toHaveLength(4);
+    expect(s.metaRows).toHaveLength(4);
   });
 });

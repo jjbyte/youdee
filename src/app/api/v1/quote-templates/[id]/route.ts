@@ -13,6 +13,8 @@ export const PATCH = route(async (req, params) => {
         name: b.name === undefined ? undefined : String(b.name),
         // 供应商名称允许清空（空串是"还没填"，不是"不改"）
         supplier_name: b.supplier_name === undefined ? undefined : (optStr(b.supplier_name, 120) ?? ''),
+        // reset_layout：退回系统默认版式（不删模板，只是不再用上传的那份）
+        ...(b.reset_layout === true ? { layout: null, source_file: null } : {}),
         is_default: b.is_default === undefined ? undefined : b.is_default === true,
         is_active: b.is_active === undefined ? undefined : b.is_active !== false,
         sort_order: b.sort_order === undefined ? undefined : Number(b.sort_order),

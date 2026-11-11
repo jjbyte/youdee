@@ -64,6 +64,10 @@ model QuoteTemplate {
   name         String   @db.VarChar(60)
   /// 印在客户版抬头的「供应商名称」；建单时快照到 quotes.template_supplier_name
   supplierName String   @map("supplier_name") @db.VarChar(120)
+  /// Excel 解析出的版式（列顺序 / 表头 / 抬头排布）；null = 系统默认版式
+  layout       Json?
+  /// 上传的原始 xlsx 路径，仅存档与重新解析用，不参与渲染
+  sourceFile   String?  @map("source_file")
   isDefault    Boolean  @default(false) @map("is_default")
   isActive     Boolean  @default(true) @map("is_active")
   sortOrder    Int      @default(100) @map("sort_order")
@@ -311,6 +315,8 @@ model Quote {
   templateId         String?   @map("template_id") @db.Uuid
   /// 快照：供应商名称。改模板不回写历史单
   templateSupplierName String? @map("template_supplier_name") @db.VarChar(120)
+  /// 快照：版式定义。模板改了版式，这张单重打还是当初的样子
+  templateLayout     Json?   @map("template_layout")
   createdBy          String?   @map("created_by") @db.Uuid
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)

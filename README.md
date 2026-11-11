@@ -705,6 +705,16 @@ cd /opt/youdee
 sudo bash deploy/update.sh /tmp/youdee-0.1.25-20261111.tar.gz
 ```
 
+> **第一次用这套流程要引导一下**：`update.sh` 是 0.1.25 才加的，服务器上现有的
+> `/opt/youdee/deploy/` 里没有它（`manual-deploy.sh` 也要新版，它多了 `SKIP_MIGRATE` 开关）。
+> 先把这两个脚本传上去再执行：
+>
+> ```bash
+> scp deploy/update.sh deploy/manual-deploy.sh root@服务器:/opt/youdee/deploy/
+> ```
+>
+> 之后就正常了——新版本的交付包里自带 `update.sh`，不需要再单独传。
+
 它按六步走，只有第 4 步开始才影响线上：
 
 | 步骤 | 动作 | 线上影响 |

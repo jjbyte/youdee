@@ -18,6 +18,10 @@ import type {
   Category,
   CompareResult,
   CompanyProfile,
+  Contract,
+  ContractDetail,
+  ContractFile,
+  ContractQuote,
   CurrentUser,
   DashboardSummary,
   ItemDetail,
@@ -398,6 +402,55 @@ export const api = {
     request<QuoteTemplate>(`/quote-templates/${id}`, { method: 'PATCH', body: { resetLayout: true } }),
   /** 0.1.11 起顶栏不再有铃铛（没有列表页，点了没反应）；接口留着，接回界面时不用改后端 */
   unreadCount: () => request<{ unread: number }>('/notifications/unread-count'),
+
+  // ── 合同管理 ──
+  /**
+   * 合同台账。主查询维度：合同编号、合同名称、公司（甲方）、客户（乙方）、
+   * 签订日期区间、创建日期区间。q 是"什么都搜"的兜底入口。
+   */
+  contracts: (
+    params: {
+      q?: string;
+      contractNo?: string;
+      title?: string;
+      /** 甲方 */
+      company?: string;
+      /** 乙方 */
+      customer?: string;
+      project?: string;
+      signedFrom?: string;
+      signedTo?: string;
+      createdFrom?: string;
+      createdTo?: string;
+      hasFile?: boolean;
+      /** 只有管理员勾了才生效（服务端会按角色再判一次） */
+      includeDeleted?: boolean;
+      page?: number;
+      limit?: number;
+    } = {},
+  ) => request<Page<Contract>>(`/contracts${qs(params)}`),
+  contract: (id: string) => request<ContractDetail>(`/contracts/${id}`),
+  createContract: (body: Record<string, unknown>) =>
+    request<ContractDetail>('/contracts', { method: 'POST', body }),
+  updateContract: (id: string, body: Record<string, unknown>) =>
+    request<ContractDetail>(`/contracts/${id}`, { method: 'PATCH', body }),
+  /** 软删：仅管理员，附件仍在磁盘上，restoreContract 即可恢复 */
+  deleteContract: (id: string) =>
+    request<{ deleted: boolean; fileCount: number }>(`/contracts/${id}`, { method: 'DELETE' }),
+  restoreContract: (id: string) => request<ContractDetail>(`/contracts/${id}/restore`, { method: 'POST' }),
+  /** 附件上传：multipart，必须带 `file` 与 `category`（contract / quote / settlement） */
+  uploadContractFile: (id: string, form: FormData) =>
+    request<ContractFile>(`/contracts/${id}/files`, { method: 'POST', body: form }),
+  deleteContractFile: (id: string, fileId: string) =>
+    request<{ deleted: boolean }>(`/contracts/${id}/files/${fileId}`, { method: 'DELETE' }),
+  /** 关联一张系统里的报价单（幂等：重复关联不报错） */
+  linkContractQuote: (id: string, quoteId: string) =>
+    request<{ linked: boolean; quotes: ContractQuote[] }>(`/contracts/${id}/quotes`, {
+      method: 'POST',
+      body: { quote_id: quoteId },
+    }),
+  unlinkContractQuote: (id: string, quoteId: string) =>
+    request<{ deleted: boolean }>(`/contracts/${id}/quotes/${quoteId}`, { method: 'DELETE' }),
 
   /**
    * 导出 Excel。客户版带上预览页的四个版式参数——客户版 Excel 与打印走同一份版面模型，

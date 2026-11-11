@@ -6,6 +6,7 @@ import { api, errorMessage, isUnauthorized } from '@/lib/api';
 import type { CurrentUser } from '@/lib/types';
 import {
   IconCollapse,
+  IconContract,
   IconDensity,
   IconLogout,
   IconMaterial,
@@ -27,11 +28,13 @@ function crumbs(pathname: string): string[] {
   // 嘉宾价不是独立模块，是人员库的一个预置筛选视图，面包屑挂在人员库下面
   if (pathname.startsWith('/guests')) return ['人员库', '嘉宾价'];
   if (pathname.startsWith('/vendors')) return ['供应商'];
+  // 合同管理是独立台账，不是报价单的附属：合同先于报价签，两边各自查各自的
+  if (pathname.startsWith('/contracts')) return ['合同管理'];
   if (pathname.startsWith('/quotes')) {
-    if (pathname === '/quotes') return ['攒单', '报价单'];
-    if (pathname.endsWith('/edit')) return ['攒单', '报价单编辑'];
-    if (pathname.endsWith('/preview')) return ['攒单', '预览客户版'];
-    return ['攒单'];
+    if (pathname === '/quotes') return ['报价单'];
+    if (pathname.endsWith('/edit')) return ['报价单', '编辑'];
+    if (pathname.endsWith('/preview')) return ['报价单', '客户版'];
+    return ['报价单'];
   }
   if (pathname.startsWith('/settings')) return ['设置'];
   return ['有底'];
@@ -176,8 +179,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           icon={<IconVendor size={20} />}
         />
         <NavLink
+          href="/contracts"
+          label="合同管理"
+          collapsed={collapsed}
+          active={isActive('/contracts')}
+          icon={<IconContract size={20} />}
+        />
+        <NavLink
           href="/quotes"
-          label="攒单"
+          label="报价单"
           collapsed={collapsed}
           active={isActive('/quotes')}
           icon={<IconQuote size={20} />}

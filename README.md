@@ -53,16 +53,17 @@
 
 | 角色 | 账号（种子） | 能做什么 |
 |---|---|---|
-| 管理员 | `admin` | 全部功能，含**改已有价格**、删主数据、导出内部版（带成本）|
-| 成员 | `xiaowang` | 建价格、做报价单、导出客户版；**不能**改已有价格 |
+| 管理员 | `admin` | 全部功能，含**改已有价格**、删主数据、删除合同、导出内部版（带成本）|
+| 成员 | `xiaowang` | 建价格、做报价单、录合同并传各类附件、导出客户版；**不能**改已有价格、不能删合同 |
 
 > 两个账号初始口令都是 `youdee2026`，**上线前必须改掉**（设置 → 账号）。
 
-登录后 12 个页面：
+登录后 13 个页面：
 
 | 页面 | 路由 | 干什么 |
 |---|---|---|
 | 总览 | `/` | 本周单量、毛利分布、临期价格、待办提醒 |
+| 合同管理 | `/contracts` | 合同台账 + 三类附件（合同 / 报价单 / 结算）；按编号、名称、甲方、乙方、签订日期、创建日期查 |
 | 报价单列表 | `/quotes` | 全部状态（草稿 / 已发出 / 已作废），默认草稿优先 |
 | 报价单编辑 | `/quotes/:id/edit` | 明细逐行录入、毛利率反算、风险检查、出单 |
 | 客户版预览 | `/quotes/:id/preview` | 打印 / PDF / 客户版 Excel 的纸面 |
@@ -112,7 +113,7 @@
 | 图表 | recharts | 3.10.1 | 价格趋势、毛利分布 |
 | 图标 | lucide-react | 1.67.0 | 全项目统一一套 SVG 描边图标，**不用 emoji 当图标** |
 
-规模（当前版本 0.1.22）：**18 张表 / 7 个迁移 / 63 个接口路由 / 12 个页面 / 132 条单测 / 86 项部署自检**。
+规模（当前版本 0.1.24）：**21 张表 / 10 个迁移 / 70 个接口路由 / 13 个页面 / 175 条单测 / 86 项部署自检**。
 
 ### 明确不做的事
 
@@ -159,6 +160,7 @@ youdee/
 src/app/
 ├── (app)/                    # 登录后的业务页，共用侧边栏布局（layout.tsx）
 │   ├── page.tsx              # 总览
+│   ├── contracts/            # 合同台账（附件分合同 / 报价单 / 结算三类，按六个维度查）
 │   ├── quotes/               # 报价单列表 / [id]/edit 编辑 / [id]/preview 客户版
 │   ├── materials/            # 物料库 / [id] 比价与档案
 │   ├── staff/                # 人员库 / [id]
@@ -166,7 +168,7 @@ src/app/
 │   ├── guests/               # 客户 / 项目台账
 │   └── settings/             # 公司抬头、报价默认值、账号
 ├── login/                    # 登录页（唯一不需要登录的页面）
-├── api/v1/                   # 59 个 route.ts，REST 接口
+├── api/v1/                   # 70 个 route.ts，REST 接口
 └── uploads/                  # 附件读取（实际文件落在 UPLOAD_DIR）
 ```
 
@@ -179,11 +181,12 @@ src/app/
 | 价格 | `/prices` `/prices/:id/history` `/price-lookup` | 录价、改价、历史、取价 |
 | 比价 | `/items/:id/compare` | 按口径分组、算归一价、标不可比 |
 | 报价单 | `/quotes` `/quotes/:id/items` `/quotes/:id/issue` | 建单、加行、出单 |
+| 合同 | `/contracts` `/contracts/:id/files` `/contracts/:id/quotes` | 台账、三类附件上传（单份 20MB）、关联系统报价单 |
 | 导出 | `/quotes/:id/export.xlsx` | 客户版 / 内部版 Excel |
 | 设置 | `/settings/company` `/settings/quote` `/users` | 抬头、默认值、账号 |
 | 运维 | `/health` | 进程与数据库分别报状态 |
 
-**`src/domain/` —— 纯函数，不碰数据库、不碰 HTTP（10 个文件）**
+**`src/domain/` —— 纯函数，不碰数据库、不碰 HTTP（12 个文件）**
 
 | 文件 | 职责 |
 |---|---|
@@ -195,6 +198,8 @@ src/app/
 | `quote-status.ts` | 状态机 draft → issued → void |
 | `permissions.ts` | 谁能改旧价、谁能删主数据 |
 | `customer-sheet.ts` | **客户版版面的唯一来源**：列定义、行内容、合计。HTML 打印与 Excel 都读它 |
+| `template-layout.ts` | 报价单模板的 Excel 版式协议：占位符、列序、抬头排布、禁用词校验 |
+| `contract.ts` | 合同字段校验：必填、长度、真实日期、金额两位小数 |
 | `invoice-info.ts` | 开票信息校验与格式化 |
 | `phone.ts` | 电话归一（全角转半角、只数数字、≥7 位） |
 
@@ -208,17 +213,18 @@ src/server/
 ├── wrap.ts                   # 路由包装：统一 try/catch 与响应格式
 ├── quote-item-body.ts        # 报价行请求体转换
 ├── auth/                     # JWT 签发校验、口令哈希、会话 Cookie
-├── services/                 # 业务服务层（33 个文件）：quote / price / item / compare / export …
+├── services/                 # 业务服务层（37 个文件）：quote / price / item / compare / contract / file-type / export …
 └── store/                    # 数据访问（SQL）：prices / quotes / settings
 ```
 
 分层是单向的：`app/api → services → store → db`，`domain` 谁都可用但自己不依赖任何东西。
 
-**`src/components/` —— 组件（55 个文件）**
+**`src/components/` —— 组件（58 个文件）**
 
 ```
 src/components/
 ├── quote/        # 明细表、单头、行备注、客户版纸面（paper-sheet.tsx）
+├── contracts/    # 合同详情 / 编辑抽屉（关联报价单 + 三类附件上传）
 ├── compare/      # 比价表格、不可比提示、价格趋势
 ├── staff/        # 人员库表格与抽屉
 ├── vendors/      # 供应商表格、开票信息表单
@@ -249,6 +255,8 @@ src/components/
 | 默认税口径、默认毛利率、预警线、有效期天数 | 数据库 `app_settings`（界面上是「设置 → 比价与计价规则」） | 建单、比价、预警 |
 | 客户版抬头印的供应商名称 | 设置 → 报价单模板（建单时选模板，值快照进单据） | 只影响之后新建的单，历史单不变 |
 | 客户版的列与抬头排布 | 设置 → 报价单模板 → 上传 Excel（版式快照进单据） | 只影响之后新建的单，历史单按建单时的版式打 |
+| 合同能填哪些字段 / 怎么校验 | `src/domain/contract.ts` | 新建与编辑两条路径（服务端唯一校验点） |
+| 合同附件的类型与大小上限 | `src/server/services/file-type.ts` 的 `FILE_CATEGORY`（按字节判定，不看扩展名）+ `contract.service.ts` 的 `CONTRACT_FILE_MAX_BYTES` | 合同附件的三个上传口 |
 
 ---
 

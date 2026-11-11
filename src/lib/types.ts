@@ -547,3 +547,69 @@ export interface DashboardSummary {
   }>;
   favoriteItems?: ItemListItem[];
 }
+
+// ── 合同管理 ────────────────────────────────────────────────
+
+/** 合同附件的三个抽屉 */
+export type ContractFileCategory = 'contract' | 'quote' | 'settlement';
+
+/** 合同附件（PDF / 图片 / Word / Excel）。一个合同可挂多份，按 category 分组 */
+export interface ContractFile {
+  id: string;
+  kind: string;
+  category: ContractFileCategory;
+  url: string;
+  originalName: string;
+  mime: string;
+  /** 服务端判定的真实扩展名：pdf/jpg/png/webp/doc/docx/xls/xlsx */
+  ext: string;
+  sizeBytes: number;
+  sortOrder: number;
+  createdAt: string;
+}
+
+/** 合同关联的系统报价单 */
+export interface ContractQuote {
+  id: string;
+  quoteNo: string;
+  version: number;
+  customerName: string;
+  eventName: string;
+  status: 'draft' | 'issued' | 'void';
+  totalPrice: string;
+  issuedAt: string | null;
+  /** 报价单被软删：关联还在，但界面上要标灰 */
+  deleted: boolean;
+}
+
+/** 合同台账的一行。金额是字符串（numeric 原样传，避免浮点丢精度） */
+export interface Contract {
+  id: string;
+  contractNo: string | null;
+  title: string;
+  /** 公司名称（甲方 = 我方签约主体） */
+  companyName: string;
+  /** 客户名称（乙方）；老数据可能为空 */
+  customerName: string | null;
+  projectName: string | null;
+  /** yyyy-mm-dd；未知时为 null（不拿建单日冒充） */
+  signedOn: string | null;
+  amount: string | null;
+  note: string | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** 非空 = 已软删，只有管理员看得到 */
+  deletedAt: string | null;
+  /** 三个抽屉相加 */
+  fileCount: number;
+  fileCounts: { contract: number; quote: number; settlement: number };
+  /** 关联的系统报价单张数 */
+  quoteCount: number;
+}
+
+export interface ContractDetail extends Contract {
+  files: ContractFile[];
+  quotes: ContractQuote[];
+}

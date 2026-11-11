@@ -28,6 +28,7 @@ import {
   Eye,
   EyeOff,
   Factory,
+  FileSignature,
   FileText,
   Gauge,
   GraduationCap,
@@ -85,6 +86,8 @@ export const IconDashboard = icon(Gauge);
 export const IconMaterial = icon(Package);
 export const IconStaff = icon(Users);
 export const IconVendor = icon(Factory);
+/** 合同管理：签过字的那一页，不是"又一叠文件" */
+export const IconContract = icon(FileSignature);
 export const IconQuote = icon(Receipt);
 export const IconInbox = icon(Inbox);
 export const IconGuest = icon(GraduationCap);

@@ -104,6 +104,9 @@ export function translatePgError(e: unknown): AppError | null {
       qi_line_profit_identity: new AppError(50001, '行利润与报价减成本不一致，已拒绝保存。', 500),
       quotes_margin_range: new AppError(50001, '毛利率超出可表示范围，请检查优惠金额。', 500),
       quotes_issued_at_present: new AppError(50001, '出单时间缺失，已拒绝保存。', 500),
+      contracts_amount_nonneg: new AppError(40001, '合同金额不能为负数。', 400, { field: 'amount' }),
+      contracts_title_not_blank: new AppError(40001, '合同名称不能为空。', 400, { field: 'title' }),
+      contracts_company_not_blank: new AppError(40001, '公司名称不能为空。', 400, { field: 'company_name' }),
     };
     if (err.constraint && map[err.constraint]) return map[err.constraint]!;
     return new AppError(40001, '数据未通过完整性校验，请检查填写内容。', 400);

@@ -79,7 +79,7 @@ export function CompareFootbar({
   async function submit() {
     if (!row) return;
     if (!quoteId) {
-      setError('先选一张草稿单。没有的话去「攒单」新建一张。');
+      setError('先选一张草稿单。没有的话去「报价单」新建一张。');
       return;
     }
     setBusy(true);
@@ -184,7 +184,7 @@ export function CompareFootbar({
       >
         <div className="flex flex-col gap-[var(--space-4)]">
           {quotes.length === 0 && !error ? (
-            <Note tone="neutral">没有草稿单。先去「攒单」建一张，再回来攒这个价。</Note>
+            <Note tone="neutral">没有草稿单。先去「报价单」建一张，再回来攒这个价。</Note>
           ) : (
             <label className="flex flex-col gap-[var(--space-2)]">
               <span className="label">草稿单</span>

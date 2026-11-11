@@ -113,7 +113,7 @@
 | 图表 | recharts | 3.10.1 | 价格趋势、毛利分布 |
 | 图标 | lucide-react | 1.67.0 | 全项目统一一套 SVG 描边图标，**不用 emoji 当图标** |
 
-规模（当前版本 0.1.24）：**21 张表 / 10 个迁移 / 70 个接口路由 / 13 个页面 / 175 条单测 / 86 项部署自检**。
+规模（当前版本 0.1.25）：**21 张表 / 10 个迁移 / 70 个接口路由 / 13 个页面 / 175 条单测 / 86 项部署自检**。
 
 ### 明确不做的事
 
@@ -598,6 +598,20 @@ journalctl -u youdee -f             # 跟日志
 cd /opt/youdee && npx next start -H 0.0.0.0 -p 3000
 ```
 
+> **建议（装了 systemd 之后再改一下）**：把 `.env` 里的 `UPLOAD_DIR` 写成发布目录之外的绝对路径，
+> 例如 `/opt/youdee-data/uploads`，并把文件搬过去：
+>
+> ```bash
+> sudo mkdir -p /opt/youdee-data && sudo mv /opt/youdee/public/uploads /opt/youdee-data/uploads
+> sudo chown -R youdee:youdee /opt/youdee-data
+> # .env 改 UPLOAD_DIR=/opt/youdee-data/uploads，然后 systemctl restart youdee
+> ```
+>
+> 这样附件与应用代码彻底分开：以后每次 `deploy/update.sh` 都不必搬附件目录，
+> 回滚也不会把更新期间新传的文件一起退回去。`youdee.service` 的 `ReadWritePaths`
+> 也建议同步加上这一行，让「应用能写哪里」在单元文件里一眼可查。
+> 前提是**搬家要在停机时做**，否则这期间传的附件会留在旧目录。
+
 #### 第 6 步：自检
 
 ```bash
@@ -611,6 +625,9 @@ BASE_URL=http://你的IP:3000 node deploy/verify.mjs        # 打对外地址
 ```bash
 ADMIN_PASSWORD=你的管理员口令 MEMBER_PASSWORD=你的成员口令 node deploy/verify.mjs
 ```
+
+> 之后每次发新版本，走 [日常运维 → 更新版本](#更新版本systemd-直装) 里的 `deploy/update.sh`，
+> 不要再手工解包覆盖；`manual-deploy.sh` 只用于首次部署。
 
 ---
 
@@ -669,16 +686,74 @@ location / {
 
 ### 日常运维：更新、备份、恢复、回滚
 
-**更新到新代码**（Docker）：
+#### 更新版本（systemd 直装）
+
+**不要「解包覆盖 + 重启」**。线上目录正被 `next start` 读着，覆盖那几分钟页面会白屏；
+更隐蔽的是 `tar` 覆盖解包**不会删除**新版本里已删掉的文件，被移除的路由会残留、并被重新编译进产物。
+
+用 `deploy/update.sh`：它在旁边的干净目录里构建，只把「停机 → 迁移 → 换目录 → 起服务」放进停机窗口。
 
 ```bash
+# ① 本地打包，产出 dist/youdee-<版本>-<日期>.tar.gz 与同名 .sha256
+bash deploy/pack.sh
+
+# ② 两个文件一起上传（.sha256 用来校验包在传输中没损坏）
+scp dist/youdee-0.1.25-*.tar.gz dist/youdee-0.1.25-*.tar.gz.sha256 root@服务器:/tmp/
+
+# ③ 服务器上执行
 cd /opt/youdee
-# 上传并解包新版本，覆盖源码，但保留 .env
-tar -xzf /tmp/youdee-<新版本>.tar.gz -C /opt/youdee
-sh deploy/remote-up.sh
+sudo bash deploy/update.sh /tmp/youdee-0.1.25-20261111.tar.gz
 ```
 
-**常用状态命令**：
+它按六步走，只有第 4 步开始才影响线上：
+
+| 步骤 | 动作 | 线上影响 |
+|---|---|---|
+| 1 | 备份：`pg_dump` + 附件 + `.env` → `/opt/youdee-backup/<时间>/` | 无 |
+| 2 | 解包到 `/opt/youdee-next`（干净目录，不残留旧文件） | 无 |
+| 3 | 在新目录 `npm ci --include=dev` + `prisma generate` + `next build` | **无**，旧版照常服务 |
+| 4 | `systemctl stop` → `prisma migrate deploy` → 灌种子 | 停机开始 |
+| 5 | `/opt/youdee` 改名为 `/opt/youdee-old`，新目录上位 | 停机中 |
+| 6 | `systemctl start` → 轮询健康检查核对版本号 | 恢复 |
+
+**版本号是「跑的是不是新代码」的唯一硬证据**。`/api/v1/health` 的 `version` 取自运行中进程的
+`package.json`（systemd 用 `npx` 启动，会注入 `npm_package_version`），不是写死的常量：
+
+```bash
+curl -s http://127.0.0.1:3000/api/v1/health
+# {"code":0,"data":{"status":"ok","db":"ok","version":"0.1.25","uptime_s":12},...}
+```
+
+`uptime_s` 顺带证明进程真的重启过——只改代码不重启，版本号会一直停在老的。
+
+**四条必须知道的约束**：
+
+- **迁移只有 up，没有 down**。库备份是唯一的真回滚手段，所以脚本在 `pg_dump` 失败时会直接中止。
+  确实没有 `pg_dump` 时可用 `ALLOW_NO_DB_BACKUP=1` 强行继续，但那等于放弃回滚。
+- **`.env` 不在交付包里**（口令、`JWT_SECRET` 不该跟着包走）。脚本复用线上那份，不覆盖。
+  换 `JWT_SECRET` 等于让所有人重新登录。
+- **附件也不在包里**。`UPLOAD_DIR` 是相对路径（如 `public/uploads`）时，脚本会把它带进新目录：
+  构建期间先预热复制，停机后再补一次增量，避免为了几百兆附件干等。
+  更省心的长期做法是把 `UPLOAD_DIR` 改成发布目录之外的绝对路径（如 `/opt/youdee-data/uploads`），
+  之后更新就完全不用搬文件。
+- **停机窗口**只有「迁移 + 换目录 + 启动」，通常几秒；装依赖和构建都在后台目录完成，不占停机时间。
+
+失败处理：构建失败则线上版本原封不动；迁移失败会把旧目录换回去并重启；
+启动后健康检查版本对不上会自动回滚代码，并打印 `pg_restore` 命令——换下来的新版本留在
+`/opt/youdee-failed.<时间>`，别急着删，排错要看。
+
+#### 常用状态命令（systemd）
+
+```bash
+sudo systemctl status youdee                      # 状态
+sudo journalctl -u youdee -f                      # 实时日志
+sudo journalctl -u youdee -n 200 --no-pager       # 最近 200 行
+sudo systemctl restart youdee                     # 重启（改了 .env 之后要做）
+sudo systemctl stop youdee                        # 停止
+sudo systemctl daemon-reload                      # 改过 youdee.service 之后要做
+```
+
+Docker 路径对应的命令：
 
 ```bash
 docker compose ps                  # 状态
@@ -695,19 +770,38 @@ docker compose exec db psql -U youdee -d youdee     # 进库
 docker compose exec -T db pg_dump -U youdee youdee | gzip > backup-$(date +%F).sql.gz
 docker run --rm -v youdee_uploads:/u -v "$PWD":/b alpine tar czf /b/uploads-$(date +%F).tar.gz -C /u .
 
-# 裸机
-pg_dump -U youdee youdee | gzip > backup-$(date +%F).sql.gz
-tar czf uploads-$(date +%F).tar.gz -C /opt/youdee var/uploads
+# 裸机 / systemd（-Fc 是自定义格式，配合 pg_restore 才能单表或整库还原）
+pg_dump "postgresql://youdee:口令@127.0.0.1:5432/youdee" -Fc -f /var/backups/youdee-$(date +%F).dump
+tar czf /var/backups/uploads-$(date +%F).tar.gz -C /opt/youdee public/uploads   # 路径以 .env 的 UPLOAD_DIR 为准
 ```
+
+> `update.sh` 每次更新前都会自己做一遍同样的备份，存在 `/opt/youdee-backup/<时间>/`。
+> 但这不能替代定时备份：更新备份只覆盖「更新前那一刻」，日常误删、磁盘故障它管不了。
 
 **恢复**：
 
 ```bash
 gunzip -c backup-2026-11-05.sql.gz | docker compose exec -T db psql -U youdee -d youdee
-# 裸机：gunzip -c backup.sql.gz | psql -U youdee -d youdee
+# 裸机 / systemd（.dump 是 -Fc 格式，用 pg_restore；-c 先删再建，--if-exists 抑制不存在时的报错）
+pg_restore -d "postgresql://youdee:口令@127.0.0.1:5432/youdee" -c --if-exists /var/backups/youdee-2026-11-05.dump
 ```
 
-**回滚**：代码层重新上传上一版压缩包再构建即可。数据库层要注意——**迁移是前进式的，没有 down 脚本**，回滚代码前先 `pg_dump`；如果新版迁移改过表结构，旧代码可能读不了新结构，这时用部署前的备份恢复。
+**回滚**分两层，别混着做：
+
+```bash
+# 代码层：把上一个发布目录换回来（update.sh 在校验不通过时会自动做这一步）
+sudo systemctl stop youdee
+sudo mv /opt/youdee /opt/youdee-broken
+sudo mv /opt/youdee-old /opt/youdee
+sudo systemctl start youdee
+```
+
+数据库层：**迁移是前进式的，没有 down 脚本**。若新版迁移改过表结构、导致旧代码读不了新结构，
+用迁移前的备份恢复——注意这会丢掉迁移之后写入的数据，先想清楚值不值得：
+
+```bash
+pg_restore -d "postgresql://youdee:口令@127.0.0.1:5432/youdee" -c --if-exists /opt/youdee-backup/<时间>/db.dump
+```
 
 ---
 
@@ -742,7 +836,7 @@ npm run dev            # 开发服务器
 npm run build          # 生产构建
 npm run start          # 生产启动（需先 build）
 npm run typecheck      # 类型检查
-npm test               # 领域层单测（132 条）
+npm test               # 领域层单测（175 条）
 
 # 数据库（本地开发）
 npm run db:start       # 起本地 embedded-postgres（前台阻塞）
@@ -753,10 +847,11 @@ npm run db:seed        # 灌种子（幂等）
 npm run db:reset       # 清库重建（会丢数据）
 
 # 部署
-bash deploy/pack.sh            # 出交付包到 dist/
+bash deploy/pack.sh            # 出交付包到 dist/（含 .sha256）
 bash deploy/deploy.sh root@IP  # 本机 → 远端一键（需 ssh 可达）
 sh deploy/remote-up.sh         # 远端：构建并启动（Docker）
-sh deploy/manual-deploy.sh     # 远端：构建并启动（裸机）
+sh deploy/manual-deploy.sh     # 远端：首次部署，构建并启动（裸机 / systemd）
+sudo bash deploy/update.sh <包>  # 远端：更新版本，带备份、迁移与自动回滚（systemd）
 node deploy/verify.mjs         # 部署后自检（86 项）
 ```
 

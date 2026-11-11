@@ -243,11 +243,22 @@ else
   fi
 fi
 
-echo "[manual] 4/6 应用数据库迁移"
-npx --no-install prisma migrate deploy
+# 更新版本时由 deploy/update.sh 传 SKIP_MIGRATE=1 跳过这一步，改到停机窗口里再执行。
+# 理由：构建要两三分钟，这段时间线上还跑着旧代码；先动库只会让"构建失败"升级成
+# "库已改、代码还是旧的"——旧代码可能不认新结构，那时连回滚都得多想一步。
+if [ "${SKIP_MIGRATE:-0}" = "1" ]; then
+  echo "[manual] 4/6 应用数据库迁移 —— 已跳过（SKIP_MIGRATE=1，由更新脚本在停机窗口内执行）"
+else
+  echo "[manual] 4/6 应用数据库迁移"
+  npx --no-install prisma migrate deploy
+fi
 
 echo "[manual] 5/6 灌入种子（已有数据会自动跳过）"
-if [ "${SEED_ON_BOOT:-1}" = "1" ]; then
+# seed.ts 以"库里有几个用户"为闸门：生产库已有用户时它是空操作，
+# 所以更新时照常跑不会覆盖业务数据，只是补上新增的默认行。
+if [ "${SKIP_SEED:-0}" = "1" ]; then
+  echo "[manual] 5/6 灌入种子 —— 已跳过（SKIP_SEED=1）"
+elif [ "${SEED_ON_BOOT:-1}" = "1" ]; then
   npx --no-install tsx prisma/seed.ts
 fi
 

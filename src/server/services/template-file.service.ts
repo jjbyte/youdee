@@ -29,6 +29,8 @@ interface ZipEntry {
 export function inspectZip(buf: Buffer): ZipEntry[] {
   const EOCD = 0x06054b50;
   let eocd = -1;
+  // 不足 22 字节连 EOCD 都放不下，直接判废（否则 readUInt32LE 会越界抛 RangeError）
+  if (buf.length < 22) throw new AppError(41501, '这个文件不是有效的 xlsx（读不到压缩目录）。', 415, { field: 'file' });
   // EOCD 固定 22 字节，注释最多 65535，从尾部往前找
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i -= 1) {
     if (buf.readUInt32LE(i) === EOCD) {

@@ -21,14 +21,30 @@ export const dynamic = 'force-dynamic';
 // 构建期一个都不存在，追不追无所谓 —— 显式退出追踪。
 const ROOT = path.resolve(/*turbopackIgnore: true*/ process.cwd(), process.env.UPLOAD_DIR ?? 'var/uploads');
 
-/** 与 upload.service 的白名单一致。不在表里的扩展名一律不读盘。 */
+/**
+ * 与 upload.service 的白名单一致。不在表里的扩展名一律不读盘。
+ * 扩展名由服务端落盘时写死（UUID + 判定出的真实扩展名），不是客户端给的。
+ */
 const MIME: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.webp': 'image/webp',
   '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
+
+/**
+ * Office 文档一律走下载，不做内联渲染。
+ * 图片与 PDF 保持内联（点开就能看，这是它们全部的价值）；
+ * Word / Excel 内联只会让浏览器弹一个空白页，还可能触发插件的旧漏洞。
+ */
+function disposition(ext: string): string | null {
+  return ext === '.doc' || ext === '.docx' || ext === '.xls' || ext === '.xlsx' ? 'attachment' : null;
+}
 
 function notFound(): Response {
   return new Response('附件不存在', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
@@ -37,7 +53,8 @@ function notFound(): Response {
 export async function GET(_req: Request, ctx: { params: Promise<{ path?: string[] }> }) {
   const { path: segs = [] } = await ctx.params;
 
-  const mime = MIME[path.extname(segs.at(-1) ?? '').toLowerCase()];
+  const ext = path.extname(segs.at(-1) ?? '').toLowerCase();
+  const mime = MIME[ext];
   if (!mime) return notFound();
 
   // 反目录穿越。只判 startsWith(ROOT) 不够稳：先挡掉所有可疑段，
@@ -52,15 +69,16 @@ export async function GET(_req: Request, ctx: { params: Promise<{ path?: string[
     const info = await stat(target);
     if (!info.isFile()) return notFound();
     const buf = await readFile(target);
-    return new Response(new Uint8Array(buf), {
-      headers: {
-        'Content-Type': mime,
-        'Content-Length': String(info.size),
-        // 文件名是 UUID，内容不会变；但仍标 private，这些是内部资料
-        'Cache-Control': 'private, max-age=86400',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
+    const dep = disposition(ext);
+    const headers: Record<string, string> = {
+      'Content-Type': mime,
+      'Content-Length': String(info.size),
+      // 文件名是 UUID，内容不会变；但仍标 private，这些是内部资料
+      'Cache-Control': 'private, max-age=86400',
+      'X-Content-Type-Options': 'nosniff',
+    };
+    if (dep) headers['Content-Disposition'] = `${dep}; filename="${segs.at(-1)}"`;
+    return new Response(new Uint8Array(buf), { headers });
   } catch {
     return notFound();
   }

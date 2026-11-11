@@ -113,7 +113,7 @@
 | 图表 | recharts | 3.10.1 | 价格趋势、毛利分布 |
 | 图标 | lucide-react | 1.67.0 | 全项目统一一套 SVG 描边图标，**不用 emoji 当图标** |
 
-规模（当前版本 0.1.25）：**21 张表 / 10 个迁移 / 70 个接口路由 / 13 个页面 / 175 条单测 / 86 项部署自检**。
+规模（当前版本 0.1.26）：**21 张表 / 10 个迁移 / 70 个接口路由 / 13 个页面 / 175 条单测 / 86 项部署自检**。
 
 ### 明确不做的事
 
@@ -691,18 +691,18 @@ location / {
 **不要「解包覆盖 + 重启」**。线上目录正被 `next start` 读着，覆盖那几分钟页面会白屏；
 更隐蔽的是 `tar` 覆盖解包**不会删除**新版本里已删掉的文件，被移除的路由会残留、并被重新编译进产物。
 
-用 `deploy/update.sh`：它在旁边的干净目录里构建，只把「停机 → 迁移 → 换目录 → 起服务」放进停机窗口。
+用 `deploy/update.sh`：它在旁边的干净目录里构建，**先在备用端口把新版本跑起来验一遍**，通了才动线上。
 
 ```bash
 # ① 本地打包，产出 dist/youdee-<版本>-<日期>.tar.gz 与同名 .sha256
 bash deploy/pack.sh
 
 # ② 两个文件一起上传（.sha256 用来校验包在传输中没损坏）
-scp dist/youdee-0.1.25-*.tar.gz dist/youdee-0.1.25-*.tar.gz.sha256 root@服务器:/tmp/
+scp dist/youdee-0.1.26-*.tar.gz dist/youdee-0.1.26-*.tar.gz.sha256 root@服务器:/tmp/
 
 # ③ 服务器上执行
 cd /opt/youdee
-sudo bash deploy/update.sh /tmp/youdee-0.1.25-20261111.tar.gz
+sudo bash deploy/update.sh /tmp/youdee-0.1.26-20261111.tar.gz
 ```
 
 > **第一次用这套流程要引导一下**：`update.sh` 是 0.1.25 才加的，服务器上现有的
@@ -715,28 +715,39 @@ sudo bash deploy/update.sh /tmp/youdee-0.1.25-20261111.tar.gz
 >
 > 之后就正常了——新版本的交付包里自带 `update.sh`，不需要再单独传。
 
-它按六步走，只有第 4 步开始才影响线上：
+它按七步走，只有第 4 步开始才影响线上：
 
 | 步骤 | 动作 | 线上影响 |
 |---|---|---|
 | 1 | 备份：`pg_dump` + 附件 + `.env` → `/opt/youdee-backup/<时间>/` | 无 |
 | 2 | 解包到 `/opt/youdee-next`（干净目录，不残留旧文件） | 无 |
 | 3 | 在新目录 `npm ci --include=dev` + `prisma generate` + `next build` | **无**，旧版照常服务 |
+| 3.5 | **预启动自检**：以服务用户身份在 `:PORT+1` 起一份，健康检查对版本 | **无** |
 | 4 | `systemctl stop` → `prisma migrate deploy` → 灌种子 | 停机开始 |
 | 5 | `/opt/youdee` 改名为 `/opt/youdee-old`，新目录上位 | 停机中 |
 | 6 | `systemctl start` → 轮询健康检查核对版本号 | 恢复 |
+
+**第 3.5 步为什么必须有**：0.1.25 首跑时它还不存在，于是「新版本起不来」的代价是——
+线上停过一次、库迁移过、再整目录回滚，等于一次真实宕机；而脚本给出的线索只有一句
+「（最后一次：`||`）」，连是"连不上"还是"版本不符"都分不清。现在新版本先在
+`:PORT+1` 以 `User=` 身份起一份，健康检查通过才继续；不通就把日志打屏、删掉旁目录、
+退出——线上一次都没停过，库也没动过。
+
+用服务用户试跑而不是 root，是因为「构建成功、启动即退出」最常见的原因恰恰是权限：
+文件属主、`UPLOAD_DIR` 写权限、`HOME` 不可写、node 不在该用户的 `PATH` 里。
+root 试跑会一路通过，然后线上失败。
 
 **版本号是「跑的是不是新代码」的唯一硬证据**。`/api/v1/health` 的 `version` 取自运行中进程的
 `package.json`（systemd 用 `npx` 启动，会注入 `npm_package_version`），不是写死的常量：
 
 ```bash
 curl -s http://127.0.0.1:3000/api/v1/health
-# {"code":0,"data":{"status":"ok","db":"ok","version":"0.1.25","uptime_s":12},...}
+# {"code":0,"data":{"status":"ok","db":"ok","version":"0.1.26","uptime_s":12},...}
 ```
 
 `uptime_s` 顺带证明进程真的重启过——只改代码不重启，版本号会一直停在老的。
 
-**四条必须知道的约束**：
+**五条必须知道的约束**：
 
 - **迁移只有 up，没有 down**。库备份是唯一的真回滚手段，所以脚本在 `pg_dump` 失败时会直接中止。
   确实没有 `pg_dump` 时可用 `ALLOW_NO_DB_BACKUP=1` 强行继续，但那等于放弃回滚。
@@ -746,11 +757,21 @@ curl -s http://127.0.0.1:3000/api/v1/health
   构建期间先预热复制，停机后再补一次增量，避免为了几百兆附件干等。
   更省心的长期做法是把 `UPLOAD_DIR` 改成发布目录之外的绝对路径（如 `/opt/youdee-data/uploads`），
   之后更新就完全不用搬文件。
+- **`youdee.service` 里 `ReadWritePaths` 指向的目录必须存在**。`systemd` 建挂载命名空间时
+  路径不存在会直接以 `status=226/NAMESPACE` 拒绝启动，报错只有
+  `Failed to set up mount namespacing: No such file or directory`，完全指不到"少建了个空目录"。
+  脚本会补建 `.next/cache` 与上传目录——空目录最容易被丢：`tar` 未必带上、`git` 不跟踪。
 - **停机窗口**只有「迁移 + 换目录 + 启动」，通常几秒；装依赖和构建都在后台目录完成，不占停机时间。
 
-失败处理：构建失败则线上版本原封不动；迁移失败会把旧目录换回去并重启；
-启动后健康检查版本对不上会自动回滚代码，并打印 `pg_restore` 命令——换下来的新版本留在
-`/opt/youdee-failed.<时间>`，别急着删，排错要看。
+失败处理分三层，代价逐层升高：
+
+| 失败点 | 脚本行为 | 线上 |
+|---|---|---|
+| 构建失败 / **预启动自检不通过** | 打印新版本自己的启动日志，删掉旁目录，退出 | **没停过，库没动** |
+| 迁移失败 | 旧目录换回并重启 | 停过一次 |
+| 切换后健康检查不通过 | 打印 `systemctl status` + `journalctl` 最后 40 行，回滚代码**并再验一次是否真的恢复**；没恢复就把"现在是一次真实宕机"和处理命令摊出来 | 停过一次 |
+
+换下来的新版本留在 `/opt/youdee-failed.<时间>`，别急着删，排错要看。
 
 #### 常用状态命令（systemd）
 
@@ -772,6 +793,34 @@ docker compose restart app         # 重启（不重建）
 docker compose down                # 停掉（数据在卷里，不丢）
 docker compose exec db psql -U youdee -d youdee     # 进库
 ```
+
+#### 更新后服务起不来怎么查
+
+先分清是「连不上」还是「在跑但状态不对」，两者的排查方向完全不同：
+
+```bash
+curl -s http://127.0.0.1:3000/api/v1/health   # 连不上 = 进程没在听；有 JSON = 进程在跑
+sudo ss -lntp | grep 3000                     # 谁占着端口
+sudo systemctl status youdee --no-pager -l    # Active 行给出退出码与状态（如 226/NAMESPACE）
+sudo journalctl -u youdee -n 200 --no-pager
+```
+
+最省事的是**直接在失败目录里前台跑一次**，报错原样打出来，不必对着日志猜：
+
+```bash
+cd /opt/youdee-failed.<时间>
+sudo -u youdee env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 npx --no-install next start -p 3100
+```
+
+按退出码对号：
+
+| 现象 | 病因 | 处理 |
+|---|---|---|
+| `226/NAMESPACE`，日志有 `Failed to set up mount namespacing` | 单元里 `ReadWritePaths` 指向的目录不存在 | `mkdir -p .next/cache public/uploads`（新版 `update.sh` 已自动补建） |
+| `EADDRINUSE` | 旧进程没死或被手工启动的实例占着端口 | `ss -lntp \| grep 3000` 找到 PID 后停掉 |
+| `EACCES` / `permission denied` | 目录属主不对（root 解包、`User=` 是 youdee） | `chown -R youdee:youdee /opt/youdee` |
+| `Cannot find module 'next'` / `'@tailwindcss/postcss'` | 依赖装残了 | 删掉该目录的 `node_modules` 与 `.next` 重装 |
+| 进程反复重启，日志有 `Killed process ... out of memory` | 内存不足 | 加 swap 或升级内存，`next build` 与运行不要同时压 |
 
 **备份**（建议配 cron，每天一次）：
 

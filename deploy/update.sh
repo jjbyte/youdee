@@ -14,13 +14,23 @@
 #      必须在迁移之前完成，且要能在切回去之后还原。
 #
 # 顺序：备份（库 / 附件 / .env）→ 解到旁目录 → 装依赖 + 构建（线上照常跑）
+#       → 预启动自检（新版本先在备用端口跑一份，验通了才动线上）
 #       → 停服务 → 迁移 → 换目录 → 起服务 → 校验版本
 # 停机窗口只剩「停 → 迁移 → 换 → 起」这几秒。
+#
+# 0.1.26 起加了「预启动自检」（步骤 3.5）。0.1.25 首跑踩到的坑：
+# 只在切完目录后才做健康检查，于是"新版本起不来"的代价是——线上停过一次、库迁过、
+# 再整目录回滚。用户看到的就是一次真实宕机，而脚本能给的信息只有一句
+# 「（最后一次：||）」，连是"连不上"还是"版本不符"都分不清。
+# 现在改成：新版本先在 :PORT+1 以服务用户的身份起一份，健康检查通过才继续；
+# 不通就把日志打屏、删掉旁目录、脚本退出，线上一次都没停过。
 #
 # 可选环境变量：
 #   SERVICE=youdee          systemd 单元名
 #   RUN_USER=youdee         目标属主，默认读单元文件里的 User=
 #   BASE_URL=...            校验地址，默认 http://127.0.0.1:<.env 里的 PORT>
+#   PREFLIGHT=0             跳过预启动自检（不推荐：那等于把新版本起不来的风险留给线上）
+#   PREFLIGHT_PORT=3101     预启动用的端口，默认 PORT+1
 #   ALLOW_NO_DB_BACKUP=1    没有 pg_dump 也继续（不推荐：等于放弃回滚）
 set -euo pipefail
 
@@ -56,6 +66,31 @@ systemctl cat "$SERVICE" >/dev/null 2>&1 || die "systemd 里没有 $SERVICE 单�
 
 version_of() {
   node -e 'const fs=require("node:fs");try{console.log(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).version)}catch{console.log("")}' "$1"
+}
+
+# 探一次健康检查。输出四种形态，必须能分开看，排查方向完全不同：
+#   ok|版本|ok      正常
+#   ok|版本|error   进程在跑、版本对，但库连不上（跟这次更新无关，先查 DATABASE_URL）
+#   REFUSED         端口没人听 —— 进程启动即退出（这是最常见的"起不来"）
+#   TIMEOUT         端口通了，但 3 秒内没答完 —— 多半卡在库连接上，不是没启动
+# 0.1.25 首跑时把前两种和后两种混成了同一句"未返回 ok（||）"，白绕一圈。
+probe() {
+  node -e '
+    const url = process.argv[1];
+    (async () => {
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        const j = await r.json();
+        const d = j.data || {};
+        console.log(`${d.status||""}|${d.version||""}|${d.db||""}`);
+      } catch (e) {
+        if (e.name === "TimeoutError") { console.log("TIMEOUT"); return; }
+        const code = (e.cause && e.cause.code) || e.code || "";
+        if (/ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ENOTFOUND/.test(code)) console.log("REFUSED");
+        else console.log("ERR:" + (code || e.name || "unknown"));
+      }
+    })();
+  ' "$1" 2>/dev/null | tr -d '\r'
 }
 
 OLD_VER="$(version_of "$ROOT/package.json")"
@@ -166,6 +201,89 @@ fi
 # 属主在切目录前就改好：chown 一整个 node_modules 要几秒，不该占停机窗口
 chown -R "$RUN_USER:$RUN_USER" "$NEXT_DIR" 2>/dev/null || warn "chown 到 $RUN_USER 失败，请手动确认属主"
 
+# ── 单元文件引用的可写目录必须先存在 ────────────────────────────────────
+# deploy/youdee.service 里有 ReadWritePaths=/opt/youdee/public/uploads 与 /opt/youdee/.next/cache。
+# systemd 给服务建挂载命名空间时，这两个路径**不存在**就直接失败，单位停在
+# status=226/NAMESPACE，而报错只有一句 "Failed to set up mount namespacing: No such file or directory"，
+# 完全指不到"少建了一个空目录"。偏偏空目录最容易被丢：tar 未必带上、git 不跟踪空目录、
+# Turbopack 构建也不像 webpack 那样一定生成 .next/cache。
+# 无条件补建，成本为零，能挡掉一整类"新版本起不来"。
+mkdir -p "$NEXT_DIR/.next/cache"
+case "$UPLOAD_DIR" in
+  /*) mkdir -p "$UPLOAD_DIR"; chown -R "$RUN_USER:$RUN_USER" "$UPLOAD_DIR" 2>/dev/null || true ;;
+  *)  mkdir -p "$NEXT_DIR/$UPLOAD_DIR" ;;
+esac
+chown -R "$RUN_USER:$RUN_USER" "$NEXT_DIR/.next/cache" 2>/dev/null || true
+
+# ── 3.5/6 预启动自检：新版本先在备用端口起一份，验通了才动线上 ──────────
+if [ "${PREFLIGHT:-1}" = "1" ]; then
+  PF_PORT="${PREFLIGHT_PORT:-$((PORT + 1))}"
+  if command -v ss >/dev/null 2>&1; then
+    for cand in $((PORT + 1)) $((PORT + 2)) $((PORT + 3)); do
+      if ! ss -lntH "sport = :$cand" 2>/dev/null | grep -q .; then PF_PORT="$cand"; break; fi
+    done
+  fi
+  PF_LOG=/tmp/youdee-preflight.log
+  PF_URL="http://127.0.0.1:$PF_PORT"
+  say "3.5/6 预启动自检：新版本先在 :$PF_PORT 起一份（线上照常运行）"
+
+  # 切到服务用户跑。root 能跑而 youdee 不能，正是"构建成功、启动即退出"最常见的原因
+  # （文件属主、UPLOAD_DIR 写权限、HOME 不可写、node 不在该用户的 PATH 里）。
+  # 只有换身份跑才暴露得出来；以 root 试跑会一路通过，然后线上失败。
+  if command -v runuser >/dev/null 2>&1; then
+    RUN_AS() { runuser -u "$RUN_USER" -- "$@"; }
+  elif command -v sudo >/dev/null 2>&1; then
+    RUN_AS() { sudo -u "$RUN_USER" -- "$@"; }
+  else
+    warn "没有 runuser / sudo，预启动只能用当前用户（root）跑，权限类问题查不出来"
+    RUN_AS() { "$@"; }
+  fi
+
+  ( cd "$NEXT_DIR" && RUN_AS env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 \
+      npx --no-install next start -H 127.0.0.1 -p "$PF_PORT" ) >"$PF_LOG" 2>&1 &
+  PF_PID=$!
+
+  pf=""
+  for _ in $(seq 1 25); do
+    out="$(probe "$PF_URL/api/v1/health")"
+    if [ "$out" = "ok|$NEW_VER|ok" ]; then pf="yes"; break; fi
+    # 进程已经退出就别干等满 50 秒
+    kill -0 "$PF_PID" 2>/dev/null || break
+    sleep 2
+  done
+
+  # 收尾：npx 会 fork 出 node 子进程，只杀父进程留不住——先按端口精确匹配地清理，
+  # 再确认端口真的空了（残留进程会一直占着备用端口，下次更新就选不到它了）
+  pkill -f "next start -H 127.0.0.1 -p $PF_PORT" 2>/dev/null || true
+  kill "$PF_PID" 2>/dev/null || true
+  wait "$PF_PID" 2>/dev/null || true
+  if command -v ss >/dev/null 2>&1; then
+    sleep 1
+    still="$(ss -lntpH "sport = :$PF_PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)"
+    if [ -n "${still:-}" ]; then
+      kill -9 "$still" 2>/dev/null || true
+      warn "备用端口 $PF_PORT 仍有残留进程（pid $still），已强杀"
+    fi
+  fi
+
+  if [ -z "$pf" ]; then
+    warn "预启动自检未通过：新版本 $NEW_VER 起不来（最后一次探测：${out:-无响应}）"
+    case "$out" in
+      REFUSED)  warn "  $PF_URL 拒绝连接 —— 进程启动即退出，下面的日志里会有真正的死因" ;;
+      TIMEOUT)  warn "  端口通了但 /health 3 秒内没答完 —— 进程在跑，卡在库连接之类的外部依赖上" ;;
+      "ok|$NEW_VER|error")
+                warn "  版本对，但库连不上。这次更新与库无关：先确认 DATABASE_URL 与数据库是否可达" ;;
+      "")       warn "  探针没跑出结果，先确认本机能跑 node -v" ;;
+      *)        warn "  进程在跑但状态不对：status|version|db = $out" ;;
+    esac
+    warn "  新版本自己的启动日志（$PF_LOG）："
+    sed -n '1,60p' "$PF_LOG" 2>/dev/null | sed 's/^/    /' >&2 || true
+    rm -rf "$NEXT_DIR"
+    die "已中止：线上仍是 $OLD_VER，这一次服务没停过、库没动过。按上面的日志修好再重发。"
+  fi
+  say "    预启动自检通过：$NEW_VER 在 :$PF_PORT 应答 ok，版本与库都对"
+fi
+
 # 单元文件若也跟着改了，提醒去更新（脚本不改 /etc，那是系统配置，不该被应用包悄悄覆盖）
 if [ -f "$NEXT_DIR/deploy/youdee.service" ] && ! diff -q "$ROOT/deploy/youdee.service" "$NEXT_DIR/deploy/youdee.service" >/dev/null 2>&1; then
   warn "本次 deploy/youdee.service 有变化。启动后请手动对比并更新 /etc/systemd/system/$SERVICE.service，"
@@ -209,7 +327,26 @@ rollback() {
   [ -d "$ROOT" ] && mv "$ROOT" "$FAILED_DIR"
   mv "$PREV_DIR" "$ROOT"
   systemctl start "$SERVICE" || true
-  warn "代码已回滚。被换下的新版本留在 $FAILED_DIR（别急着删，排错要看）"
+
+  # "已回滚"这句话本身也要验：如果回滚后服务同样起不来，那现在是一次真正的宕机，
+  # 得立刻把该看的东西摊在屏幕上，而不是等人下次登录才发现。
+  local rb="" last=""
+  for _ in $(seq 1 15); do
+    last="$(probe "$BASE_URL/api/v1/health")"
+    if [ "$last" = "ok|$OLD_VER|ok" ]; then rb="yes"; break; fi
+    sleep 2
+  done
+
+  if [ -n "$rb" ]; then
+    warn "代码已回滚，线上已恢复（$OLD_VER 应答正常）。被换下的新版本留在 $FAILED_DIR（别急着删，排错要看）"
+  else
+    warn "！！回滚后线上仍未恢复（最后一次探测：${last:-无响应}）——现在是一次真实宕机，优先把服务弄起来"
+    warn "   1) journalctl -u $SERVICE -n 200 --no-pager"
+    warn "   2) ls -ld $ROOT $ROOT/.env $ROOT/.next $ROOT/.next/cache $ABS_UPLOAD"
+    warn "   3) cd $ROOT && sudo -u $RUN_USER env NODE_ENV=production npx --no-install next start -p 3100"
+    warn "   被换下的新版本在 $FAILED_DIR，出问题的旧痕迹在 $PREV_DIR*"
+  fi
+
   if [ -f "$BACKUP_DIR/db.dump" ]; then
     warn "若新版本迁移已改库、导致旧代码不正常，用备份还原（会丢掉迁移之后的写入）："
     warn "  pg_restore -d \"${PG_URL:-$DATABASE_URL}\" -c --if-exists $BACKUP_DIR/db.dump"
@@ -225,22 +362,25 @@ systemctl start "$SERVICE" || rollback
 say "    等待 $BASE_URL/api/v1/health 就绪"
 ok=""
 for _ in $(seq 1 40); do
-  out="$(node -e '
-    const url = process.argv[1];
-    fetch(url, { signal: AbortSignal.timeout(3000) })
-      .then((r) => r.json())
-      .then((j) => { const d = j.data || {}; console.log(`${d.status||""}|${d.version||""}|${d.db||""}`); })
-      .catch(() => console.log("||"));
-  ' "$BASE_URL/api/v1/health" 2>/dev/null | tr -d '\r')"
-  case "$out" in
-    "ok|$NEW_VER|ok") ok="yes"; break ;;
-  esac
+  out="$(probe "$BASE_URL/api/v1/health")"
+  [ "$out" = "ok|$NEW_VER|ok" ] && { ok="yes"; break; }
   sleep 2
 done
 
 if [ -z "$ok" ]; then
   warn "健康检查未在 80 秒内返回 ok / 版本 $NEW_VER / 库 ok（最后一次：${out:-无响应}）"
-  warn "先看日志：journalctl -u $SERVICE -n 80 --no-pager"
+  case "$out" in
+    REFUSED)  warn "  $BASE_URL 拒绝连接：进程启动即退出 / 被 OOM 杀掉 / 端口被别的进程占着" ;;
+    TIMEOUT)  warn "  端口通了但 3 秒内没答完：进程在跑，卡在库连接等外部依赖上" ;;
+    "ok|$OLD_VER|ok") warn "  应答正常但还是旧版本 $OLD_VER —— 旧进程没死，新进程起不来（端口被占）" ;;
+    "ok|$NEW_VER|error") warn "  新版本已起来，但库连不上" ;;
+    "")       warn "  探针本身没出结果，先确认本机 node 能跑（node -v）" ;;
+    *)        warn "  进程在跑但状态不对：status|version|db = $out" ;;
+  esac
+  warn "服务状态（前 20 行）："
+  systemctl --no-pager -l status "$SERVICE" 2>&1 | head -20 | sed 's/^/    /' >&2 || true
+  warn "服务日志（最后 40 行；完整：journalctl -u $SERVICE -n 200 --no-pager）："
+  journalctl -u "$SERVICE" -n 40 --no-pager 2>&1 | sed 's/^/    /' >&2 || true
   rollback
 fi
 

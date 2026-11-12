@@ -84,30 +84,48 @@ function isOle2(buf: Buffer): boolean {
  * 大小的检查在 `assertZipBudget`（合同附件用它挡超大解压）。
  */
 export function zipEntryNames(buf: Buffer): string[] | null {
-  if (!isZip(buf) || buf.length < 22) return null;
+  return zipEntryNamesInWindow(buf, 0);
+}
+
+/**
+ * 在"文件的一段窗口"里读中央目录。
+ *
+ * @param win        窗口字节（可以是整个文件，也可以是文件尾部的一段）
+ * @param baseOffset 窗口首字节在文件里的绝对偏移
+ *
+ * 为什么需要 baseOffset：EOCD 里记的中央目录偏移是**相对文件开头**的绝对值，
+ * 而大文件我们只读尾部。不换算的话，窗口内的下标全是错的，
+ * 表现是"大 docx 认不出来"，而小文件一切正常——最难查的那种差异。
+ */
+export function zipEntryNamesInWindow(win: Buffer, baseOffset: number): string[] | null {
+  if (!isZip(win) && baseOffset === 0) return null;
+  if (win.length < 22) return null;
   const EOCD = 0x06054b50;
   let eocd = -1;
-  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i -= 1) {
-    if (buf.readUInt32LE(i) === EOCD) {
+  for (let i = win.length - 22; i >= Math.max(0, win.length - 22 - 0xffff); i -= 1) {
+    if (win.readUInt32LE(i) === EOCD) {
       eocd = i;
       break;
     }
   }
   if (eocd < 0) return null;
-  const count = buf.readUInt16LE(eocd + 10);
-  let off = buf.readUInt32LE(eocd + 16);
+  const count = win.readUInt16LE(eocd + 10);
+  const cdAbs = win.readUInt32LE(eocd + 16);
+  let off = cdAbs - baseOffset;
+  if (off < 0) return null;
   const names: string[] = [];
   for (let i = 0; i < count; i += 1) {
-    if (off + 46 > buf.length || buf.readUInt32LE(off) !== 0x02014b50) break;
-    const nameLen = buf.readUInt16LE(off + 28);
-    const extraLen = buf.readUInt16LE(off + 30);
-    const commentLen = buf.readUInt16LE(off + 32);
-    if (off + 46 + nameLen > buf.length) break;
-    names.push(buf.subarray(off + 46, off + 46 + nameLen).toString('utf8'));
+    if (off + 46 > win.length || win.readUInt32LE(off) !== 0x02014b50) break;
+    const nameLen = win.readUInt16LE(off + 28);
+    const extraLen = win.readUInt16LE(off + 30);
+    const commentLen = win.readUInt16LE(off + 32);
+    if (off + 46 + nameLen > win.length) break;
+    names.push(win.subarray(off + 46, off + 46 + nameLen).toString('utf8'));
     off += 46 + nameLen + extraLen + commentLen;
   }
   return names;
 }
+
 
 /** ZIP 解压后总字节数（读中央目录里的 uncompressed 字段，不解压）。不是 ZIP 返回 null */
 export function zipUncompressedSize(buf: Buffer): number | null {
@@ -146,14 +164,8 @@ function containsAscii(buf: Buffer, s: string, limit = 4096): boolean {
   return buf.subarray(0, Math.min(buf.length, limit)).includes(Buffer.from(s, 'ascii'));
 }
 
-/**
- * 判定上传文件的真实类型。
- *
- * @param buf 文件字节
- */
-export function detectFileType(buf: Buffer): Probe {
-  if (buf.length === 0) return { ok: false, code: 'empty', hint: '文件是空的。' };
-
+/** 固定魔数那一档：图片 / PDF / RTF。判不出返回 null，交给后面的容器判定 */
+function probeMagic(buf: Buffer): Probe | null {
   // 图片与 PDF：固定魔数
   if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { ok: true, type: TYPES.jpg };
   if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
@@ -172,12 +184,12 @@ export function detectFileType(buf: Buffer): Probe {
   if (buf.length >= 5 && buf.subarray(0, 5).toString('ascii') === '{\\rtf') {
     return { ok: true, type: TYPES.doc };
   }
+  return null;
+}
 
-  if (isZip(buf)) {
-    const names = zipEntryNames(buf);
-    if (!names) {
-      return { ok: false, code: 'broken', hint: '这个压缩包读不出目录，可能已损坏。用 Office 打开后另存一份再传。' };
-    }
+/** 拿到 ZIP 目录项（或拿不到时给头部特征）之后，判它到底是哪种 Office 文件 */
+function judgeZip(names: string[] | null, head: Buffer): Probe {
+  if (names) {
     // 宏：.docm / .xlsm 的 vbaProject.bin 在 word/ 或 xl/ 下
     if (names.some((n) => /^(word|xl)\/vbaProject\.bin$/i.test(n))) {
       return { ok: false, code: 'macro', hint: '这个文件带宏。请另存为普通 .docx / .xlsx 再上传——服务端不会执行宏。' };
@@ -191,26 +203,106 @@ export function detectFileType(buf: Buffer): Probe {
     return {
       ok: false,
       code: 'unknown',
-      hint: `这个压缩包不是 Word 或 Excel 文档${containsAscii(buf, 'ppt/') ? '（看起来是 PPT，不在支持范围内）' : ''}。`,
+      hint: `这个压缩包不是 Word 或 Excel 文档${containsAscii(head, 'ppt/') ? '（看起来是 PPT，不在支持范围内）' : ''}。`,
     };
   }
 
-  if (isOle2(buf)) {
-    // 97-2003 的 doc / xls 都是 OLE2，靠内部流名区分
-    if (hasUtf16le(buf, 'WordDocument')) return { ok: true, type: TYPES.doc };
-    if (hasUtf16le(buf, 'Workbook') || hasUtf16le(buf, 'Book')) return { ok: true, type: TYPES.xls };
-    if (hasUtf16le(buf, 'EncryptedPackage') || hasUtf16le(buf, 'EncryptionInfo')) {
+  // 读不到中央目录（文件太大）时的退路：看头部里的条目名。
+  // OOXML 的 word/document.xml、xl/workbook.xml 都在 ZIP 的前几个本地文件头里，
+  // 所以这条只用于"大到读不了尾部"的情况，且**只认能确认的**，认不出就拒。
+  //
+  // 已知边界：中央目录超过尾部窗口（1MB）时，条目名可能全在窗口之外，
+  // 于是带宏的 docm 会被当成 docx 收下。服务端从不执行宏、只按字节下载，
+  // 所以这里选择"收下"而不是"把正常的大文档一起拒掉"。
+  // 窗口就是整个头部（1MB）：再省这点 CPU 只会让"图片在前、document.xml 在后"
+  // 的文档认不出来
+  const window = head;
+  if (window.includes(Buffer.from('word/vbaProject.bin')) || window.includes(Buffer.from('xl/vbaProject.bin'))) {
+    return { ok: false, code: 'macro', hint: '这个文件带宏。请另存为普通 .docx / .xlsx 再上传——服务端不会执行宏。' };
+  }
+  if (window.includes(Buffer.from('word/document.xml'))) return { ok: true, type: TYPES.docx };
+  if (window.includes(Buffer.from('xl/workbook.xml'))) return { ok: true, type: TYPES.xlsx };
+  return {
+    ok: false,
+    code: 'unknown',
+    hint: '这个文件太大，服务端读不出它的目录结构（可能已损坏，也可能不是 Office 文档）。另存一份再传，或者先压缩成 PDF。',
+  };
+}
+
+/** OLE2（97-2003）靠内部流名分辨 Word / Excel；流名是 UTF-16LE 明文 */
+function judgeOle2(buffers: Buffer[]): Probe {
+  for (const b of buffers) {
+    if (hasUtf16le(b, 'WordDocument')) return { ok: true, type: TYPES.doc };
+  }
+  for (const b of buffers) {
+    if (hasUtf16le(b, 'Workbook') || hasUtf16le(b, 'Book')) return { ok: true, type: TYPES.xls };
+  }
+  for (const b of buffers) {
+    if (hasUtf16le(b, 'EncryptedPackage') || hasUtf16le(b, 'EncryptionInfo')) {
       return { ok: false, code: 'encrypted', hint: '这个文件加了密码，服务端打不开。请另存一份不加密的再上传。' };
     }
-    return {
-      ok: false,
-      code: 'unknown',
-      hint: '这个文件不是 Word / Excel 文档（可能是 PPT 或已损坏）。',
-    };
   }
+  return { ok: false, code: 'unknown', hint: '这个文件不是 Word / Excel 文档（可能是 PPT 或已损坏）。' };
+}
+
+/**
+ * 判定上传文件的真实类型。
+ *
+ * @param buf 文件字节
+ */
+export function detectFileType(buf: Buffer): Probe {
+  if (buf.length === 0) return { ok: false, code: 'empty', hint: '文件是空的。' };
+
+  const magic = probeMagic(buf);
+  if (magic) return magic;
+
+  if (isZip(buf)) {
+    const names = zipEntryNames(buf);
+    if (!names) {
+      return { ok: false, code: 'broken', hint: '这个压缩包读不出目录，可能已损坏。用 Office 打开后另存一份再传。' };
+    }
+    return judgeZip(names, buf);
+  }
+
+  if (isOle2(buf)) return judgeOle2([buf]);
 
   return { ok: false, code: 'unknown', hint: '认不出这个文件的格式，改成 PDF 或 JPG 再试。' };
 }
+
+/**
+ * 大文件判定：只给头尾两段，不给全量字节。
+ *
+ * 为什么必须另开一个函数：附件已经不限大小，把 2GB 读进内存来判类型
+ * 就是用"上传成功一次、进程死一次"换一句准确的错误提示。
+ * 头尾各读一段（默认各 4MB）足以覆盖所有真实场景：
+ *   - 图片 / PDF / RTF：魔数在头部；
+ *   - docx / xlsx：中央目录在尾部，能精确判；
+ *   - doc / xls：目录扇区位置不固定，头尾都扫一遍（漏判时明确拒绝，不猜）。
+ *
+ * @param head 文件开头一段
+ * @param tail 文件结尾一段（整个文件比 head 短时可以为 null）
+ * @param totalSize 文件总字节数
+ */
+export function detectFileTypePartial(head: Buffer, tail: Buffer | null, totalSize: number): Probe {
+  if (totalSize === 0) return { ok: false, code: 'empty', hint: '文件是空的。' };
+
+  const magic = probeMagic(head);
+  if (magic) return magic;
+
+  if (isZip(head)) {
+    // 尾部窗口里 EOCD 记录的中央目录偏移是绝对值，换算成窗口内下标
+    const base = tail ? totalSize - tail.length : 0;
+    const names = tail && tail.length >= 22 ? zipEntryNamesInWindow(tail, base) : null;
+    if (names) return judgeZip(names, head);
+    // 中央目录不在尾部窗口里（超大 ZIP）→ 用头部条目名，认不出就拒
+    return judgeZip(null, head);
+  }
+
+  if (isOle2(head)) return judgeOle2(tail ? [head, tail] : [head]);
+
+  return { ok: false, code: 'unknown', hint: '认不出这个文件的格式，改成 PDF 或 JPG 再试。' };
+}
+
 
 /** 按扩展名归一（用于提示文案，不用于判定） */
 export function extOf(name: string): string {

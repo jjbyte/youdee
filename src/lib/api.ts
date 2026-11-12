@@ -19,8 +19,10 @@ import type {
   CompareResult,
   CompanyProfile,
   Contract,
+  ContractCategory,
   ContractDetail,
   ContractFile,
+  ContractFileCategory,
   ContractQuote,
   CurrentUser,
   DashboardSummary,
@@ -37,6 +39,7 @@ import type {
   QuoteTemplate,
   QuoteTotals,
   RiskCheckResult,
+  StorageSettings,
   Supplier,
   UserRecord,
 } from './types';
@@ -152,6 +155,61 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     throw new ApiError(code, message, res.status, deepCamel(payload.data), payload.field, deepCamel(payload.detail));
   }
   return deepCamel<T>(payload.data);
+}
+
+/**
+ * 原始字节流上传（XHR）。
+ *
+ * 为什么不复用 `request()`：那个走 fetch + JSON 信封，而这里 body 是文件本身。
+ * 选 XHR 而不是 fetch 的唯一原因是**上传进度**：fetch 目前没有上传进度事件，
+ * 几十 MB 的扫描件传上去时界面只能干等，用户会以为卡死然后强行刷新，
+ * 而刷新会把正在传的文件一起掐掉。
+ */
+function uploadRaw<T>(
+  path: string,
+  file: File,
+  headers: Record<string, string>,
+  opts: { onProgress?: (ratio: number) => void; signal?: AbortSignal } = {},
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}${path}`, true);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        reject(new DOMException('已取消', 'AbortError'));
+        return;
+      }
+      opts.signal.addEventListener('abort', () => xhr.abort());
+    }
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) opts.onProgress?.(Math.min(1, e.loaded / e.total));
+    };
+    xhr.onerror = () => reject(new ApiError(-1, '网络断了，这次没连上。检查一下网络再试。', 0, null));
+    xhr.onabort = () => reject(new DOMException('已取消', 'AbortError'));
+    xhr.onload = () => {
+      let payload: Envelope = {};
+      try {
+        payload = JSON.parse(xhr.responseText) as Envelope;
+      } catch {
+        reject(new ApiError(-1, `服务器返回了 ${xhr.status}，这次没成。`, xhr.status, null));
+        return;
+      }
+      const code = typeof payload.code === 'number' ? payload.code : xhr.status === 200 ? 0 : xhr.status;
+      if (xhr.status < 200 || xhr.status >= 300 || code !== 0) {
+        const message = payload.message && String(payload.message).trim()
+          ? String(payload.message)
+          : `这次没成（${code}），稍后重试。`;
+        reject(new ApiError(code, message, xhr.status, deepCamel(payload.data), payload.field, deepCamel(payload.detail)));
+        return;
+      }
+      resolve(deepCamel<T>(payload.data));
+    };
+    xhr.send(file);
+  });
 }
 
 function snakeKey(k: string): string {
@@ -357,6 +415,26 @@ export const api = {
   company: () => request<CompanyProfile>('/settings/company'),
   updateCompany: (body: Partial<CompanyProfile>) =>
     request<CompanyProfile>('/settings/company', { method: 'PATCH', body }),
+
+  // ── 对象存储（合同附件） ──
+  /** 只有管理员能读：里面是云账号的 SecretId */
+  storageSettings: () => request<StorageSettings>('/settings/storage'),
+  /** secretKey 留空/不传 = 不改；传空串 = 清空；有值 = 换新密钥 */
+  updateStorageSettings: (body: {
+    enabled?: boolean;
+    secretId?: string;
+    secretKey?: string;
+    bucket?: string;
+    region?: string;
+    keyPrefix?: string;
+    customDomain?: string | null;
+  }) => request<StorageSettings>('/settings/storage', { method: 'PATCH', body }),
+  /** 真传一个探针对象再删掉：只列桶测不出"能读不能写" */
+  testStorage: (body: { secretId?: string; secretKey?: string; bucket?: string; region?: string } = {}) =>
+    request<{ ok: boolean; bucket: string; region: string; latencyMs: number; note: string }>(
+      '/settings/storage/test',
+      { method: 'POST', body },
+    ),
   users: (params: { q?: string; role?: string; page?: number; limit?: number } = {}) =>
     request<Page<UserRecord>>(`/users${qs(params)}`),
   createUser: (body: { login: string; name: string; password: string; role: string; phone?: string | null }) =>
@@ -408,6 +486,7 @@ export const api = {
    * 合同台账。主查询维度：合同编号、合同名称、公司（甲方）、客户（乙方）、
    * 签订日期区间、创建日期区间。q 是"什么都搜"的兜底入口。
    */
+  /** 什么都搜的兜底入口 */
   contracts: (
     params: {
       q?: string;
@@ -418,6 +497,8 @@ export const api = {
       /** 乙方 */
       customer?: string;
       project?: string;
+      /** 商业 / 租赁 / 雇佣；不传 = 全部 */
+      category?: ContractCategory;
       signedFrom?: string;
       signedTo?: string;
       createdFrom?: string;
@@ -438,9 +519,23 @@ export const api = {
   deleteContract: (id: string) =>
     request<{ deleted: boolean; fileCount: number }>(`/contracts/${id}`, { method: 'DELETE' }),
   restoreContract: (id: string) => request<ContractDetail>(`/contracts/${id}/restore`, { method: 'POST' }),
-  /** 附件上传：multipart，必须带 `file` 与 `category`（contract / quote / settlement） */
-  uploadContractFile: (id: string, form: FormData) =>
-    request<ContractFile>(`/contracts/${id}/files`, { method: 'POST', body: form }),
+  /**
+   * 上传合同附件：**原始字节流**，不是 multipart。
+   *
+   * 附件已经不限制单份大小，而 FormData 上传在服务端会被整份读进内存。
+   * 这里用 XHR 直接发 File，浏览器从磁盘流式读，顺带能拿到上传进度；
+   * fetch 没有上传进度事件，传大文件时界面会像死了一样，那比慢更让人焦虑。
+   */
+  uploadContractFile: (
+    id: string,
+    file: File,
+    category: ContractFileCategory,
+    opts: { onProgress?: (ratio: number) => void; signal?: AbortSignal } = {},
+  ) =>
+    uploadRaw<ContractFile>(`/contracts/${id}/files`, file, {
+      'X-File-Category': category,
+      'X-File-Name': encodeURIComponent(file.name),
+    }, opts),
   deleteContractFile: (id: string, fileId: string) =>
     request<{ deleted: boolean }>(`/contracts/${id}/files/${fileId}`, { method: 'DELETE' }),
   /** 关联一张系统里的报价单（幂等：重复关联不报错） */

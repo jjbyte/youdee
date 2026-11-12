@@ -497,6 +497,28 @@ export interface CompanyProfile {
   bankInfo: string | null;
 }
 
+/**
+ * 对象存储设置（腾讯云 COS）。
+ *
+ * 注意 `secretKeySet` / `secretKeyHint`：服务端**不回传密钥原文**，
+ * 界面只能显示"已配置 ••••1234"。所以输入框留空 = 不改。
+ */
+export interface StorageSettings {
+  /** 当前实际生效：配置完整且启用才是 cos */
+  provider: 'local' | 'cos';
+  status: 'local' | 'cos' | 'cos_incomplete' | 'cos_disabled';
+  cos: {
+    enabled: boolean;
+    secretId: string;
+    secretKeySet: boolean;
+    secretKeyHint: string;
+    bucket: string;
+    region: string;
+    keyPrefix: string;
+    customDomain: string | null;
+  };
+}
+
 export interface UserRecord {
   id: string;
   /** 登录名。内部账号没有邮箱，别把它当 email 用 */
@@ -553,11 +575,17 @@ export interface DashboardSummary {
 /** 合同附件的三个抽屉 */
 export type ContractFileCategory = 'contract' | 'quote' | 'settlement';
 
+/** 合同分类：与 src/domain/contract.ts 的 CONTRACT_CATEGORIES 一一对应 */
+export type ContractCategory = 'commercial' | 'lease' | 'employment';
+
 /** 合同附件（PDF / 图片 / Word / Excel）。一个合同可挂多份，按 category 分组 */
 export interface ContractFile {
   id: string;
   kind: string;
   category: ContractFileCategory;
+  /** local 本地磁盘 / cos 腾讯云对象存储；只影响 url 的形态，界面不用分支 */
+  storage: 'local' | 'cos';
+  /** 浏览器可直接点的地址（cos 文件是后端签名跳转路由） */
   url: string;
   originalName: string;
   mime: string;
@@ -592,6 +620,8 @@ export interface Contract {
   /** 客户名称（乙方）；老数据可能为空 */
   customerName: string | null;
   projectName: string | null;
+  /** 商业 / 租赁 / 雇佣 */
+  category: ContractCategory;
   /** yyyy-mm-dd；未知时为 null（不拿建单日冒充） */
   signedOn: string | null;
   amount: string | null;

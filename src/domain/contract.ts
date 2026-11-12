@@ -23,6 +23,34 @@ export const CONTRACT_LIMITS = {
   amountIntDigits: 12,
 } as const;
 
+/**
+ * 合同分类。三类是客户口述的原话，**顺序即界面顺序**：
+ * 商业（对外经营）→ 租赁（场地/设备租用）→ 雇佣（人员劳动关系）。
+ *
+ * 为什么是真枚举而不是自由文本：分类要能筛选、能统计，自由文本三个月后
+ * 会同时存在「商业合同」「商业 合同」「商务合同」三种写法，筛选就等于失效。
+ * 存英文码（commercial / lease / employment），中文只在界面出现——
+ * 以后要加分类或改叫法不用动数据。
+ */
+export const CONTRACT_CATEGORIES = [
+  { value: 'commercial', label: '商业合同' },
+  { value: 'lease', label: '租赁合同' },
+  { value: 'employment', label: '雇佣合同' },
+] as const;
+
+export type ContractCategory = (typeof CONTRACT_CATEGORIES)[number]['value'];
+
+export const DEFAULT_CONTRACT_CATEGORY: ContractCategory = 'commercial';
+
+export function isContractCategory(v: unknown): v is ContractCategory {
+  return v === 'commercial' || v === 'lease' || v === 'employment';
+}
+
+export function contractCategoryLabel(v: string | null | undefined): string {
+  const hit = CONTRACT_CATEGORIES.find((c) => c.value === v);
+  return hit ? hit.label : CONTRACT_CATEGORIES[0].label;
+}
+
 export interface FieldIssue {
   field: string;
   message: string;
@@ -35,6 +63,8 @@ export interface ParsedContract {
   /** 客户名称（乙方）。可选：不是所有合同都能一眼看出乙方是谁 */
   customer_name: string | null;
   project_name: string | null;
+  /** 商业 / 租赁 / 雇佣 */
+  category: ContractCategory;
   /** yyyy-mm-dd */
   signed_on: string | null;
   /** 十进制字符串（两位小数以内），交给 numeric 列 */
@@ -128,6 +158,22 @@ export function parseContractInput(raw: Raw, opts: { partial?: boolean } = {}): 
   takeText('project_name', '项目名称', CONTRACT_LIMITS.projectName, false);
   takeText('contract_no', '合同编号', CONTRACT_LIMITS.contractNo, false);
   takeText('note', '备注', CONTRACT_LIMITS.note, false);
+
+  // 分类：新建时没给就是「商业合同」（与库里的默认值一致，不让两边各有一套默认）；
+  // PATCH 时没给则不动它——改别的字段顺手把分类冲回默认，是最容易漏掉的一种数据丢失
+  if (has(raw, 'category')) {
+    const c = text(raw.category);
+    if (c !== null && c !== undefined && !isContractCategory(c)) {
+      issues.push({ field: 'category', message: '合同分类只能是商业合同 / 租赁合同 / 雇佣合同。' });
+    } else if (c === null) {
+      // 分类是必填项：清空它等于让这份合同从所有分类筛选里消失
+      issues.push({ field: 'category', message: '合同分类不能为空。' });
+    } else if (c !== undefined) {
+      picked.category = c;
+    }
+  } else if (!partial) {
+    picked.category = DEFAULT_CONTRACT_CATEGORY;
+  }
 
   if (has(raw, 'signed_on')) {
     const t = text(raw.signed_on);

@@ -5,7 +5,7 @@
  * 并声明 image/png 是最省事的上传绕过方式，而这类文件进了上传目录就等于被托管。
  * 判定与 `accept` 白名单分开：判定回答"它到底是什么"，白名单回答"这个位置收不收"。
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AppError } from '../http';
@@ -13,6 +13,17 @@ import { detectFileType, normalizeExt, type FileExt } from './file-type';
 
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_BYTES ?? 5_242_880);
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? 'var/uploads';
+
+/**
+ * 上传根目录（绝对路径）。
+ *
+ * 导出是给"流式上传"和下载路由用的：三处必须指向同一个目录，
+ * 各写一份 `process.env.UPLOAD_DIR ?? 'var/uploads'` 的后果是
+ * 上传写 A、下载读 B，现象是"传成功了但点开 404"。
+ */
+export function uploadRoot(): string {
+  return path.join(/*turbopackIgnore: true*/ process.cwd(), UPLOAD_DIR);
+}
 
 /** 默认白名单：价格附件这类"截图 / 扫描件"场景够用 */
 const DEFAULT_ACCEPT: readonly FileExt[] = ['jpg', 'png', 'webp', 'pdf'];
@@ -107,3 +118,32 @@ export async function saveBuffer(buf: Buffer, subdir: string, ext: string): Prom
   await writeFile(path.join(/*turbopackIgnore: true*/ dir, name), buf);
   return { storageKey: `${subdir}/${name}` };
 }
+
+/**
+ * 把一个已经落盘的临时文件移进上传目录。
+ *
+ * 与 `saveUpload` 的区别只有一点：**不碰内存**。大附件走这条路，
+ * 因为它传进来时已经在磁盘上了，再读一遍 Buffer 等于把前面省的又还回去。
+ *
+ * EXDEV：临时目录可能在 /tmp（另一个文件系统），rename 会跨设备失败。
+ * 这时退化成 copy + unlink —— 直接抛 EXDEV 的话，现象是"本机能传、生产传不了"。
+ */
+export async function persistLocalFile(
+  tmpPath: string,
+  subdir: string,
+  ext: string,
+): Promise<{ storageKey: string; url: string }> {
+  const dir = path.join(/*turbopackIgnore: true*/ process.cwd(), UPLOAD_DIR, subdir);
+  await mkdir(dir, { recursive: true });
+  const name = `${randomUUID()}.${ext}`;
+  const target = path.join(/*turbopackIgnore: true*/ dir, name);
+  try {
+    await rename(tmpPath, target);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
+    await copyFile(tmpPath, target);
+    await unlink(tmpPath).catch(() => {});
+  }
+  return { storageKey: `${subdir}/${name}`, url: `/uploads/${subdir}/${name}` };
+}
+

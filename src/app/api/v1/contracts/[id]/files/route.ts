@@ -1,42 +1,66 @@
 import { AppError, ok, requireUser, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { addContractFile, CONTRACT_FILE_MAX_BYTES } from '@/server/services/contract.service';
-import { FILE_CATEGORY, isFileCategory } from '@/server/services/file-type';
+import { stageUploadStream } from '@/server/services/upload-stream.service';
+import { isFileCategory } from '@/server/services/file-type';
 
 /**
- * 上传合同附件（multipart）。
+ * 上传合同附件（**原始字节流**）。
  *
- * 三类附件分开放的同一个接口，`category` 决定收什么格式：
+ * 为什么不再用 multipart/form-data：附件已经不限单份大小，而 `req.formData()`
+ * 会把整份文件先读进内存再交给我们。传一个 2GB 的扫描件，进程就直接没了，
+ * 而且死之前不会有任何日志。所以这里收裸 body，服务端边收边写临时盘。
+ *
+ * 三类附件分开放的同一个接口，`x-file-category` 决定收什么格式：
  *   contract   合同电子版   PDF / JPG / PNG / WEBP / Word
  *   quote      报价单电子版 PDF / JPG / PNG / WEBP / Excel（没有系统报价单时用）
  *   settlement 结算资料     PDF / JPG / PNG / WEBP / Excel / Word
  *
- * 不传 category 默认 contract——老的调用方（0.1.23 的界面）仍然能传扫描件。
+ * 请求形状（前端固定这样发）：
+ *   POST /api/v1/contracts/<id>/files
+ *   Content-Type: application/octet-stream
+ *   X-File-Name: <encodeURIComponent(原始文件名)>
+ *   X-File-Category: contract | quote | settlement
+ *   body: 文件字节
+ *
+ * 原始文件名走 header 而不是 URL：中文名要 encodeURIComponent，
+ * 放 query 里容易被二次编码，最后在库里存成 `%E5%90%88%E5%90%8C`。
  */
 export const POST = route(async (req, params) => {
   await requireUser();
   const id = reqUuid(params.id, 'id');
-  const form = await req.formData().catch(() => null);
-  const file = form?.get('file');
-  const rawCategory = form?.get('category');
-  const category = rawCategory === null || rawCategory === undefined || rawCategory === '' ? 'contract' : rawCategory;
-  if (!isFileCategory(category)) {
+
+  const url = new URL(req.url);
+  const rawCategory = req.headers.get('x-file-category') ?? url.searchParams.get('category') ?? 'contract';
+  if (!isFileCategory(rawCategory)) {
     throw new AppError(40001, 'category 只能是 contract / quote / settlement。', 400, { field: 'category' });
   }
-  const rule = FILE_CATEGORY[category];
-  if (!(file instanceof File)) {
-    throw new AppError(40001, `请选择要上传的${rule.label}（${rule.hint}）。`, 400, { field: 'file' });
+
+  const contentType = req.headers.get('content-type') ?? '';
+  if (contentType.includes('multipart/form-data')) {
+    // 部署前缓存在浏览器里的老页面还是 multipart。明说怎么修，
+    // 否则它会被读成"没有文件"，用户只会反复重试
+    throw new AppError(40001, '上传方式已经换成流式上传，刷新一下页面再传一次就好。', 400, { field: 'file' });
   }
-  if (file.size > CONTRACT_FILE_MAX_BYTES) {
-    throw new AppError(
-      41301,
-      `文件超过 ${CONTRACT_FILE_MAX_BYTES / 1024 / 1024}MB。压缩一下，或者拆成几份分别上传。`,
-      413,
-      { field: 'file' },
-    );
-  }
-  return ok(await addContractFile(id, file, category), 201);
+
+  const originalName = decodeName(req.headers.get('x-file-name') ?? url.searchParams.get('name') ?? '');
+  const staged = await stageUploadStream(req.body, {
+    originalName,
+    maxBytes: CONTRACT_FILE_MAX_BYTES,
+  });
+  return ok(await addContractFile(id, staged, rawCategory), 201);
 });
+
+/** header 里只能是 ASCII，中文名前端会 encodeURIComponent，这里还原 */
+function decodeName(raw: string): string {
+  let name = raw;
+  try {
+    name = decodeURIComponent(raw);
+  } catch {
+    // 编码不合法就用原样：文件名只用于展示，不该因为它让上传失败
+  }
+  return name.replace(/[\u0000-\u001f]/g, '').replace(/[\\/]/g, '_').slice(0, 200);
+}
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';

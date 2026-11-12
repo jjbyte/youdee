@@ -99,6 +99,8 @@ model Contract {
   /// 客户名称（乙方）；与甲方分列，两个方向各自可查
   customerName String?   @map("customer_name") @db.VarChar(120)
   projectName  String?   @map("project_name") @db.VarChar(200)
+  /// 合同分类：commercial 商业 / lease 租赁 / employment 雇佣。默认商业，老数据已回填
+  category     String    @default("commercial") @db.VarChar(20)
   /// 签订日期；未知时留空，不拿建单日冒充
   signedOn     DateTime? @map("signed_on") @db.Date
   /// 合同金额（元）；null = 未记录，不是 0
@@ -115,6 +117,7 @@ model Contract {
   quotes        ContractQuote[]
 
   @@index([signedOn(sort: Desc)])
+  @@index([category])
   @@index([deletedAt])
   @@index([createdAt(sort: Desc)])
   @@map("contracts")
@@ -127,12 +130,16 @@ model ContractFile {
   kind         String   @db.VarChar(20) /// image | file
   /// contract 合同电子版 | quote 报价单电子版 | settlement 结算资料
   category     String   @default("contract") @db.VarChar(20)
+  /// 实际存放位置：local 本地磁盘 / cos 腾讯云对象存储
+  storage      String   @default("local") @db.VarChar(10)
+  /// local 时是 UPLOAD_DIR 下的相对路径；cos 时是对象键（不含桶名）
   storageKey   String   @map("storage_key") @db.VarChar(300)
   url          String   @db.VarChar(1000)
   originalName String?  @map("original_name") @db.VarChar(200)
   /// 120 而不是 60：OOXML 的标准 MIME 有 65~71 个字符，60 会插库失败
   mime         String?  @db.VarChar(120)
-  sizeBytes    Int?     @map("size_bytes")
+  /// bigint：integer 只到 2GB，而附件已不限制单份体积
+  sizeBytes    BigInt?  @map("size_bytes")
   sortOrder    Int      @default(0) @map("sort_order")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 

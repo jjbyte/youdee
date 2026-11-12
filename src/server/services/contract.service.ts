@@ -17,22 +17,39 @@
  * 删除 / 恢复仅管理员（canDeleteRecord），且删除是软删，随时能恢复。
  */
 import type { QueryResultRow } from 'pg';
+import { randomUUID } from 'node:crypto';
 import { q, one } from '../db';
 import { AppError } from '../http';
 import { likePattern, paginated, type PageQuery } from '../params';
-import { parseContractInput, type FieldIssue } from '@/domain/contract';
+import {
+  DEFAULT_CONTRACT_CATEGORY,
+  isContractCategory,
+  parseContractInput,
+  type ContractCategory,
+  type FieldIssue,
+} from '@/domain/contract';
 import type { CurrentUser } from '../auth/session';
-import { saveUpload } from './upload.service';
+import { persistLocalFile } from './upload.service';
+import { discardStaged, type StagedUpload } from './upload-stream.service';
+import { buildObjectKey, cosPrefix, isCosEnabled, putFileToCos } from './storage.service';
 import { FILE_CATEGORY, isFileCategory, type FileCategory, type FileExt } from './file-type';
 
-/** 附件上限 20MB：十页扫描 PDF 常 8~15MB，5MB 会逼人先拆页 */
-export const CONTRACT_FILE_MAX_BYTES = 20 * 1024 * 1024;
+/**
+ * 附件单份大小上限。
+ *
+ * 客户要求"去掉单个文件大小限制"，所以默认是 0 = 不限制。
+ * 仍留一个环境变量口子（MAX_CONTRACT_FILE_BYTES），是因为运维可能需要
+ * 在"有人往桶里灌 50GB"和"业务能传"之间临时收一下口——但默认不设。
+ */
+export const CONTRACT_FILE_MAX_BYTES = Number(process.env.MAX_CONTRACT_FILE_BYTES ?? 0) || 0;
 
 export interface ContractFileDTO {
   id: string;
   kind: string;
   /** contract | quote | settlement */
   category: FileCategory;
+  /** local = 本地磁盘（直接给 /uploads 链接）；cos = 云存储（走后端签名跳转） */
+  storage: 'local' | 'cos';
   url: string;
   original_name: string;
   mime: string;
@@ -63,6 +80,8 @@ export interface ContractDTO {
   company_name: string;
   customer_name: string | null;
   project_name: string | null;
+  /** 商业 / 租赁 / 雇佣 */
+  category: ContractCategory;
   signed_on: string | null;
   amount: string | null;
   note: string | null;
@@ -91,6 +110,7 @@ interface ContractRow extends QueryResultRow {
   company_name: string;
   customer_name: string | null;
   project_name: string | null;
+  category: string;
   signed_on: string | null;
   amount: string | null;
   note: string | null;
@@ -110,10 +130,11 @@ interface FileRow extends QueryResultRow {
   id: string;
   kind: string;
   category: string;
+  storage: string;
   url: string;
   original_name: string | null;
   mime: string | null;
-  size_bytes: number | null;
+  size_bytes: string | number | null;
   sort_order: number;
   created_at: Date;
 }
@@ -132,7 +153,7 @@ interface QuoteRow extends QueryResultRow {
 
 const SELECT = `
   SELECT c.id, c.contract_no, c.title, c.company_name, c.customer_name, c.project_name,
-         c.signed_on, c.amount, c.note, c.created_by, u.name AS created_by_name,
+         c.category, c.signed_on, c.amount, c.note, c.created_by, u.name AS created_by_name,
          c.created_at, c.updated_at, c.deleted_at,
          (SELECT count(*) FROM contract_files f WHERE f.contract_id = c.id)::int AS file_count,
          (SELECT count(*) FROM contract_files f WHERE f.contract_id = c.id AND f.category = 'contract')::int AS contract_file_count,
@@ -150,6 +171,8 @@ function toDTO(r: ContractRow): ContractDTO {
     company_name: r.company_name,
     customer_name: r.customer_name,
     project_name: r.project_name,
+    // 库里的值认不出时按商业合同显示：老数据 / 手工改库都不该让详情页炸掉
+    category: isContractCategory(r.category) ? r.category : DEFAULT_CONTRACT_CATEGORY,
     // date 列由 db.ts 的类型解析器原样返回 yyyy-mm-dd，不做时区转换
     signed_on: r.signed_on,
     amount: r.amount,
@@ -169,13 +192,24 @@ function toDTO(r: ContractRow): ContractDTO {
   };
 }
 
-function toFileDTO(r: FileRow): ContractFileDTO {
-  const url = r.url;
-  const ext = (url.split('?')[0] ?? '').split('.').pop()?.toLowerCase() ?? '';
+/**
+ * 附件 DTO。
+ *
+ * `url` 是**浏览器能直接点的地址**，不是文件真实位置：
+ *   - local → `/uploads/...`（静态读盘路由）
+ *   - cos   → `/api/v1/contracts/<合同>/files/<附件>/raw`，那个路由再 302 到
+ *             预签名地址。桶保持私有，链接不泄露凭证，5 分钟后自己失效。
+ * 真实位置在 `storage_key` 里，只有服务端用。
+ */
+function toFileDTO(r: FileRow, contractId: string): ContractFileDTO {
+  const storage: 'local' | 'cos' = r.storage === 'cos' ? 'cos' : 'local';
+  const url = storage === 'cos' ? `/api/v1/contracts/${contractId}/files/${r.id}/raw` : r.url;
+  const ext = (r.url.split('?')[0] ?? '').split('.').pop()?.toLowerCase() ?? '';
   return {
     id: r.id,
     kind: r.kind,
     category: (isFileCategory(r.category) ? r.category : 'contract') as FileCategory,
+    storage,
     url,
     original_name: r.original_name ?? '',
     mime: r.mime ?? '',
@@ -210,6 +244,11 @@ export interface ContractListQuery {
   /** 乙方 */
   customer: string | null;
   project: string | null;
+  /**
+   * 分类筛选：不传 = 全部。分类只有三个值，精确匹配即可，
+   * 模糊匹配在这里没有意义，还会让人以为"租"能搜到租赁合同。
+   */
+  category: ContractCategory | null;
   signedFrom: string | null;
   signedTo: string | null;
   createdFrom: string | null;
@@ -248,6 +287,7 @@ export async function listContracts(query: ContractListQuery) {
   if (query.company) add((n) => `c.company_name ILIKE $${n}`, likePattern(query.company));
   if (query.customer) add((n) => `c.customer_name ILIKE $${n}`, likePattern(query.customer));
   if (query.project) add((n) => `c.project_name ILIKE $${n}`, likePattern(query.project));
+  if (query.category) add((n) => `c.category = $${n}`, query.category);
   if (query.signedFrom) add((n) => `c.signed_on >= $${n}::date`, query.signedFrom);
   if (query.signedTo) add((n) => `c.signed_on <= $${n}::date`, query.signedTo);
   // 创建日期是 timestamptz：用半开区间 [当天 0 点, 次日 0 点) 而不是 ::date，
@@ -281,13 +321,13 @@ export async function getContract(id: string, opts: { includeDeleted?: boolean }
   const row = rows[0];
   if (!row) throw new AppError(40401, '这份合同不存在，可能已经被删掉了。', 404);
   const files = await q<FileRow>(
-    `SELECT id, kind, category, url, original_name, mime, size_bytes, sort_order, created_at
+    `SELECT id, kind, category, storage, url, original_name, mime, size_bytes, sort_order, created_at
        FROM contract_files WHERE contract_id = $1
       ORDER BY category, sort_order, created_at`,
     [id],
   );
   const quotes = await listLinkedQuotes(id);
-  return { ...toDTO(row), files: files.map(toFileDTO), quotes };
+  return { ...toDTO(row), files: files.map((f) => toFileDTO(f, id)), quotes };
 }
 
 /** 一张合同关联的系统报价单。软删的也返回（标灰），不然关联会"莫名其妙少一条" */
@@ -324,8 +364,8 @@ export async function createContract(raw: Record<string, unknown>, actor: Curren
     throw new AppError(40001, '合同名称与公司名称都必须填。', 400);
   }
   const rows = await q<{ id: string }>(
-    `INSERT INTO contracts (contract_no, title, company_name, customer_name, project_name, signed_on, amount, note, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6::date,$7::numeric,$8,$9)
+    `INSERT INTO contracts (contract_no, title, company_name, customer_name, project_name, category, signed_on, amount, note, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::date,$8::numeric,$9,$10)
      RETURNING id`,
     [
       value.contract_no ?? null,
@@ -333,6 +373,7 @@ export async function createContract(raw: Record<string, unknown>, actor: Curren
       value.company_name,
       value.customer_name ?? null,
       value.project_name ?? null,
+      value.category ?? DEFAULT_CONTRACT_CATEGORY,
       value.signed_on ?? null,
       value.amount ?? null,
       value.note ?? null,
@@ -363,6 +404,7 @@ export async function patchContract(
   if ('company_name' in value) set('company_name', value.company_name);
   if ('customer_name' in value) set('customer_name', value.customer_name);
   if ('project_name' in value) set('project_name', value.project_name);
+  if ('category' in value) set('category', value.category);
   if ('signed_on' in value) set('signed_on', value.signed_on, '::date');
   if ('amount' in value) set('amount', value.amount, '::numeric');
   if ('note' in value) set('note', value.note);
@@ -404,45 +446,114 @@ export async function restoreContract(id: string): Promise<ContractDetailDTO> {
   return getContract(id);
 }
 
+/**
+ * 落一份附件：本地磁盘或腾讯云对象存储，由设置决定。
+ *
+ * 存哪儿记在 `contract_files.storage` 上，**不靠"当前设置"反推**：
+ * 今天切到 COS，昨天那份本地附件的 storage 还是 local，读取按行分流。
+ * 否则切一次配置，历史附件全体 404——那是没法向客户解释的事故。
+ *
+ * 临时文件在 finally 里清：无论成功、格式被拒、还是云上传失败，都不留垃圾。
+ */
 export async function addContractFile(
   contractId: string,
-  file: File,
+  staged: StagedUpload,
   category: FileCategory,
 ): Promise<ContractFileDTO> {
-  const exists = await one<{ id: string }>('SELECT id FROM contracts WHERE id = $1 AND deleted_at IS NULL', [
-    contractId,
-  ]);
-  if (!exists) throw new AppError(40401, '这份合同不存在，可能已经被删掉了。', 404);
-
-  const rule = FILE_CATEGORY[category];
-  const saved = await saveUpload(file, `contracts/${contractId}`, {
-    maxBytes: CONTRACT_FILE_MAX_BYTES,
-    accept: rule.allow as readonly FileExt[],
-    acceptLabel: `${rule.hint}（${rule.label}）`,
-  });
-  const order = await one<{ n: string }>(
-    'SELECT COALESCE(max(sort_order), -1) + 1 AS n FROM contract_files WHERE contract_id = $1 AND category = $2',
-    [contractId, category],
-  );
-  const rows = await q<FileRow>(
-    `INSERT INTO contract_files (contract_id, kind, category, storage_key, url, original_name, mime, size_bytes, sort_order)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     RETURNING id, kind, category, url, original_name, mime, size_bytes, sort_order, created_at`,
-    [
+  try {
+    const exists = await one<{ id: string }>('SELECT id FROM contracts WHERE id = $1 AND deleted_at IS NULL', [
       contractId,
-      saved.kind,
-      category,
-      saved.storageKey,
-      saved.url,
-      saved.originalName,
-      saved.mime,
-      saved.sizeBytes,
-      Number(order?.n ?? 0),
-    ],
+    ]);
+    if (!exists) throw new AppError(40401, '这份合同不存在，可能已经被删掉了。', 404);
+
+    const rule = FILE_CATEGORY[category];
+    if (!(rule.allow as readonly FileExt[]).includes(staged.type.ext)) {
+      throw new AppError(
+        41501,
+        `这个地方只收${rule.hint}（${rule.label}），你传的是 ${staged.type.label}。`,
+        415,
+        { field: 'file' },
+      );
+    }
+
+    const useCos = await isCosEnabled();
+    let storage: 'local' | 'cos';
+    let storageKey: string;
+    let url: string;
+
+    if (useCos) {
+      // 对象键不带原始文件名：重名、乱码、超长路径都会到上传时才炸，那时文件已传一半
+      const key = buildObjectKey(await cosPrefix(), `contracts/${contractId}`, `${randomUUID()}.${staged.type.ext}`);
+      const put = await putFileToCos({
+        filePath: staged.tmpPath,
+        sizeBytes: staged.sizeBytes,
+        key,
+        contentType: staged.type.mime,
+        originalName: staged.originalName,
+      });
+      storage = 'cos';
+      storageKey = put.key;
+      url = put.url;
+    } else {
+      const saved = await persistLocalFile(staged.tmpPath, `contracts/${contractId}`, staged.type.ext);
+      storage = 'local';
+      storageKey = saved.storageKey;
+      url = saved.url;
+    }
+
+    const order = await one<{ n: string }>(
+      'SELECT COALESCE(max(sort_order), -1) + 1 AS n FROM contract_files WHERE contract_id = $1 AND category = $2',
+      [contractId, category],
+    );
+    const rows = await q<FileRow>(
+      `INSERT INTO contract_files (contract_id, kind, category, storage, storage_key, url, original_name, mime, size_bytes, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       RETURNING id, kind, category, storage, url, original_name, mime, size_bytes, sort_order, created_at`,
+      [
+        contractId,
+        staged.type.kind,
+        category,
+        storage,
+        storageKey,
+        url,
+        staged.originalName,
+        staged.type.mime,
+        staged.sizeBytes,
+        Number(order?.n ?? 0),
+      ],
+    );
+    // 传了附件是这个合同有了实质进展，列表按"最近改动"看时才不会漏掉
+    await q('UPDATE contracts SET updated_at = now() WHERE id = $1', [contractId]);
+    return toFileDTO(rows[0]!, contractId);
+  } finally {
+    await discardStaged(staged);
+  }
+}
+
+/** 读一份附件的位置信息，给下载/跳转路由用 */
+export async function getContractFileRef(
+  contractId: string,
+  fileId: string,
+): Promise<{ storage: 'local' | 'cos'; storageKey: string; url: string; mime: string; originalName: string }> {
+  const row = await one<{
+    storage: string;
+    storage_key: string;
+    url: string;
+    mime: string | null;
+    original_name: string | null;
+  }>(
+    `SELECT storage, storage_key, url, mime, original_name FROM contract_files
+      WHERE id = $1 AND contract_id = $2`,
+    [fileId, contractId],
   );
-  // 传了附件是这个合同有了实质进展，列表按"最近改动"看时才不会漏掉
-  await q('UPDATE contracts SET updated_at = now() WHERE id = $1', [contractId]);
-  return toFileDTO(rows[0]!);
+  if (!row) throw new AppError(40401, '这份附件不存在，可能已经被删掉了。', 404);
+  return {
+    storage: row.storage === 'cos' ? 'cos' : 'local',
+    storageKey: row.storage_key,
+    url: row.url,
+    mime: row.mime ?? 'application/octet-stream',
+    originalName: row.original_name ?? '附件',
+  };
 }
 
 /**

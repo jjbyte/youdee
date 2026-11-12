@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CONTRACT_LIMITS,
+  contractCategoryLabel,
   isRealDate,
   normalizeAmount,
   parseContractInput,
@@ -79,16 +80,17 @@ describe('normalizeAmount', () => {
 });
 
 describe('parseContractInput 新建', () => {
-  it('完整输入原样通过', () => {
+  it('完整输入原样通过（分类没给就按默认的商业合同）', () => {
     const { value, issues } = parseContractInput(full, { partial: false });
     expect(issues).toEqual([]);
-    expect(value).toEqual(full);
+    expect(value).toEqual({ ...full, category: 'commercial' });
   });
 
   it('必填项缺失时逐条报出，且不给默认值', () => {
     const { value, issues } = parseContractInput({}, { partial: false });
     expect(issues.map((i) => i.field).sort()).toEqual(['company_name', 'title']);
-    expect(value).toEqual({});
+    // 唯一允许出现的默认值就是分类：它必填、有明确行业默认，且不会掩盖"没填合同名"
+    expect(value).toEqual({ category: 'commercial' });
   });
 
   it('必填项给空白串也算缺失（不静默存成空字符串）', () => {
@@ -157,6 +159,48 @@ describe('parseContractInput 局部更新', () => {
   it('局部更新时非法日期同样被拒', () => {
     const { issues } = parseContractInput({ signed_on: '2026/09/18' }, { partial: true });
     expect(issues[0]!.field).toBe('signed_on');
+  });
+});
+
+/**
+ * 合同分类：商业 / 租赁 / 雇佣。
+ *
+ * 它比别的字段更容易出"沉默的错"：分类决定筛选结果，一旦被 PATCH 顺手冲回默认，
+ * 合同不会消失，只是从"租赁合同"里消失——没人会立刻发现。
+ */
+describe('合同分类', () => {
+  it('新建不传分类 → 商业合同（与库里的默认值一致）', () => {
+    const { value } = parseContractInput(full, { partial: false });
+    expect(value.category).toBe('commercial');
+  });
+
+  it('三个合法值都收，未知值明确拒绝', () => {
+    for (const c of ['commercial', 'lease', 'employment'] as const) {
+      expect(parseContractInput({ ...full, category: c }).value.category).toBe(c);
+    }
+    const bad = parseContractInput({ ...full, category: 'business' }, { partial: false });
+    expect(bad.issues[0]!.field).toBe('category');
+  });
+
+  it('大小写与空格不算合法值（存英文码就是为了能精确筛）', () => {
+    const bad = parseContractInput({ ...full, category: 'Commercial' }, { partial: false });
+    expect(bad.issues.map((i) => i.field)).toContain('category');
+    expect(parseContractInput({ category: ' lease ' }).value.category).toBe('lease');
+  });
+
+  it('PATCH 没提交分类时不动它', () => {
+    const { value } = parseContractInput({ title: '改个名' }, { partial: true });
+    expect('category' in value).toBe(false);
+  });
+
+  it('PATCH 里把分类清空会报错（清空等于从所有分类筛选里消失）', () => {
+    const { issues } = parseContractInput({ category: null }, { partial: true });
+    expect(issues[0]!.field).toBe('category');
+  });
+
+  it('界面文案：认不出的值回落成商业合同，不让详情页空着', () => {
+    expect(contractCategoryLabel('lease')).toBe('租赁合同');
+    expect(contractCategoryLabel('whatever')).toBe('商业合同');
   });
 });
 

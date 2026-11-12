@@ -63,7 +63,7 @@
 | 页面 | 路由 | 干什么 |
 |---|---|---|
 | 总览 | `/` | 本周单量、毛利分布、临期价格、待办提醒 |
-| 合同管理 | `/contracts` | 合同台账 + 三类附件（合同 / 报价单 / 结算）；按编号、名称、甲方、乙方、签订日期、创建日期查 |
+| 合同管理 | `/contracts` | 合同台账（商业 / 租赁 / 雇佣三类）+ 三类附件（合同 / 报价单 / 结算，可存本地或腾讯云 COS、单份不限大小）；按编号、名称、甲方、乙方、分类、签订日期、创建日期查 |
 | 报价单列表 | `/quotes` | 全部状态（草稿 / 已发出 / 已作废），默认草稿优先 |
 | 报价单编辑 | `/quotes/:id/edit` | 明细逐行录入、毛利率反算、风险检查、出单 |
 | 客户版预览 | `/quotes/:id/preview` | 打印 / PDF / 客户版 Excel 的纸面 |
@@ -113,7 +113,7 @@
 | 图表 | recharts | 3.10.1 | 价格趋势、毛利分布 |
 | 图标 | lucide-react | 1.67.0 | 全项目统一一套 SVG 描边图标，**不用 emoji 当图标** |
 
-规模（当前版本 0.1.26）：**21 张表 / 10 个迁移 / 70 个接口路由 / 13 个页面 / 175 条单测 / 86 项部署自检**。
+规模（当前版本 0.1.29）：**21 张表 / 12 个迁移 / 74 个接口路由 / 13 个页面 / 189 条单测 / 86 项部署自检**。
 
 ### 明确不做的事
 
@@ -181,9 +181,9 @@ src/app/
 | 价格 | `/prices` `/prices/:id/history` `/price-lookup` | 录价、改价、历史、取价 |
 | 比价 | `/items/:id/compare` | 按口径分组、算归一价、标不可比 |
 | 报价单 | `/quotes` `/quotes/:id/items` `/quotes/:id/issue` | 建单、加行、出单 |
-| 合同 | `/contracts` `/contracts/:id/files` `/contracts/:id/quotes` | 台账、三类附件上传（单份 20MB）、关联系统报价单 |
+| 合同 | `/contracts` `/contracts/:id/files` `/contracts/:id/files/:fileId/raw` | 台账（含商业/租赁/雇佣分类）、三类附件（流式上传、单份不限大小）、下载签名跳转、关联系统报价单 |
 | 导出 | `/quotes/:id/export.xlsx` | 客户版 / 内部版 Excel |
-| 设置 | `/settings/company` `/settings/quote` `/users` | 抬头、默认值、账号 |
+| 设置 | `/settings/company` `/settings/quote` `/settings/storage` `/users` | 抬头、默认值、对象存储、账号 |
 | 运维 | `/health` | 进程与数据库分别报状态 |
 
 **`src/domain/` —— 纯函数，不碰数据库、不碰 HTTP（12 个文件）**
@@ -256,7 +256,20 @@ src/components/
 | 客户版抬头印的供应商名称 | 设置 → 报价单模板（建单时选模板，值快照进单据） | 只影响之后新建的单，历史单不变 |
 | 客户版的列与抬头排布 | 设置 → 报价单模板 → 上传 Excel（版式快照进单据） | 只影响之后新建的单，历史单按建单时的版式打 |
 | 合同能填哪些字段 / 怎么校验 | `src/domain/contract.ts` | 新建与编辑两条路径（服务端唯一校验点） |
-| 合同附件的类型与大小上限 | `src/server/services/file-type.ts` 的 `FILE_CATEGORY`（按字节判定，不看扩展名）+ `contract.service.ts` 的 `CONTRACT_FILE_MAX_BYTES` | 合同附件的三个上传口 |
+| 合同附件的类型白名单 | `src/server/services/file-type.ts` 的 `FILE_CATEGORY`（按字节判定，不看扩展名）+ `upload-stream.service.ts` 的大文件头尾探测 | 合同附件的三个上传口 |
+| 合同附件存在哪儿（本地盘 / 腾讯云 COS） | 设置 → 对象存储（`app_settings.cos_storage`），按行记在 `contract_files.storage` 上 | 只影响**新上传**的附件，历史附件按行分流读取，切换不迁移、不 404 |
+| 合同附件单份最大体积 | 默认不限制；要收口就设环境变量 `MAX_CONTRACT_FILE_BYTES`（字节，0 = 不限） | 合同附件上传 |
+
+### 合同附件与对象存储
+
+- **大小**：单份不设应用层上限。上传走原始字节流（不是 multipart），服务端边收边写临时文件，
+  再按"小文件整份读、大文件头尾各读 1MB"判真实类型，最后落盘或直传 COS。几百 MB 的扫描件不会占内存。
+- **存储**：默认本地磁盘（`UPLOAD_DIR`）。在【设置 → 对象存储】填 SecretId / SecretKey / 存储桶 / 地域并启用后，
+  **新上传**的附件直接进 COS；历史附件仍在本地，读取按 `contract_files.storage` 逐行分流，不会因为切换而 404。
+- **下载**：桶保持私有。前端拿到的地址是 `/api/v1/contracts/:id/files/:fileId/raw`，
+  服务端鉴权后 302 到 5 分钟有效的预签名地址；Office 文档强制下载，图片与 PDF 内联。
+- **密钥**：只存在数据库里（`app_settings`），读接口不回传 SecretKey，界面只显示末四位；
+  因此编辑时**留空 = 不改**。要求更严就把库权限和备份加密当成同一件事来做。
 
 ---
 
@@ -698,22 +711,25 @@ location / {
 bash deploy/pack.sh
 
 # ② 两个文件一起上传（.sha256 用来校验包在传输中没损坏）
-scp dist/youdee-0.1.26-*.tar.gz dist/youdee-0.1.26-*.tar.gz.sha256 root@服务器:/tmp/
+scp dist/youdee-0.1.30-*.tar.gz dist/youdee-0.1.30-*.tar.gz.sha256 root@服务器:/tmp/
 
 # ③ 服务器上执行
 cd /opt/youdee
-sudo bash deploy/update.sh /tmp/youdee-0.1.26-20261111.tar.gz
+sudo bash deploy/update.sh /tmp/youdee-0.1.30-20261112.tar.gz
 ```
 
 > **第一次用这套流程要引导一下**：`update.sh` 是 0.1.25 才加的，服务器上现有的
 > `/opt/youdee/deploy/` 里没有它（`manual-deploy.sh` 也要新版，它多了 `SKIP_MIGRATE` 开关）。
-> 先把这两个脚本传上去再执行：
+> 先把这三个脚本传上去再执行：
 >
 > ```bash
-> scp deploy/update.sh deploy/manual-deploy.sh root@服务器:/opt/youdee/deploy/
+> scp deploy/update.sh deploy/manual-deploy.sh deploy/diagnose.sh root@服务器:/opt/youdee/deploy/
 > ```
 >
 > 之后就正常了——新版本的交付包里自带 `update.sh`，不需要再单独传。
+>
+> ⚠️ **脚本修过就必须重传**：切换目录后 `/opt/youdee/deploy/update.sh` 来自**包内**那一份。
+> 如果只改了本地脚本、没重新打包，下次更新会退回到旧脚本，同一个坑再踩一遍。
 
 它按七步走，只有第 4 步开始才影响线上：
 
@@ -737,15 +753,36 @@ sudo bash deploy/update.sh /tmp/youdee-0.1.26-20261111.tar.gz
 文件属主、`UPLOAD_DIR` 写权限、`HOME` 不可写、node 不在该用户的 `PATH` 里。
 root 试跑会一路通过，然后线上失败。
 
-**版本号是「跑的是不是新代码」的唯一硬证据**。`/api/v1/health` 的 `version` 取自运行中进程的
-`package.json`（systemd 用 `npx` 启动，会注入 `npm_package_version`），不是写死的常量：
+**版本号是「跑的是不是新代码」的唯一硬证据**，所以它必须能说清自己从哪来。
+`/api/v1/health` 会一次给齐五样东西（0.1.30 起）：
 
 ```bash
 curl -s http://127.0.0.1:3000/api/v1/health
-# {"code":0,"data":{"status":"ok","db":"ok","version":"0.1.26","uptime_s":12},...}
+# {"code":0,"data":{
+#   "status":"ok","db":"ok",
+#   "version":"0.1.30",                     ← 磁盘 package.json 里的版本 = 部署的这份代码
+#   "version_source":"package.json",        ← 上面那个值读自哪里；不是 package.json 就不可信
+#   "build_id":"zR3kP9xQ2m",                ← 磁盘 .next/BUILD_ID = 这份产物是哪次构建的
+#   "npm_version":"0.1.30",                 ← 仅供排错：npm 注入的环境变量
+#   "cwd":"/opt/youdee","uptime_s":12}}
 ```
 
-`uptime_s` 顺带证明进程真的重启过——只改代码不重启，版本号会一直停在老的。
+为什么要分成这么多字段而不是一个版本号：`npm_package_version` 是 npm 注入的**环境变量**，来源不可见；
+一旦它与磁盘上的代码不一致，日志里就只剩一个无处追查的数字。0.1.29 上线时就卡在这里——
+`/health` 反复报 `0.1.27`，而交付包和磁盘都是 `0.1.29`，三种可能（代码旧 / 变量旧 / 跑的不是这次构建）
+在当时的信息下完全无法区分。现在：
+
+- `version_source` 不是 `package.json` → `update.sh` 直接判失败，不再拿"数字看起来对"当通过；
+- `build_id` 与本次构建出来的不一致 → 说明跑的不是这次编出来的产物（版本号对了、产物没换）；
+  脚本在构建后记下 `BUILD_ID`，并核对它的修改时间不早于本次更新开始时间；
+- `cwd` 不是发布目录 → 目录切换没生效，问题在部署而不在代码；
+- `uptime_s` 顺带证明进程真的重启过——只改代码不重启，版本号会一直停在老的。
+
+`version` 读的是 `process.cwd()/package.json`，不是构建时写死的常量，所以**换目录就等于换版本**。
+
+> 别再试 `next.config.ts` 的 `env` 来传构建时间戳：Next 16 只把它写进
+> `.next/required-server-files.json` 的 `config.env`，**不会**在启动时回填 `process.env`，
+> 实测 `/health` 读出来是空串（只有客户端 bundle 会被内联）。改用 `.next/BUILD_ID` 更直接。
 
 **五条必须知道的约束**：
 
@@ -760,7 +797,10 @@ curl -s http://127.0.0.1:3000/api/v1/health
 - **`youdee.service` 里 `ReadWritePaths` 指向的目录必须存在**。`systemd` 建挂载命名空间时
   路径不存在会直接以 `status=226/NAMESPACE` 拒绝启动，报错只有
   `Failed to set up mount namespacing: No such file or directory`，完全指不到"少建了个空目录"。
-  脚本会补建 `.next/cache` 与上传目录——空目录最容易被丢：`tar` 未必带上、`git` 不跟踪。
+  脚本会读单元文件里的 `ReadWritePaths` 清单，逐条在新目录补齐（`-` 前缀的可选路径也补）——
+  空目录最容易被丢：`tar` 未必带上、`git` 不跟踪。**这一步只能靠"事前把目录建出来"**，
+  预启动自检直接跑 `next start`、绕过 systemd，永远测不到这一层（0.1.27 就是这样
+  预启动通过、切完目录才倒下的）。
 - **停机窗口**只有「迁移 + 换目录 + 启动」，通常几秒；装依赖和构建都在后台目录完成，不占停机时间。
 
 失败处理分三层，代价逐层升高：
@@ -769,7 +809,16 @@ curl -s http://127.0.0.1:3000/api/v1/health
 |---|---|---|
 | 构建失败 / **预启动自检不通过** | 打印新版本自己的启动日志，删掉旁目录，退出 | **没停过，库没动** |
 | 迁移失败 | 旧目录换回并重启 | 停过一次 |
-| 切换后健康检查不通过 | 打印 `systemctl status` + `journalctl` 最后 40 行，回滚代码**并再验一次是否真的恢复**；没恢复就把"现在是一次真实宕机"和处理命令摊出来 | 停过一次 |
+| **换目录后磁盘版本不对** | 当场 `dump_truth` 并回滚（0.1.30 起；以前要等起完服务才发现） | 停过一次 |
+| 切换后健康检查不通过 | `dump_truth`（`/health` 全量、磁盘版本、BUILD_ID、端口监听者、单元配置）+ `systemctl status` + `journalctl` 最后 40 行，回滚代码**并再验一次是否真的恢复**；没恢复就把"现在是一次真实宕机"和处理命令摊出来 | 停过一次 |
+
+每次判断是否达标，脚本都会把**不达标的具体原因**打出来，而不是只给个"未通过"：
+
+```
+[update]   不达标原因：version=0.1.27（期望 0.1.30）
+[update]   不达标原因：version_source=env（版本号不是读自磁盘，不可信）
+[update]   不达标原因：build_id=oldBuildId（期望 zR3kP9xQ2m，跑的不是这次构建的产物）
+```
 
 换下来的新版本留在 `/opt/youdee-failed.<时间>`，别急着删，排错要看。
 
@@ -796,7 +845,18 @@ docker compose exec db psql -U youdee -d youdee     # 进库
 
 #### 更新后服务起不来怎么查
 
-先分清是「连不上」还是「在跑但状态不对」，两者的排查方向完全不同：
+**先跑一条命令，把"现在跑的到底是什么"打全**（只读，不启停服务、不写文件）：
+
+```bash
+cd /opt/youdee && sudo bash deploy/diagnose.sh
+```
+
+它会依次打印：单元真实配置（`WorkingDirectory` / `ExecStart` / `ReadWritePaths`）、服务状态、
+`/health` 原样返回、磁盘上的 `package.json` 版本与 `.next/BUILD_ID` 及时间、端口监听者、
+`/opt` 下残留的 `-old` / `-failed` / `-next` 目录、日志尾部。**整段发出来就能定位**——
+省掉"来回问一句、再敲一条命令"的循环，这正是 0.1.27~0.1.29 那三轮最耗时间的地方。
+
+再往下是手工路径，用来分清是「连不上」还是「在跑但状态不对」，两者的排查方向完全不同：
 
 ```bash
 curl -s http://127.0.0.1:3000/api/v1/health   # 连不上 = 进程没在听；有 JSON = 进程在跑

@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '@/lib/api';
 import { cx, formatDate, formatMoney, formatTimeRel } from '@/lib/format';
-import type { Contract, Page } from '@/lib/types';
+import type { Contract, ContractCategory, Page } from '@/lib/types';
+import { CONTRACT_CATEGORIES, contractCategoryLabel } from '@/domain/contract';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input, SearchInput, Select } from '@/components/ui/field';
@@ -36,6 +37,7 @@ export default function ContractsPage() {
   const [title, setTitle] = useState('');
   const [company, setCompany] = useState('');
   const [customer, setCustomer] = useState('');
+  const [category, setCategory] = useState<'' | ContractCategory>('');
   const [signedFrom, setSignedFrom] = useState('');
   const [signedTo, setSignedTo] = useState('');
   const [createdFrom, setCreatedFrom] = useState('');
@@ -44,6 +46,8 @@ export default function ContractsPage() {
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<Page<Contract> | null>(null);
+  /** 每个分类各有多少份（跟随除分类外的其它条件），画在分类徽标后面 */
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -57,7 +61,9 @@ export default function ContractsPage() {
   const load = useCallback(async () => {
     setState('loading');
     try {
-      const r = await api.contracts({
+      // 查询条件只写一份：列表与分类徽标上的数字必须严格同源，
+      // 否则"商业合同 3"点进去只有 2 条，这种对不上的数字比不显示还糟。
+      const query = {
         q: q.trim() || undefined,
         contractNo: contractNo.trim() || undefined,
         title: title.trim() || undefined,
@@ -69,10 +75,20 @@ export default function ContractsPage() {
         createdTo: createdTo || undefined,
         hasFile: fileFilter === '' ? undefined : fileFilter === 'has',
         includeDeleted: includeDeleted && isAdmin ? true : undefined,
-        page,
-        limit: PAGE_SIZE,
+      };
+      const [list, ...rest] = await Promise.all([
+        api.contracts({ ...query, category: category || undefined, page, limit: PAGE_SIZE }),
+        // 每个分类各探一次（limit=1 只为了拿 total）——与供应商页"类型"徽标同一种做法
+        ...CONTRACT_CATEGORIES.map((c) =>
+          api.contracts({ ...query, category: c.value, page: 1, limit: 1 }).catch(() => null),
+        ),
+      ]);
+      setData(list);
+      const next: Record<string, number> = {};
+      CONTRACT_CATEGORIES.forEach((c, i) => {
+        next[c.value] = (rest[i] as Page<Contract> | null)?.total ?? 0;
       });
-      setData(r);
+      setCounts(next);
       setState('ready');
     } catch (e) {
       setError(errorMessage(e));
@@ -84,6 +100,7 @@ export default function ContractsPage() {
     title,
     company,
     customer,
+    category,
     signedFrom,
     signedTo,
     createdFrom,
@@ -113,6 +130,8 @@ export default function ContractsPage() {
 
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
+  // 「全部」上的数字：选中某个分类后列表 total 只剩那一类，所以按三类求和还原总量
+  const allCount = category ? CONTRACT_CATEGORIES.reduce((s, c) => s + (counts[c.value] ?? 0), 0) : total;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const hasFilter = Boolean(
     q.trim()
@@ -120,6 +139,7 @@ export default function ContractsPage() {
       || title.trim()
       || company.trim()
       || customer.trim()
+      || category
       || signedFrom
       || signedTo
       || createdFrom
@@ -134,6 +154,7 @@ export default function ContractsPage() {
     setTitle('');
     setCompany('');
     setCustomer('');
+    setCategory('');
     setSignedFrom('');
     setSignedTo('');
     setCreatedFrom('');
@@ -275,7 +296,7 @@ export default function ContractsPage() {
           )}
         </div>
 
-        {/* 第二行：两个日期区间 + 资料齐全度 + 删除状态 */}
+        {/* 第二行：两个日期区间 + 资料齐全度 + 删除状态（分类挪到表格上方做快速筛选） */}
         <div className="flex items-end gap-[var(--space-3)] flex-wrap">
           {label(
             '签订日期',
@@ -376,6 +397,37 @@ export default function ContractsPage() {
         </div>
       </div>
 
+      {/* 分类快速筛选：与供应商页的「类型」同一套 chip，点一下只看这一类 */}
+      <div className="flex items-center gap-[var(--space-2)] flex-wrap mt-[var(--space-4)]">
+        <span className="t-xs t-3">合同分类</span>
+        <button
+          type="button"
+          className={cx('chip', category === '' && 'chip--on')}
+          aria-pressed={category === ''}
+          onClick={() => {
+            setCategory('');
+            setPage(1);
+          }}
+        >
+          全部 <span className="num">{allCount}</span>
+        </button>
+        {CONTRACT_CATEGORIES.map((c) => (
+          <button
+            key={c.value}
+            type="button"
+            className={cx('chip', category === c.value && 'chip--on')}
+            aria-pressed={category === c.value}
+            onClick={() => {
+              setCategory(c.value);
+              setPage(1);
+            }}
+          >
+            {c.label}
+            {counts[c.value] ? <span className="num">{counts[c.value]}</span> : null}
+          </button>
+        ))}
+      </div>
+
       <div className="mt-[var(--space-4)]">
         {state === 'loading' ? <TableSkeleton rows={8} cols={7} /> : null}
         {state === 'error' ? <ErrorState message={error} onRetry={() => void load()} /> : null}
@@ -423,7 +475,10 @@ export default function ContractsPage() {
                         className={cx(deleted && 't-3')}
                       >
                         <Td>
-                          <div className="truncate">{r.title}</div>
+                          <div className="flex items-center gap-[var(--space-2)] min-w-0">
+                            <Badge tone="neutral">{contractCategoryLabel(r.category)}</Badge>
+                            <span className="truncate">{r.title}</span>
+                          </div>
                           <span className="cell-sub truncate">
                             {r.contractNo ? <span className="num">{r.contractNo}</span> : '没有编号'}
                           </span>

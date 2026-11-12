@@ -2,6 +2,7 @@ import { body, ok, requireUser, searchParams } from '@/server/http';
 import { dateParam, pageQuery } from '@/server/params';
 import { route } from '@/server/wrap';
 import { createContract, listContracts } from '@/server/services/contract.service';
+import { isContractCategory } from '@/domain/contract';
 
 /**
  * 合同台账。
@@ -22,6 +23,10 @@ export const GET = route(async (req) => {
   // 「已删除」只给管理员看：成员看到一堆灰行却恢复不了，只会误以为合同丢了
   const wantDeleted = sp.get('include_deleted') === '1' || sp.get('include_deleted') === 'true';
   const txt = (k: string) => (sp.get(k) ?? '').trim() || null;
+  // 分类只有三个合法值：认不出的按"不筛"处理，不报错——
+  // 筛选条件脏了应该出全部结果，而不是一页空白让人以为合同没了
+  const rawCategory = txt('category');
+  const category = isContractCategory(rawCategory) ? rawCategory : null;
 
   return ok(
     await listContracts({
@@ -31,6 +36,7 @@ export const GET = route(async (req) => {
       company: txt('company'),
       customer: txt('customer'),
       project: txt('project'),
+      category,
       signedFrom: dateParam(sp, 'signed_from'),
       signedTo: dateParam(sp, 'signed_to'),
       createdFrom: dateParam(sp, 'created_from'),

@@ -1,11 +1,12 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage } from '@/lib/api';
-import type { ContractDetail, ContractFile, ContractFileCategory, QuoteListItem } from '@/lib/types';
+import type { ContractCategory, ContractDetail, ContractFile, ContractFileCategory, QuoteListItem } from '@/lib/types';
+import { CONTRACT_CATEGORIES } from '@/domain/contract';
 import { cx, formatDate, formatMoney, formatTimeRel } from '@/lib/format';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Field, Input, Textarea } from '@/components/ui/field';
+import { Field, Input, Select, Textarea } from '@/components/ui/field';
 import { Drawer } from '@/components/ui/overlay';
 import { InlineLoading, Note } from '@/components/ui/states';
 import {
@@ -36,6 +37,7 @@ interface FormState {
   companyName: string;
   customerName: string;
   projectName: string;
+  category: ContractCategory;
   contractNo: string;
   signedOn: string;
   amount: string;
@@ -47,6 +49,8 @@ const EMPTY: FormState = {
   companyName: '',
   customerName: '',
   projectName: '',
+  // 与库里默认值一致：新建时不给分类 = 商业合同，不让两边各有一套默认
+  category: 'commercial',
   contractNo: '',
   signedOn: '',
   amount: '',
@@ -59,6 +63,7 @@ function toForm(d: ContractDetail): FormState {
     companyName: d.companyName,
     customerName: d.customerName ?? '',
     projectName: d.projectName ?? '',
+    category: d.category,
     contractNo: d.contractNo ?? '',
     signedOn: d.signedOn ?? '',
     amount: d.amount ?? '',
@@ -137,6 +142,8 @@ export function ContractDrawer({
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState<ContractFileCategory | null>(null);
+  /** 0~1：多份一起传时按"第几份 + 这份的进度"折算成整体进度 */
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [confirmFileId, setConfirmFileId] = useState<string | null>(null);
@@ -156,24 +163,39 @@ export function ContractDrawer({
     setCurrentId(contractId);
   }, [contractId]);
 
-  const load = useCallback(async () => {
-    if (!currentId) {
+  /** 只认最后一次发起的加载：连点两条合同时，先发的那条响应回来不能盖掉后选的 */
+  const loadSeq = useRef(0);
+
+  /**
+   * 取详情。
+   *
+   * id 必须由调用方显式给，**不能读 currentId**：点开某条合同时 open 与 contractId
+   * 是同一帧变的，此时 currentId 还停在上一次的值（首次打开就是 null），
+   * 靠 state 回填再去加载会直接走 `!id` 分支清空表单，于是第一次点开一片空白、
+   * 关掉再点才有内容（那时 currentId 已经被回填过了）。
+   */
+  const load = useCallback(async (id: string | null) => {
+    if (!id) {
       setDetail(null);
       setForm(EMPTY);
+      setLoading(false);
       return;
     }
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
-      const d = await api.contract(currentId);
+      const d = await api.contract(id);
+      if (seq !== loadSeq.current) return;
       setDetail(d);
       setForm(toForm(d));
       setError(null);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setError(errorMessage(e));
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
-  }, [currentId]);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -190,9 +212,8 @@ export function ContractDrawer({
       setForm(EMPTY);
       return;
     }
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, contractId]);
+    void load(contractId);
+  }, [open, contractId, load]);
 
   function handleError(e: unknown) {
     setError(errorMessage(e));
@@ -212,6 +233,7 @@ export function ContractDrawer({
         // 乙方可以空着：不是每份合同都能一眼看出客户主体
         customerName: form.customerName.trim() || null,
         projectName: form.projectName.trim() || null,
+        category: form.category,
         contractNo: form.contractNo.trim() || null,
         signedOn: form.signedOn || null,
         amount: form.amount.trim() || null,
@@ -232,15 +254,18 @@ export function ContractDrawer({
   async function upload(category: ContractFileCategory, files: FileList | null) {
     if (!files || files.length === 0 || !currentId) return;
     const section = SECTIONS.find((s) => s.key === category)!;
+    const list = Array.from(files);
     setUploading(category);
+    setProgress(0);
     setError(null);
     const failed: string[] = [];
-    for (const f of Array.from(files)) {
-      const fd = new FormData();
-      fd.append('file', f);
-      fd.append('category', category);
+    for (const [i, f] of list.entries()) {
       try {
-        await api.uploadContractFile(currentId, fd);
+        // 附件不限大小，大文件走流式上传；进度按"已完成份数 + 当前这份的比例"折算，
+        // 否则传 3 份时进度条会每次都从 0 跳到 100
+        await api.uploadContractFile(currentId, f, category, {
+          onProgress: (r) => setProgress((i + r) / list.length),
+        });
       } catch (e) {
         failed.push(`${f.name}：${errorMessage(e)}`);
       }
@@ -248,8 +273,9 @@ export function ContractDrawer({
     if (category === 'contract' && contractInput.current) contractInput.current.value = '';
     if (category === 'quote' && quoteInput.current) quoteInput.current.value = '';
     if (category === 'settlement' && settlementInput.current) settlementInput.current.value = '';
-    await load();
+    await load(currentId);
     setUploading(null);
+    setProgress(0);
     if (failed.length) setError(failed.join('；'));
     else onChanged(`${section.title}已上传。`);
   }
@@ -260,7 +286,7 @@ export function ContractDrawer({
     setBusy(true);
     try {
       await api.deleteContractFile(currentId, fileId);
-      await load();
+      await load(currentId);
       onChanged('附件已删除。');
     } catch (e) {
       setError(errorMessage(e));
@@ -288,7 +314,7 @@ export function ContractDrawer({
     setLinkingId(quoteId);
     try {
       await api.linkContractQuote(currentId, quoteId);
-      await load();
+      await load(currentId);
       setQuoteResults((rs) => (rs ?? []).filter((q) => q.id !== quoteId));
       onChanged('已关联报价单。');
     } catch (e) {
@@ -303,7 +329,7 @@ export function ContractDrawer({
     setLinkingId(quoteId);
     try {
       await api.unlinkContractQuote(currentId, quoteId);
-      await load();
+      await load(currentId);
       onChanged('已取消关联。');
     } catch (e) {
       setQuoteError(errorMessage(e));
@@ -398,7 +424,7 @@ export function ContractDrawer({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-[var(--space-3)]">
+        <div className="grid grid-cols-3 gap-[var(--space-3)]">
           <Field label="合同编号" htmlFor="ct-no" error={fieldErrors.contractNo}>
             <Input
               id="ct-no"
@@ -414,6 +440,19 @@ export function ContractDrawer({
               placeholder="秋季新品发布会"
               onChange={(e) => setForm((f) => ({ ...f, projectName: e.target.value }))}
             />
+          </Field>
+          <Field label="合同分类" htmlFor="ct-category" required error={fieldErrors.category}>
+            <Select
+              id="ct-category"
+              value={form.category}
+              onChange={(e) => setForm((f) => ({ ...f, category: e.target.value as ContractCategory }))}
+            >
+              {CONTRACT_CATEGORIES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </Select>
           </Field>
         </div>
 
@@ -604,7 +643,7 @@ export function ContractDrawer({
                   disabled={!currentId || uploading !== null || isDeleted}
                   onClick={() => ref.current?.click()}
                 >
-                  上传{s.title}
+                  {uploading === s.key ? `上传中 ${Math.round(progress * 100)}%` : `上传${s.title}`}
                 </Button>
               </div>
             </div>
@@ -612,10 +651,7 @@ export function ContractDrawer({
             {!currentId ? (
               <Note tone="neutral">先把合同信息保存下来，再上传——附件要挂在合同上，不能先飘着。</Note>
             ) : list.length === 0 ? (
-              <Note tone="neutral">
-                {s.empty}
-                <span className="t-3"> 单份不超过 20MB。</span>
-              </Note>
+              <Note tone="neutral">{s.empty}</Note>
             ) : (
               <ul className="flex flex-col gap-[var(--space-2)]">
                 {list.map((f) => (

@@ -10,14 +10,17 @@ import { UsersPanel } from '@/components/settings/users-panel';
 import { QuoteRulesPanel } from '@/components/settings/quote-rules-panel';
 import { TemplatesPanel } from '@/components/settings/templates-panel';
 import { CategoriesPanel } from '@/components/settings/categories-panel';
+import { StoragePanel } from '@/components/settings/storage-panel';
 
-type Section = 'users' | 'categories' | 'rules' | 'template' | 'export' | 'system';
+type Section = 'users' | 'categories' | 'rules' | 'template' | 'storage' | 'export' | 'system';
 
 const NAV: Array<{ key: Section; label: string; adminOnly?: boolean }> = [
   { key: 'users', label: '用户与角色', adminOnly: true },
   { key: 'categories', label: '分类字典', adminOnly: true },
   { key: 'rules', label: '比价与计价规则', adminOnly: true },
   { key: 'template', label: '报价单模板' },
+  // 里面是云账号密钥，只给管理员；成员看不到这个入口
+  { key: 'storage', label: '对象存储', adminOnly: true },
   { key: 'export', label: '导出与打印' },
   { key: 'system', label: '系统' },
 ];
@@ -64,6 +67,7 @@ export default function SettingsPage() {
           {active === 'users' ? <UsersPanel currentUserId={user?.id ?? null} /> : null}
           {active === 'categories' ? <CategoriesPanel /> : null}
           {active === 'rules' ? <QuoteRulesPanel /> : null}
+          {active === 'storage' ? <StoragePanel /> : null}
 
           {active === 'template' ? (
             <div className="flex flex-col gap-[var(--space-5)]">

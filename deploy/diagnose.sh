@@ -19,8 +19,10 @@ PORT="${PORT:-3000}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:$PORT}"
 
 say() { echo "[diag] $*"; }
-# 每一段都单独兜底：某个信息取不到不该让整份诊断停在那里
-run() { echo "[diag]   $*"; bash -c "$*" 2>&1 | sed 's/^/[diag]     /' || echo "[diag]     （取不到）"; }
+# 每一段都单独兜底：某个信息取不到不该让整份诊断停在那里。
+# 先把执行的命令打出来（对方照抄就能自己再跑一次），再打输出；末尾补空行，
+# 因为 `cat BUILD_ID` 这类输出常常不带换行，会把下一段的标题挤到同一行里。
+run() { echo "[diag]   $*"; bash -c "$*" 2>&1 | sed 's/^/[diag]     /'; echo; }
 
 say "发布目录 $ROOT"
 say "服务单元 $SERVICE / 端口 $PORT"

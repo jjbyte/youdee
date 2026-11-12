@@ -14,6 +14,7 @@ export function Drawer({
   footer,
   width,
   closeOnScrim = true,
+  escDisabled = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -23,15 +24,23 @@ export function Drawer({
   footer?: ReactNode;
   width?: string;
   closeOnScrim?: boolean;
+  /**
+   * 上面又叠了一层（合同抽屉里打开附件预览）时置 true。
+   *
+   * 两层都在 document 上监听 keydown，按一次 Esc 会把预览和抽屉一起关掉 ——
+   * 用户以为只关了预览，抬头发现抽屉也没了，填了一半的表单还在里面。
+   * 层级更高的那层负责响应，下面这层必须让路。
+   */
+  escDisabled?: boolean;
 }) {
   useEffect(() => {
-    if (!open) return;
+    if (!open || escDisabled) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, escDisabled]);
 
   if (!open) return null;
   return (

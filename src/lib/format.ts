@@ -201,3 +201,14 @@ export function round2(v: string | number): string {
 export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ');
 }
+
+/**
+ * 附件大小。展示用，不追求精确：1.2 MB 比 1.18 MB 好读。
+ * 0 或负数返回空串 —— 老数据里 size_bytes 可能是 0，写成"0 KB"像文件坏了。
+ */
+export function fileSize(n: number): string {
+  if (!n || n <= 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}

@@ -3,13 +3,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage } from '@/lib/api';
 import type { ContractCategory, ContractDetail, ContractFile, ContractFileCategory, QuoteListItem } from '@/lib/types';
 import { CONTRACT_CATEGORIES } from '@/domain/contract';
-import { cx, formatDate, formatMoney, formatTimeRel } from '@/lib/format';
+import { cx, fileSize, formatDate, formatMoney, formatTimeRel } from '@/lib/format';
+import { canPreview } from '@/lib/file-preview';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Field, Input, Select, Textarea } from '@/components/ui/field';
 import { Drawer } from '@/components/ui/overlay';
 import { InlineLoading, Note } from '@/components/ui/states';
+import { ContractFilePreview } from './file-preview';
 import {
+  IconDownload,
   IconExternal,
   IconFile,
   IconPaperclip,
@@ -69,12 +72,6 @@ function toForm(d: ContractDetail): FormState {
     amount: d.amount ?? '',
     note: d.note ?? '',
   };
-}
-
-function fileSize(n: number): string {
-  if (n <= 0) return '';
-  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /** 服务端 field 是 snake_case，表单键是 camelCase */
@@ -147,6 +144,8 @@ export function ContractDrawer({
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [confirmFileId, setConfirmFileId] = useState<string | null>(null);
+  /** 正在预览的附件。null = 没开预览层 */
+  const [previewFile, setPreviewFile] = useState<ContractFile | null>(null);
 
   // 关联报价单
   const [quoteQuery, setQuoteQuery] = useState('');
@@ -198,10 +197,17 @@ export function ContractDrawer({
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // 抽屉关了，预览层不能留在屏幕上 —— 它挂在 Drawer 内部，
+      // 抽屉卸载（open=false 时 Drawer 返回 null）会把它一起带走，
+      // 但状态得清掉，否则下次打开抽屉会先闪一下上一条的预览
+      setPreviewFile(null);
+      return;
+    }
     setError(null);
     setFieldErrors({});
     setConfirmFileId(null);
+    setPreviewFile(null);
     setQuoteQuery('');
     setQuoteResults(null);
     setQuoteError(null);
@@ -363,6 +369,7 @@ export function ContractDrawer({
       }
       width="760px"
       closeOnScrim={false}
+      escDisabled={previewFile !== null}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -661,6 +668,7 @@ export function ContractDrawer({
                     disabled={isDeleted}
                     busy={busy}
                     confirming={confirmFileId === f.id}
+                    onPreview={() => setPreviewFile(f)}
                     onAsk={() => setConfirmFileId(f.id)}
                     onCancel={() => setConfirmFileId(null)}
                     onConfirm={() => void removeFile(f.id)}
@@ -675,6 +683,13 @@ export function ContractDrawer({
       {detail?.signedOn ? (
         <p className="t-2xs t-3 mt-[var(--space-4)]">签订日期：{formatDate(detail.signedOn)}</p>
       ) : null}
+
+      <ContractFilePreview
+        open={previewFile !== null}
+        contractId={currentId}
+        file={previewFile}
+        onClose={() => setPreviewFile(null)}
+      />
     </Drawer>
   );
 }
@@ -685,6 +700,7 @@ function ContractFileRow({
   disabled,
   busy,
   confirming,
+  onPreview,
   onAsk,
   onCancel,
   onConfirm,
@@ -693,11 +709,12 @@ function ContractFileRow({
   disabled: boolean;
   busy: boolean;
   confirming: boolean;
+  onPreview: () => void;
   onAsk: () => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const inline = f.ext === 'pdf' || f.kind === 'image';
+  const inline = canPreview(f.ext);
   return (
     <li className="flex items-center gap-[var(--space-3)] px-[var(--space-3)] py-[var(--space-2)] border border-[var(--border)] rounded-[var(--radius-md)]">
       <IconFile size={16} />
@@ -710,15 +727,28 @@ function ContractFileRow({
           {formatTimeRel(f.createdAt)}
         </div>
       </div>
-      <a
-        href={f.url}
-        target="_blank"
-        rel="noreferrer"
-        className="btn btn--link"
-        aria-label={`${inline ? '打开' : '下载'} ${f.originalName || '附件'}`}
-      >
-        <IconExternal size={14} /> {inline ? '打开' : '下载'}
-      </a>
+      {inline ? (
+        // 能解析的格式在弹层里看，不跳新标签页：新标签页对 docx/xlsx
+        // 只会触发下载，等于把用户又推回"先存盘再找文件"的老路
+        <button
+          type="button"
+          className="btn btn--link"
+          aria-label={`预览 ${f.originalName || '附件'}`}
+          onClick={onPreview}
+        >
+          <IconExternal size={14} /> 预览
+        </button>
+      ) : (
+        <a
+          href={f.url}
+          target="_blank"
+          rel="noreferrer"
+          className="btn btn--link"
+          aria-label={`下载 ${f.originalName || '附件'}`}
+        >
+          <IconDownload size={14} /> 下载
+        </a>
+      )}
       {confirming ? (
         <span className="flex items-center gap-[var(--space-2)]">
           <button type="button" className="btn btn--link t-danger" onClick={onConfirm}>

@@ -361,6 +361,35 @@ export async function presignCosDownload(opts: {
 }
 
 /**
+ * 读回对象内容（在线预览用）。
+ *
+ * 与下载路由的 302 预签名不同：预览必须由**同源**的接口吐出字节，
+ * 否则前端 `fetch` 会跟着 302 跑到 COS 域名上，变成一次跨域请求 ——
+ * 而桶的 CORS 规则默认是空的，结果是"点预览没反应"、控制台一条 CORS 红字，
+ * 而服务端日志一行都不打。
+ *
+ * 所以这里整份读进内存：预览本来就要把全部字节交给解析器（docx-preview / exceljs），
+ * 流式没有收益；大小上限由调用方先卡住。
+ */
+export async function getCosObject(key: string): Promise<Buffer> {
+  const { cos, cfg } = await requireClient();
+  try {
+    const data = await new Promise<Buffer>((resolve, reject) => {
+      cos.getObject({ Bucket: cfg.bucket, Region: cfg.region, Key: key }, (err, res) => {
+        if (err) return reject(err);
+        // SDK 在不传 Output 时给 Body 是 Buffer；防御性处理字符串形态
+        const body = (res as { Body?: Buffer | string }).Body;
+        if (body === undefined) return reject(new Error('对象内容为空'));
+        resolve(Buffer.isBuffer(body) ? body : Buffer.from(body));
+      });
+    });
+    return data;
+  } catch (e) {
+    throw translate(e, '读取附件');
+  }
+}
+
+/**
  * 测试连接：真的传一个 8 字节的小对象再删掉。
  *
  * 只做 getBucket（列举）不够——子账号经常被给"只读"策略，

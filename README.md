@@ -259,6 +259,7 @@ src/components/
 | 合同附件的类型白名单 | `src/server/services/file-type.ts` 的 `FILE_CATEGORY`（按字节判定，不看扩展名）+ `upload-stream.service.ts` 的大文件头尾探测 | 合同附件的三个上传口 |
 | 合同附件存在哪儿（本地盘 / 腾讯云 COS） | 设置 → 对象存储（`app_settings.cos_storage`），按行记在 `contract_files.storage` 上 | 只影响**新上传**的附件，历史附件按行分流读取，切换不迁移、不 404 |
 | 合同附件单份最大体积 | 默认不限制；要收口就设环境变量 `MAX_CONTRACT_FILE_BYTES`（字节，0 = 不限） | 合同附件上传 |
+| 合同附件在线预览的体积上限 | 默认 32MB；环境变量 `PREVIEW_MAX_BYTES`（字节） | 合同附件预览 |
 
 ### 合同附件与对象存储
 
@@ -268,6 +269,24 @@ src/components/
   **新上传**的附件直接进 COS；历史附件仍在本地，读取按 `contract_files.storage` 逐行分流，不会因为切换而 404。
 - **下载**：桶保持私有。前端拿到的地址是 `/api/v1/contracts/:id/files/:fileId/raw`，
   服务端鉴权后 302 到 5 分钟有效的预签名地址；Office 文档强制下载，图片与 PDF 内联。
+- **在线预览**：抽屉里每份附件都有「预览」，不用先下载再找文件。分四种画法：
+
+  | 格式 | 怎么显示 | 走哪个接口 |
+  |---|---|---|
+  | PDF | 浏览器自带阅读器（iframe） | `raw` |
+  | JPG / PNG / WEBP | `<img>` | `raw` |
+  | DOCX | `docx-preview` 解析成 HTML | `.../content`（同源字节） |
+  | XLSX | 服务端 `exceljs` 解析成 JSON，前端画 `<table>` | `.../sheet` |
+  | DOC / XLS | 解析不了，只能下载（界面会说明「另存为 .docx/.xlsx 再上传」） | — |
+
+  Word / Excel 的预览是**内容级**的：合并单元格、颜色、图片位置不会完全还原。
+  如果要求"和原件一模一样"，仍然只能下载。
+
+- **预览为什么不让前端直接 fetch `raw`**：`raw` 对云存储文件是 302 到预签名地址，
+  `fetch` 跟过去就成了跨域请求，而桶的 CORS 默认是空的 —— 现象是"点预览一直转圈"、
+  服务端一行日志都没有。所以预览单独走同源的 `.../content`，由服务端取字节再吐出来。
+- **预览体积上限**：默认 32MB，超过就明确提示下载（解析要整份读进内存，
+  再大就不是"看一眼"的场景）。要放宽就设环境变量 `PREVIEW_MAX_BYTES`（字节）。
 - **密钥**：只存在数据库里（`app_settings`），读接口不回传 SecretKey，界面只显示末四位；
   因此编辑时**留空 = 不改**。要求更严就把库权限和备份加密当成同一件事来做。
 

@@ -530,19 +530,29 @@ export async function addContractFile(
   }
 }
 
-/** 读一份附件的位置信息，给下载/跳转路由用 */
+/** 读一份附件的位置信息，给下载/跳转/预览路由用 */
 export async function getContractFileRef(
   contractId: string,
   fileId: string,
-): Promise<{ storage: 'local' | 'cos'; storageKey: string; url: string; mime: string; originalName: string }> {
+): Promise<{
+  storage: 'local' | 'cos';
+  storageKey: string;
+  url: string;
+  mime: string;
+  originalName: string;
+  /** 判定过的真实扩展名（小写、不带点）；预览要靠它决定能不能解析 */
+  ext: string;
+  sizeBytes: number;
+}> {
   const row = await one<{
     storage: string;
     storage_key: string;
     url: string;
     mime: string | null;
     original_name: string | null;
+    size_bytes: string | number | null;
   }>(
-    `SELECT storage, storage_key, url, mime, original_name FROM contract_files
+    `SELECT storage, storage_key, url, mime, original_name, size_bytes FROM contract_files
       WHERE id = $1 AND contract_id = $2`,
     [fileId, contractId],
   );
@@ -553,6 +563,11 @@ export async function getContractFileRef(
     url: row.url,
     mime: row.mime ?? 'application/octet-stream',
     originalName: row.original_name ?? '附件',
+    // 落盘名是 UUID + 判定出的扩展名，所以从键上取就是真实格式，
+    // 不能用 original_name —— 那是用户起的名字，可以是任意字符串
+    ext: (row.storage_key.split('?')[0] ?? '').split('.').pop()?.toLowerCase() ?? '',
+    // bigint 经 pg 回来是字符串；预览路由要拿它卡上限，必须先转成数字
+    sizeBytes: Number(row.size_bytes ?? 0),
   };
 }
 

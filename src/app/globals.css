@@ -1359,6 +1359,26 @@ button {
 .paper-tbl tfoot .paper-sum td { color: var(--fg-2); }
 .paper-tbl tfoot .paper-sum--total td { font-size: 15px; font-weight: var(--fw-semibold); color: var(--fg); padding-top: var(--space-1); }
 
+/* ── 附件预览：docx-preview 渲染出来的层级 ──────────────────────────
+   docx-preview 会把自己的 <style> 注入到渲染容器**里面**，而容器内的样式
+   在文档顺序上晚于 head 里的这张表 —— 同特异性下它赢。所以这里用重复类名
+   把特异性抬到 (0,3,0)，不靠 !important 也能盖住。
+   它默认给的是灰底 + 30px 留白，那是给独立页面看的；嵌在我们的弹层里
+   要跟主题一致，暗色主题下才不会突然亮一块。 */
+.docx-host .docx-wrapper.docx-wrapper {
+  background: transparent;
+  padding: var(--space-4) var(--space-3);
+}
+.docx-host .docx-wrapper.docx-wrapper > section.docx {
+  box-shadow: var(--shadow-2);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-4);
+  max-width: 100%;
+}
+.docx-host .docx-wrapper.docx-wrapper > section.docx:last-child {
+  margin-bottom: 0;
+}
+
 @page {
   size: A4;
   margin: 14mm 12mm;

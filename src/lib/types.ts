@@ -596,6 +596,20 @@ export interface ContractFile {
   createdAt: string;
 }
 
+/**
+ * Excel 附件的预览数据。服务端只给值和行列位置，不给格式 ——
+ * 合并单元格、颜色、图表都不还原，目的是"核对金额和条款"，不是还原原文。
+ */
+export interface SheetPreview {
+  name: string;
+  /** 已按行补齐到同一列数的二维字符串 */
+  rows: string[][];
+  /** 截断前的真实行列数，用来告诉用户"后面还有" */
+  totalRows: number;
+  totalCols: number;
+  truncated: boolean;
+}
+
 /** 合同关联的系统报价单 */
 export interface ContractQuote {
   id: string;

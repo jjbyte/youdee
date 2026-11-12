@@ -39,6 +39,7 @@ import type {
   QuoteTemplate,
   QuoteTotals,
   RiskCheckResult,
+  SheetPreview,
   StorageSettings,
   Supplier,
   UserRecord,
@@ -538,6 +539,14 @@ export const api = {
     }, opts),
   deleteContractFile: (id: string, fileId: string) =>
     request<{ deleted: boolean }>(`/contracts/${id}/files/${fileId}`, { method: 'DELETE' }),
+  /**
+   * Excel 附件的表格预览。
+   *
+   * 拿的是服务端解析好的二维字符串，不是 xlsx 原文件：解析不放浏览器跑，
+   * 一是避免把不受信任的 zip 容器丢给用户的机器，二是前端只收几十 KB 的 JSON。
+   */
+  contractFileSheet: (id: string, fileId: string) =>
+    request<{ sheets: SheetPreview[] }>(`/contracts/${id}/files/${fileId}/sheet`),
   /** 关联一张系统里的报价单（幂等：重复关联不报错） */
   linkContractQuote: (id: string, quoteId: string) =>
     request<{ linked: boolean; quotes: ContractQuote[] }>(`/contracts/${id}/quotes`, {

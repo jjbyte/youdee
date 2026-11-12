@@ -13,8 +13,29 @@
 # 所以目录体积会到 1GB 左右，且换机器不能直接拷贝（sharp / pg 是平台相关的二进制）。
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+if [ -n "${APP_DIR:-}" ]; then cd "$APP_DIR"; else cd "$(dirname "$0")/.."; fi
 ROOT="$(pwd)"
+ROOT="${ROOT%/}"
+
+# ── 目录必须就是服务在跑的那个 ──────────────────────────────────────────
+# 本脚本是「原地解包 + 构建」，改动全落在当前目录。目录选错时的表现极其迷惑：
+# 依赖装好了、构建成功了、自检全绿色，而线上进程跑在另一个目录，一个字都没变。
+# 0.1.31 上线就栽在这上面 —— 脚本在 /opt/youdee-old 执行，服务却跑 /opt/youdee，
+# 于是三次「更新成功/回滚成功」全对着一个没人运行的目录。
+SERVICE="${SERVICE:-youdee}"
+UNIT_DIR=""
+if command -v systemctl >/dev/null 2>&1 && systemctl cat "$SERVICE" >/dev/null 2>&1; then
+  UNIT_DIR="$(systemctl show -p WorkingDirectory "$SERVICE" 2>/dev/null | sed -n 's/^WorkingDirectory=//p' | tr -d '\r' || true)"
+  UNIT_DIR="${UNIT_DIR#-}"
+fi
+if [ -n "$UNIT_DIR" ] && [ -z "${APP_DIR:-}" ] && [ "${UNIT_DIR%/}" != "$ROOT" ]; then
+  echo "[manual] 目录对不上，已停下 —— 在这里做完，线上不会有任何变化：" >&2
+  echo "[manual]   当前目录                 $ROOT" >&2
+  echo "[manual]   $SERVICE 的工作目录      $UNIT_DIR" >&2
+  echo "[manual]   cd $UNIT_DIR && sudo sh deploy/manual-deploy.sh" >&2
+  echo "[manual]   或显式指定：APP_DIR=$UNIT_DIR sudo sh $0" >&2
+  exit 1
+fi
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "[manual] 缺少 $1，请先安装" >&2; exit 1; }; }
 need node

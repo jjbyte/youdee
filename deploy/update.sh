@@ -55,9 +55,72 @@ case "$PKG" in *.tar.gz|*.tgz) ;; *) die "交付包应当是 .tar.gz：$PKG" ;; 
 [ "$(id -u)" -eq 0 ] || die "需要 root（要动 systemd 和 /opt 属主）：请用 sudo bash $0 ..."
 command -v systemctl >/dev/null 2>&1 || die "本机没有 systemctl，这份脚本只适用于 systemd 直装"
 
+SERVICE="${SERVICE:-youdee}"
+
+# ── 发布目录：只认 systemd 单元说的那个 ──────────────────────────────────
+# 旧实现用「脚本所在目录的上一级」当发布目录：ROOT="$(cd "$(dirname "$0")/.." && pwd)"。
+# 0.1.31 上线时这一行导致了最贵的一次误判：
+#   脚本被从 /opt/youdee-old/deploy/ 执行 → ROOT=/opt/youdee-old
+#   而单元里的 WorkingDirectory 一直是 /opt/youdee
+# 于是脚本把一个「没人用的目录」当成线上目录：备份、构建、换目录、核对、回滚，每一步都对着它做，
+# 一路报告「已切换」「回滚成功」，而线上进程从头到尾没被碰过。6/6 只能看到
+# 「应答正常但还是旧版本」，脚本据此写成「旧进程没死、端口被占」——方向完全反了。
+#
+# 判定顺序：APP_DIR（显式指定）→ 单元的 WorkingDirectory → 脚本所在目录。
+# 后两者不一致时直接停下：放它继续，等于允许「更新一个不会被运行的目录」并报告成功。
+is_abs() { case "$1" in /*) return 0 ;; *) return 1 ;; esac; }
+
+# 单元声明的目录。systemd 219（CentOS 7）不支持 `--value`，用 sed 取；
+# 前缀 - 表示目录不存在也不报错（systemd 允许这种写法），剥掉。
+unit_dir_of() {
+  local d
+  d="$(systemctl show -p WorkingDirectory "${1:-$SERVICE}" 2>/dev/null | sed -n 's/^WorkingDirectory=//p' | tr -d '\r' || true)"
+  printf '%s' "${d#-}"
+}
+
+# 解析线上目录，输出「目录|来源」。抽成函数是为了能被单独测 ——
+# 这段判错的后果不是报错，而是"一路成功、线上没变"，比崩掉难查得多。
+resolve_root() {
+  local script_root="$1" unit_dir="${2:-}"
+  if [ -n "${APP_DIR:-}" ]; then
+    printf '%s|%s\n' "${APP_DIR%/}" "APP_DIR 环境变量"; return 0
+  fi
+  [ -n "$unit_dir" ] || unit_dir="$(unit_dir_of)"
+  if is_abs "$unit_dir"; then
+    printf '%s|%s\n' "${unit_dir%/}" "单元 $SERVICE 的 WorkingDirectory"; return 0
+  fi
+  printf '%s|%s\n' "${script_root%/}" "脚本所在目录（单元未声明 WorkingDirectory）"
+}
+
+UNIT_DIR="$(unit_dir_of)"
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+RESOLVED="$(resolve_root "$SCRIPT_ROOT" "$UNIT_DIR")"
+ROOT="${RESOLVED%%|*}"
+ROOT_SRC="${RESOLVED#*|}"
+
+case "$ROOT_SRC" in
+  脚本所在目录*)
+    warn "单元 $SERVICE 没声明 WorkingDirectory，只能按脚本位置判断线上目录：$ROOT"
+    warn "  如果服务实际跑在别处，用 APP_DIR=/那个目录 再跑一次，否则可能更新错目录。"
+    ;;
+esac
+
+if [ "$ROOT" != "$SCRIPT_ROOT" ] && [ -z "${APP_DIR:-}" ]; then
+  die "目录对不上，已停下（这一步不做，后面会「一切顺利」但线上一个字都没变）：
+
+      脚本位置      $SCRIPT_ROOT
+      线上目录      $ROOT   （来自 $ROOT_SRC）
+
+  要更新的是 $ROOT，就照这样跑：
+      sudo bash $ROOT/deploy/update.sh $PKG
+  本来就想更新 $SCRIPT_ROOT 这个目录，说明单元配置和实际部署对不上了，先看：
+      systemctl cat $SERVICE | grep -E 'WorkingDirectory|ExecStart'
+  确实要更新别处，显式指定：
+      APP_DIR=$ROOT sudo bash $0 $PKG"
+fi
+
 # 路径全部按绝对路径算好再动目录：换目录那一瞬间 $ROOT 会短暂不存在，
 # 若此时还在用相对路径（或 cwd 恰好在 $ROOT 里），后续命令会莫名其妙地找不到东西。
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PARENT="$(dirname "$ROOT")"
 BASE="$(basename "$ROOT")"
 NEXT_DIR="$PARENT/$BASE-next"
@@ -65,9 +128,8 @@ PREV_DIR="$PARENT/$BASE-old"
 FAILED_DIR="$PARENT/$BASE-failed.$(date +%Y%m%d-%H%M%S)"
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$PARENT/$BASE-backup/$TS"
-SERVICE="${SERVICE:-youdee}"
 
-say "线上目录 $ROOT"
+say "线上目录 $ROOT（来源：$ROOT_SRC）"
 say "服务单元 $SERVICE"
 
 [ -f "$ROOT/.env" ] || die "$ROOT/.env 不存在。更新不会重建它——里面是数据库口令和 JWT 密钥，丢了没法复原。先确认部署目录对不对。"
@@ -83,9 +145,9 @@ version_of() {
 RUN_START_EPOCH="$(date +%s)"
 
 # 探一次健康检查。输出四种形态，必须能分开看，排查方向完全不同：
-#   status|版本|库|来源|BUILD_ID   正常
-#   REFUSED                      端口没人听 —— 进程启动即退出（这是最常见的"起不来"）
-#   TIMEOUT                      端口通了，但 3 秒内没答完 —— 多半卡在库连接上，不是没启动
+#   status|版本|库|来源|BUILD_ID|进程cwd   正常
+#   REFUSED                              端口没人听 —— 进程启动即退出（这是最常见的"起不来"）
+#   TIMEOUT                              端口通了，但 3 秒内没答完 —— 多半卡在库连接上，不是没启动
 # 0.1.25 首跑时把前两种和后两种混成了同一句"未返回 ok（||）"，白绕一圈。
 #
 # 为什么要带上"来源"和"BUILD_ID"两个字段：0.1.29 上线时 /health 报 version=0.1.27，
@@ -101,7 +163,8 @@ probe() {
         const d = j.data || {};
         // 分隔符与换行若混进内容会撑破字段，统一替换掉
         const f = (x) => (x === undefined || x === null ? "" : String(x).replace(/[|\r\n]/g, "/"));
-        console.log([f(d.status), f(d.version), f(d.db), f(d.version_source), f(d.build_id)].join("|"));
+        // cwd 是最后一道保险：版本号对了但进程跑在别的目录，症状和"没重启"一模一样
+        console.log([f(d.status), f(d.version), f(d.db), f(d.version_source), f(d.build_id), f(d.cwd)].join("|"));
       } catch (e) {
         if (e.name === "TimeoutError") { console.log("TIMEOUT"); return; }
         const code = (e.cause && e.cause.code) || e.code || "";
@@ -133,10 +196,10 @@ probe_raw() {
 #   2) 一旦不相等，等式只能说"不等"，说不出是版本不对、库不对，还是根本没有应答。
 # 判断交给 node：逐项比，并给出人能直接读的原因。
 #
-# 参数：<探测输出> <期望版本> <期望 BUILD_ID，空=不比> [1=要求版本读自磁盘]
+# 参数：<探测输出> <期望版本> <期望 BUILD_ID，空=不比> [1=要求版本读自磁盘] [期望 cwd，空=不比]
 check_out() {
   node -e '
-    const [out, want, wantBuildId, strict] = process.argv.slice(1);
+    const [out, want, wantBuildId, strict, wantCwd] = process.argv.slice(1);
     const raw = (out || "").trim();
     let res;
     if (!raw) {
@@ -144,7 +207,7 @@ check_out() {
     } else if (/^(REFUSED|TIMEOUT|ERR:)/.test(raw)) {
       res = "bad:" + raw;
     } else {
-      const [status, version, db, source, buildId] = raw.split("|");
+      const [status, version, db, source, buildId, cwd] = raw.split("|");
       const why = [];
       if (status !== "ok") why.push("status=" + (status || "空"));
       if (version !== want) why.push("version=" + (version || "空") + "（期望 " + want + "）");
@@ -158,10 +221,27 @@ check_out() {
       if (wantBuildId && buildId !== wantBuildId) {
         why.push("build_id=" + (buildId || "空") + "（期望 " + wantBuildId + "，跑的不是这次构建的产物）");
       }
+      // cwd 是"位置身份"。0.1.31 那次失败里版本和 BUILD_ID 都只是症状，根因是进程
+      // 跑在 /opt/youdee，而脚本把新版本换到了 /opt/youdee-old —— 有这一项当场就能说清。
+      // 老版本没有这个字段（空），不比对，免得回滚判定被误伤。
+      if (wantCwd && cwd) {
+        // 归一化只做三件不改变语义的事：反斜杠转正斜杠、去末尾斜杠、取物理路径。
+        // 第三条最要紧：Node 的 process.cwd() 走 getcwd，返回的是**物理**路径。
+        // 如果 /opt/youdee 是个软链（指到 /data/youdee 之类），而这里比的是逻辑路径，
+        // 那每次都会"明明切换成功却判失败、然后回滚"—— 比漏判难受得多。
+        const norm = (s) => {
+          let p = String(s).replace(/\\/g, "/").replace(/\/+$/, "");
+          try { p = require("node:fs").realpathSync(p).replace(/\\/g, "/").replace(/\/+$/, ""); } catch {}
+          return p;
+        };
+        if (norm(cwd) !== norm(wantCwd)) {
+          why.push("cwd=" + cwd + "（期望 " + wantCwd + "，进程跑的不是这个目录）");
+        }
+      }
       res = why.length ? "bad:" + why.join("；") : "ok";
     }
     console.log(res);
-  ' "$1" "$2" "${3:-}" "${4:-1}" || true
+  ' "$1" "$2" "${3:-}" "${4:-1}" "${5:-}" || true
 }
 
 # 出问题时把"该看的东西"一次摊开：版本、构建产物、端口归属、单元配置。
@@ -174,10 +254,22 @@ dump_truth() {
   warn "  交付包版本 $PKG：${NEW_VER:-未解析}"
   warn "  发布目录指向：$(readlink -f "$ROOT" 2>/dev/null || echo 读不出)（$(ls -ld "$ROOT" 2>/dev/null | awk '{print $1, $3":"$4}' || true)）"
   warn "  .next/BUILD_ID：$(cat "$ROOT/.next/BUILD_ID" 2>/dev/null || echo 缺失)（$(stat -c '%y' "$ROOT/.next/BUILD_ID" 2>/dev/null || echo 无时间)）"
+  # 端口监听者：CentOS 7 的 ss 不认 `-H`/过滤表达式，0.1.31 那次这里打出来是空的，
+  # 于是"到底谁在听 3000"这个问题又回到了靠猜。改成按末段端口号自己筛。
   if command -v ss >/dev/null 2>&1; then
-    warn "  端口 $PORT 的监听者：$(ss -lntpH "sport = :$PORT" 2>/dev/null | tail -n +2 | tr '\n' ' ' || true)"
+    warn "  端口 $PORT 的监听者：$(ss -lntp 2>/dev/null | awk -v p="$PORT" 'NR>1 { n=split($4,a,":"); if (a[n]==p) printf "%s %s %s; ", $1, $4, $6 }' || true)"
+  elif command -v netstat >/dev/null 2>&1; then
+    warn "  端口 $PORT 的监听者：$(netstat -lntp 2>/dev/null | awk -v p="$PORT" '$1 ~ /^tcp/ { n=split($4,a,":"); if (a[n]==p) printf "%s %s; ", $4, $7 }' || true)"
   fi
-  warn "  单元 WorkingDirectory：$(systemctl show -p WorkingDirectory "$SERVICE" 2>/dev/null | sed -n 's/^WorkingDirectory=//p' || true)"
+  warn "  单元 WorkingDirectory：${UNIT_DIR:-（未声明）}"
+  # 这一行是本轮加的判据：目录不一致时，后面所有"版本不对""构建不对"都只是症状
+  if [ -n "${UNIT_DIR:-}" ]; then
+    if [ "${UNIT_DIR%/}" = "$ROOT" ]; then
+      warn "  → 操作目录与单元一致：服务确实跑在 $ROOT"
+    else
+      warn "  → ★ 操作目录 $ROOT ≠ 单元 WorkingDirectory $UNIT_DIR：服务根本不在这个目录，改它不会有任何效果"
+    fi
+  fi
   warn "  单元 ExecStart：$(systemctl show -p ExecStart "$SERVICE" 2>/dev/null | sed -n 's/^ExecStart=//p' | cut -c1-160 || true)"
 }
 
@@ -384,7 +476,9 @@ if [ "${PREFLIGHT:-1}" = "1" ]; then
   pf=""; pf_why=""
   for _ in $(seq 1 25); do
     out="$(probe "$PF_URL/api/v1/health")"
-    pf_why="$(check_out "$out" "$NEW_VER" "$NEW_BUILD_ID")"
+    # cwd 传 $NEXT_DIR：预启动这一份必须真的从新目录起来。它跑的是同一份 JS，
+    # 但版本号来自 cwd/package.json —— cwd 不对，后面「读到的版本」就不可信。
+    pf_why="$(check_out "$out" "$NEW_VER" "$NEW_BUILD_ID" 1 "$NEXT_DIR")"
     if [ "$pf_why" = "ok" ]; then pf="yes"; break; fi
     # 进程已经退出就别干等满 50 秒
     kill -0 "$PF_PID" 2>/dev/null || break
@@ -410,7 +504,7 @@ if [ "${PREFLIGHT:-1}" = "1" ]; then
 
   if [ -z "$pf" ]; then
     warn "预启动自检未通过：新版本 $NEW_VER 在 :$PF_PORT 上没通过健康检查"
-    warn "  最后一次探测：${out:-无响应}（格式 status|version|db|version_source|build_id）"
+    warn "  最后一次探测：${out:-无响应}（格式 status|version|db|version_source|build_id|cwd）"
     warn "  不达标原因：${pf_why#bad:}"
     case "$out" in
       REFUSED)  warn "  $PF_URL 拒绝连接 —— 进程启动即退出，下面的日志里会有真正的死因" ;;
@@ -471,7 +565,9 @@ rollback() {
   for _ in $(seq 1 15); do
     last="$(probe "$BASE_URL/api/v1/health")"
     # 第四个参数 0 = 不要求 version_source（回滚目标可能是没有这个字段的老版本）
-    if [ "$(check_out "$last" "$OLD_VER" "" 0)" = "ok" ]; then rb="yes"; break; fi
+    # 第五个传 $ROOT：回滚也要确认"跑起来的确实是这个目录里的代码"，
+    # 否则「已恢复」可能又是在另一个目录上的假象（0.1.31 就是这么被骗过去的）。
+    if [ "$(check_out "$last" "$OLD_VER" "" 0 "$ROOT")" = "ok" ]; then rb="yes"; break; fi
     sleep 2
   done
 
@@ -521,11 +617,11 @@ systemctl start "$SERVICE" || rollback
 
 # 健康检查：版本号 + 来源 + BUILD_ID，是这次更新唯一能证明"跑的是新代码 + 新产物"的证据。
 # 少任何一项都会留下"数字对但来源不明"的空档 —— 0.1.29 就是卡在这个空档里。
-say "    等待 $BASE_URL/api/v1/health 就绪（要求 status=ok / version=$NEW_VER / db=ok / 版本读自磁盘 / BUILD_ID=$NEW_BUILD_ID）"
+say "    等待 $BASE_URL/api/v1/health 就绪（要求 status=ok / version=$NEW_VER / db=ok / 版本读自磁盘 / BUILD_ID=$NEW_BUILD_ID / cwd=$ROOT）"
 okflag=""; out_why=""
 for _ in $(seq 1 40); do
   out="$(probe "$BASE_URL/api/v1/health")"
-  out_why="$(check_out "$out" "$NEW_VER" "$NEW_BUILD_ID" 1)"
+  out_why="$(check_out "$out" "$NEW_VER" "$NEW_BUILD_ID" 1 "$ROOT")"
   if [ "$out_why" = "ok" ]; then okflag="yes"; break; fi
   sleep 2
 done
@@ -533,12 +629,24 @@ done
 if [ -z "$okflag" ]; then
   warn "健康检查未在 80 秒内达标（最后一次：${out:-无响应}）"
   warn "  不达标原因：${out_why#bad:}"
+  OUT_CWD="${out##*|}"
   case "$out" in
     REFUSED)  warn "  $BASE_URL 拒绝连接：进程启动即退出 / 被 OOM 杀掉 / 端口被别的进程占着" ;;
     TIMEOUT)  warn "  端口通了但 3 秒内没答完：进程在跑，卡在库连接等外部依赖上" ;;
-    "ok|$OLD_VER|"*) warn "  应答正常但还是旧版本 $OLD_VER —— 旧进程没死，新进程起不来（端口被占）" ;;
     "")       warn "  探针本身没出结果，先确认本机 node 能跑（node -v）" ;;
   esac
+  # 「应答正常但版本旧」有两种完全不同的原因，以前一律写成"旧进程没死、端口被占"。
+  # 0.1.31 那次就是被这句话带偏的：真相是进程跑在 /opt/youdee，而脚本把新版本换到了
+  # /opt/youdee-old —— 那个目录根本没人运行，所以换多少次、回滚多少次，线上都毫无变化。
+  # 先看位置（cwd），再看内容（version）：位置不对的时候，讨论版本是没意义的。
+  if [ -n "$OUT_CWD" ] && [ "${OUT_CWD%/}" != "$ROOT" ]; then
+    warn "  进程工作目录是 $OUT_CWD，不是发布目录 $ROOT —— 服务跑的是另一个目录里的代码。"
+    warn "  → 这次切换对一个没人运行的目录生效了，线上自然一点没变。"
+    warn "  → 查单元：systemctl cat $SERVICE | grep -E 'WorkingDirectory|ExecStart'"
+    warn "  → 两条路：把单元指到 $ROOT，或 APP_DIR=$OUT_CWD 让脚本去改它实际在跑的那个。"
+  elif [ -z "$OUT_CWD" ] && [ "${out#ok|}" != "$out" ]; then
+    warn "  应答里没有 cwd 字段 —— 对面跑的是 0.1.29 及更早的版本，它们不报这一项。"
+  fi
   dump_truth
   warn "服务状态（前 20 行）："
   systemctl --no-pager -l status "$SERVICE" 2>&1 | head -20 | sed 's/^/    /' >&2 || true

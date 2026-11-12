@@ -730,11 +730,11 @@ location / {
 bash deploy/pack.sh
 
 # ② 两个文件一起上传（.sha256 用来校验包在传输中没损坏）
-scp dist/youdee-0.1.30-*.tar.gz dist/youdee-0.1.30-*.tar.gz.sha256 root@服务器:/tmp/
+scp dist/youdee-0.1.32-*.tar.gz dist/youdee-0.1.32-*.tar.gz.sha256 root@服务器:/tmp/
 
 # ③ 服务器上执行
 cd /opt/youdee
-sudo bash deploy/update.sh /tmp/youdee-0.1.30-20261112.tar.gz
+sudo bash deploy/update.sh /tmp/youdee-0.1.32-20261112.tar.gz
 ```
 
 > **第一次用这套流程要引导一下**：`update.sh` 是 0.1.25 才加的，服务器上现有的
@@ -742,7 +742,8 @@ sudo bash deploy/update.sh /tmp/youdee-0.1.30-20261112.tar.gz
 > 先把这三个脚本传上去再执行：
 >
 > ```bash
-> scp deploy/update.sh deploy/manual-deploy.sh deploy/diagnose.sh root@服务器:/opt/youdee/deploy/
+> scp deploy/update.sh deploy/manual-deploy.sh deploy/diagnose.sh deploy/test-deploy.sh \
+>     root@服务器:/opt/youdee/deploy/
 > ```
 >
 > 之后就正常了——新版本的交付包里自带 `update.sh`，不需要再单独传。
@@ -750,17 +751,42 @@ sudo bash deploy/update.sh /tmp/youdee-0.1.30-20261112.tar.gz
 > ⚠️ **脚本修过就必须重传**：切换目录后 `/opt/youdee/deploy/update.sh` 来自**包内**那一份。
 > 如果只改了本地脚本、没重新打包，下次更新会退回到旧脚本，同一个坑再踩一遍。
 
+**「发布目录」只认 systemd 单元说的那个**（0.1.32 起）。脚本不再按「自己在哪个目录」推断线上在哪：
+
+```bash
+systemctl show -p WorkingDirectory youdee      # 这就是线上目录，唯一真相
+```
+
+两者不一致且没有显式指定 `APP_DIR` 时，脚本**第一步就停下**，并给出该用哪条命令。
+这不是谨慎过头——0.1.31 上线时脚本被从 `/opt/youdee-old/deploy/` 执行，于是它把那个
+没人运行的目录当成线上：备份、构建、换目录、核对、回滚，每一步都对着它做，一路报告
+「已切换」「回滚成功」，而 `/opt/youdee` 里的进程从没被碰过。第 6 步只能看到
+「应答正常但还是旧版本」，脚本据此写「旧进程没死、端口被占」——方向完全反了。
+
+单元没写 `WorkingDirectory` 时，退回按脚本位置判断并打 warn。要在别处执行（或两个目录并存），
+显式指定：`APP_DIR=/opt/youdee sudo bash /path/to/update.sh <包>`。
+
+**改过部署脚本先跑一遍自检**（纯逻辑，不碰服务、不需要 root）：
+
+```bash
+bash deploy/test-deploy.sh     # 14 项：发布目录判定 7 + 健康检查判定 7
+```
+
+这些用例对应全部四次上线故障（`|| true` 位置错、pipefail 静默退出、版本号来源不明、
+发布目录判错）。改脚本前后各跑一次，比上线去试便宜得多。
+
 它按七步走，只有第 4 步开始才影响线上：
 
 | 步骤 | 动作 | 线上影响 |
 |---|---|---|
+| 0 | 核对发布目录是否就是单元 `WorkingDirectory`、校验包 `sha256` | 无（对不上**直接退出**） |
 | 1 | 备份：`pg_dump` + 附件 + `.env` → `/opt/youdee-backup/<时间>/` | 无 |
 | 2 | 解包到 `/opt/youdee-next`（干净目录，不残留旧文件） | 无 |
 | 3 | 在新目录 `npm ci --include=dev` + `prisma generate` + `next build` | **无**，旧版照常服务 |
 | 3.5 | **预启动自检**：以服务用户身份在 `:PORT+1` 起一份，健康检查对版本 | **无** |
 | 4 | `systemctl stop` → `prisma migrate deploy` → 灌种子 | 停机开始 |
 | 5 | `/opt/youdee` 改名为 `/opt/youdee-old`，新目录上位 | 停机中 |
-| 6 | `systemctl start` → 轮询健康检查核对版本号 | 恢复 |
+| 6 | `systemctl start` → 轮询健康检查核对版本号 / BUILD_ID / 进程 cwd | 恢复 |
 
 **第 3.5 步为什么必须有**：0.1.25 首跑时它还不存在，于是「新版本起不来」的代价是——
 线上停过一次、库迁移过、再整目录回滚，等于一次真实宕机；而脚本给出的线索只有一句
@@ -779,10 +805,10 @@ root 试跑会一路通过，然后线上失败。
 curl -s http://127.0.0.1:3000/api/v1/health
 # {"code":0,"data":{
 #   "status":"ok","db":"ok",
-#   "version":"0.1.30",                     ← 磁盘 package.json 里的版本 = 部署的这份代码
+#   "version":"0.1.32",                     ← 磁盘 package.json 里的版本 = 部署的这份代码
 #   "version_source":"package.json",        ← 上面那个值读自哪里；不是 package.json 就不可信
 #   "build_id":"zR3kP9xQ2m",                ← 磁盘 .next/BUILD_ID = 这份产物是哪次构建的
-#   "npm_version":"0.1.30",                 ← 仅供排错：npm 注入的环境变量
+#   "npm_version":"0.1.32",                 ← 仅供排错：npm 注入的环境变量
 #   "cwd":"/opt/youdee","uptime_s":12}}
 ```
 
@@ -794,7 +820,9 @@ curl -s http://127.0.0.1:3000/api/v1/health
 - `version_source` 不是 `package.json` → `update.sh` 直接判失败，不再拿"数字看起来对"当通过；
 - `build_id` 与本次构建出来的不一致 → 说明跑的不是这次编出来的产物（版本号对了、产物没换）；
   脚本在构建后记下 `BUILD_ID`，并核对它的修改时间不早于本次更新开始时间；
-- `cwd` 不是发布目录 → 目录切换没生效，问题在部署而不在代码；
+- `cwd` 不是发布目录 → 服务跑的是另一个目录里的代码，问题在部署而不在代码；
+  这一项是 0.1.31 那次失败的最终答案：版本号说 0.1.30，`build_id` 说旧产物，两个都只是症状，
+  真正的原因是进程 cwd 是 `/opt/youdee`，而脚本在 `/opt/youdee-old` 上忙了一整轮；
 - `uptime_s` 顺带证明进程真的重启过——只改代码不重启，版本号会一直停在老的。
 
 `version` 读的是 `process.cwd()/package.json`，不是构建时写死的常量，所以**换目录就等于换版本**。
@@ -803,8 +831,12 @@ curl -s http://127.0.0.1:3000/api/v1/health
 > `.next/required-server-files.json` 的 `config.env`，**不会**在启动时回填 `process.env`，
 > 实测 `/health` 读出来是空串（只有客户端 bundle 会被内联）。改用 `.next/BUILD_ID` 更直接。
 
-**五条必须知道的约束**：
+**六条必须知道的约束**：
 
+- **发布目录必须就是单元的 `WorkingDirectory`**。同一台机器上常有 `/opt/youdee-old`、
+  `/opt/youdee-failed.<时间>` 这些完整目录，长得一模一样；在错的那个里执行脚本，
+  结果是"全部成功、线上没变"。脚本现在第一步就核对并拒绝，但你手工操作时同样要认准这一个：
+  `systemctl show -p WorkingDirectory youdee`。
 - **迁移只有 up，没有 down**。库备份是唯一的真回滚手段，所以脚本在 `pg_dump` 失败时会直接中止。
   确实没有 `pg_dump` 时可用 `ALLOW_NO_DB_BACKUP=1` 强行继续，但那等于放弃回滚。
 - **`.env` 不在交付包里**（口令、`JWT_SECRET` 不该跟着包走）。脚本复用线上那份，不覆盖。
@@ -826,17 +858,19 @@ curl -s http://127.0.0.1:3000/api/v1/health
 
 | 失败点 | 脚本行为 | 线上 |
 |---|---|---|
+| **发布目录 ≠ 单元 WorkingDirectory** | 第一步退出，打印两边路径和正确命令（0.1.32 起） | **没停过，库没动** |
 | 构建失败 / **预启动自检不通过** | 打印新版本自己的启动日志，删掉旁目录，退出 | **没停过，库没动** |
 | 迁移失败 | 旧目录换回并重启 | 停过一次 |
 | **换目录后磁盘版本不对** | 当场 `dump_truth` 并回滚（0.1.30 起；以前要等起完服务才发现） | 停过一次 |
-| 切换后健康检查不通过 | `dump_truth`（`/health` 全量、磁盘版本、BUILD_ID、端口监听者、单元配置）+ `systemctl status` + `journalctl` 最后 40 行，回滚代码**并再验一次是否真的恢复**；没恢复就把"现在是一次真实宕机"和处理命令摊出来 | 停过一次 |
+| 切换后健康检查不通过 | `dump_truth`（`/health` 全量、磁盘版本、BUILD_ID、端口监听者、单元配置与操作目录是否一致）+ `systemctl status` + `journalctl` 最后 40 行，回滚代码**并再验一次是否真的恢复**；没恢复就把"现在是一次真实宕机"和处理命令摊出来 | 停过一次 |
 
 每次判断是否达标，脚本都会把**不达标的具体原因**打出来，而不是只给个"未通过"：
 
 ```
-[update]   不达标原因：version=0.1.27（期望 0.1.30）
+[update]   不达标原因：version=0.1.27（期望 0.1.32）
 [update]   不达标原因：version_source=env（版本号不是读自磁盘，不可信）
 [update]   不达标原因：build_id=oldBuildId（期望 zR3kP9xQ2m，跑的不是这次构建的产物）
+[update]   不达标原因：cwd=/opt/youdee-old（期望 /opt/youdee，进程跑的不是这个目录）
 ```
 
 换下来的新版本留在 `/opt/youdee-failed.<时间>`，别急着删，排错要看。
@@ -872,8 +906,23 @@ cd /opt/youdee && sudo bash deploy/diagnose.sh
 
 它会依次打印：单元真实配置（`WorkingDirectory` / `ExecStart` / `ReadWritePaths`）、服务状态、
 `/health` 原样返回、磁盘上的 `package.json` 版本与 `.next/BUILD_ID` 及时间、端口监听者、
-`/opt` 下残留的 `-old` / `-failed` / `-next` 目录、日志尾部。**整段发出来就能定位**——
-省掉"来回问一句、再敲一条命令"的循环，这正是 0.1.27~0.1.29 那三轮最耗时间的地方。
+**进程 cwd / 单元目录 / 脚本所在目录的三方对照**、各候选目录各自是哪一版、`/opt` 下残留的
+`-old` / `-failed` / `-next` 目录、日志尾部。**整段发出来就能定位**——
+省掉"来回问一句、再敲一条命令"的循环，这正是 0.1.27~0.1.31 那几轮最耗时间的地方。
+
+`diagnose.sh` 本身也以单元目录为准来读磁盘上那份代码：脚本在 `/opt/youdee-old` 里跑时，
+它会告诉你"脚本在这，但线上在 `/opt/youdee`，下面按后者看"。
+
+> **「应答正常但版本是旧的」不等于「旧进程没死」**。先看 `cwd`：
+>
+> ```bash
+> curl -s http://127.0.0.1:3000/api/v1/health | node -e '...j.data.cwd'
+> systemctl show -p WorkingDirectory youdee
+> ```
+>
+> 两者不一致，说明这次更新改的是另一个目录，跟"进程没重启""端口被占"毫无关系。
+> 0.1.31 上线失败就是这个：版本号、BUILD_ID 全在说"旧"，根因却是脚本在
+> `/opt/youdee-old` 上完成了一整套切换和回滚，而 `/opt/youdee` 一动不动。
 
 再往下是手工路径，用来分清是「连不上」还是「在跑但状态不对」，两者的排查方向完全不同：
 
@@ -895,6 +944,7 @@ sudo -u youdee env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 npx --no-instal
 
 | 现象 | 病因 | 处理 |
 |---|---|---|
+| **`/health` 应答正常，但版本仍是旧的** | 脚本操作的目录 ≠ 单元 `WorkingDirectory`（在 `-old` / `-failed` 目录里执行了） | 比对 `curl` 的 `cwd` 与 `systemctl show -p WorkingDirectory youdee`；一致才说明更新真生效了。新版脚本第一步就会拦下这种情况 |
 | `226/NAMESPACE`，日志有 `Failed to set up mount namespacing` | 单元里 `ReadWritePaths` 指向的目录不存在 | `mkdir -p .next/cache public/uploads`（新版 `update.sh` 已自动补建） |
 | `EADDRINUSE` | 旧进程没死或被手工启动的实例占着端口 | `ss -lntp \| grep 3000` 找到 PID 后停掉 |
 | `EACCES` / `permission denied` | 目录属主不对（root 解包、`User=` 是 youdee） | `chown -R youdee:youdee /opt/youdee` |

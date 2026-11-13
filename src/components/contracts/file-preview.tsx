@@ -11,9 +11,11 @@
  *
  * 两个刻意的取舍：
  *
- * 1. **docx 走同源 content 接口取字节，不走 raw**。raw 对云存储文件是 302 到
- *    预签名地址，`fetch` 跟过去就变成跨域请求，而桶的 CORS 默认是空的 ——
- *    现象是"点预览一直转圈"、服务端日志一行都没有，属于没有服务器现场就查不出的问题。
+ * 1. **PDF / docx 都走同源 content 接口取字节，不走 raw**。raw 对云存储文件是 302 到
+ *    预签名地址，那里能内联还是下载，取决于预签名参数有没有被 CDN 之类的中转保留 ——
+ *    桶里对象元数据写的是 attachment，参数一丢就变成"点预览反而下载"（线上真实发生过）。
+ *    `fetch` 跟过去还是跨域请求，桶 CORS 默认空 → 转圈、服务端日志一行没有。
+ *    content 接口由服务端自己写 `Content-Type` 与 `inline`，不依赖任何存储侧配置。
  * 2. **解析库动态 import**。docx-preview 只在真的点开一份 Word 时才加载，
  *    不进合同列表的首屏 bundle；不这么写，一个偶尔用的功能会让每次进页面都多背几十 KB。
  */
@@ -102,6 +104,53 @@ function DocxView({ url }: { url: string }) {
         </div>
       ) : null}
       <div ref={boxRef} className="docx-host" />
+    </div>
+  );
+}
+
+/**
+ * PDF：iframe 交给浏览器自带的阅读器。
+ *
+ * 地址走**同源 content 接口**，不用 `file.url`。这不是洁癖，是线上真实翻车换来的：
+ * `file.url` 对云存储文件是 `/raw` → 302 到预签名地址，而桶里的对象元数据写着
+ * `Content-Disposition: attachment`（上传时写死的）。预览能不能内联，全看预签名地址上
+ * 那个 `response-content-disposition=inline` 查询参数有没有被中间层（自定义域名 / CDN）
+ * 保留下来；一旦被丢掉，COS 按元数据返回 attachment，浏览器就把 PDF 存盘而不是渲染 ——
+ * 本地存储不走这条链路，所以只在生产复现。
+ * content 接口由服务端按库里的 mime 自己写 `Content-Type: application/pdf` 与 `inline`，
+ * 老文件也一样治好。
+ */
+function PdfView({ url, fileName }: { url: string; fileName: string }) {
+  const [stuck, setStuck] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setStuck(false);
+    setLoaded(false);
+    // 内联 PDF 的 iframe 不会给我们任何"失败"回调（状态码、跨域都在阅读器内部），
+    // 所以只能等：迟迟没有 load 就把"可能没显示出来"讲明白，而不是留一片空白。
+    const t = window.setTimeout(() => setStuck(true), 12000);
+    return () => window.clearTimeout(t);
+  }, [url]);
+
+  return (
+    <div className="h-full flex flex-col">
+      {stuck && !loaded ? (
+        <div className="p-[var(--space-3)]">
+          <Note tone="danger">
+            浏览器没有把这份 PDF 显示出来（可能被安全策略拦了，或文件太大）。
+            <div className="t-xs t-3 mt-[var(--space-1)]">
+              点右上角「下载原件」用本地阅读器打开。若每份都这样，请把这条信息反馈给我们。
+            </div>
+          </Note>
+        </div>
+      ) : null}
+      <iframe
+        src={url}
+        title={fileName || 'PDF 预览'}
+        className="w-full flex-1 min-h-0 border-0"
+        onLoad={() => setLoaded(true)}
+      />
     </div>
   );
 }
@@ -253,7 +302,7 @@ export function ContractFilePreview({
       {/* 统一高度：docx 长文档和 pdf 都在这里面滚，不让整个弹层跟着长高 */}
       <div className="h-[70vh] min-h-[280px] overflow-auto bg-[var(--surface)] rounded-[var(--radius-md)]">
         {kind === 'pdf' ? (
-          <iframe src={file.url} title={file.originalName || 'PDF 预览'} className="w-full h-full border-0" />
+          <PdfView url={contentUrl(contractId, file.id)} fileName={file.originalName} />
         ) : kind === 'image' ? (
           <div className="p-[var(--space-3)] flex justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}

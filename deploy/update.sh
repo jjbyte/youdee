@@ -379,9 +379,24 @@ fi
 
 # ── 3/6 装依赖 + 构建（线上此时仍正常服务）─────────────────────────────
 say "3/6 在新目录装依赖并构建（线上照常运行；这一步最慢，可以另开窗口 tail -f）"
-if ! ( cd "$NEXT_DIR" && SKIP_MIGRATE=1 SKIP_SEED=1 bash deploy/manual-deploy.sh ); then
+# 必须显式传 APP_DIR=$NEXT_DIR。
+# manual-deploy.sh 自己也有一道"目录必须就是服务在跑的那个"守卫（0.1.32 加的），
+# 而这里恰恰是**故意**在旁目录构建 —— 不声明 APP_DIR，守卫会把它当成又一次
+# 「在 /opt/youdee-old 里白忙」直接 exit 1，update.sh 却把它报成"构建失败"：
+#   0.1.32 首次上线就这样停在 3/6，日志里一句编译错误都没有，最容易被带偏。
+# APP_DIR 的语义在这条调用链上是准确的：ROOT 已由单元解析出来，NEXT_DIR 由它派生。
+if ! ( cd "$NEXT_DIR" \
+       && APP_DIR="$NEXT_DIR" SERVICE="$SERVICE" SKIP_MIGRATE=1 SKIP_SEED=1 \
+          bash deploy/manual-deploy.sh ); then
+  # 没产出 BUILD_ID 就说明构建压根没开始/没走完（被前置检查拦下、Node 版本过低、依赖装残），
+  # 这时说"构建失败"会让人去翻编译器日志，白查一轮。
+  if [ -f "$NEXT_DIR/.next/BUILD_ID" ]; then
+    WHY="构建没走完（.next/BUILD_ID 未生成）"
+  else
+    WHY="新目录的前置检查没通过（看上面 [manual] 开头的第 1 条原因）"
+  fi
   rm -rf "$NEXT_DIR"
-  die "构建失败，线上版本未受影响（仍是 $OLD_VER）。日志见 /tmp/youdee-build.log。"
+  die "更新中止：$WHY。线上版本未受影响（仍是 $OLD_VER）。完整构建日志 /tmp/youdee-build.log。"
 fi
 
 # 属主在切目录前就改好：chown 一整个 node_modules 要几秒，不该占停机窗口

@@ -28,14 +28,33 @@ if command -v systemctl >/dev/null 2>&1 && systemctl cat "$SERVICE" >/dev/null 2
   UNIT_DIR="$(systemctl show -p WorkingDirectory "$SERVICE" 2>/dev/null | sed -n 's/^WorkingDirectory=//p' | tr -d '\r' || true)"
   UNIT_DIR="${UNIT_DIR#-}"
 fi
-if [ -n "$UNIT_DIR" ] && [ -z "${APP_DIR:-}" ] && [ "${UNIT_DIR%/}" != "$ROOT" ]; then
-  echo "[manual] 目录对不上，已停下 —— 在这里做完，线上不会有任何变化：" >&2
-  echo "[manual]   当前目录                 $ROOT" >&2
-  echo "[manual]   $SERVICE 的工作目录      $UNIT_DIR" >&2
-  echo "[manual]   cd $UNIT_DIR && sudo sh deploy/manual-deploy.sh" >&2
-  echo "[manual]   或显式指定：APP_DIR=$UNIT_DIR sudo sh $0" >&2
-  exit 1
-fi
+# 判定结论只有三种：ok（就在线上目录里）／override（调用方显式要求改别处）／refuse（拦下）。
+# 抽成函数是为了能被 deploy/test-deploy.sh 单独验 —— 这段判错的后果不是报错，
+# 而是「原地构建成功、线上一个字没变」，与 update.sh 那次一样贵。
+dir_verdict() { # <当前目录> <单元目录> [APP_DIR]
+  if [ -z "${2:-}" ]; then printf 'ok'; return 0; fi
+  if [ "${2%/}" = "${1%/}" ]; then printf 'ok'; return 0; fi
+  if [ -n "${3:-}" ]; then printf 'override'; return 0; fi
+  printf 'refuse'
+}
+
+case "$(dir_verdict "$ROOT" "$UNIT_DIR" "${APP_DIR:-}")" in
+  refuse)
+    echo "[manual] 目录对不上，已停下 —— 在这里做完，线上不会有任何变化：" >&2
+    echo "[manual]   当前目录                 $ROOT" >&2
+    echo "[manual]   $SERVICE 的工作目录      $UNIT_DIR" >&2
+    echo "[manual]   cd $UNIT_DIR && sudo sh deploy/manual-deploy.sh" >&2
+    echo "[manual]   或显式指定：APP_DIR=$UNIT_DIR sudo sh $0" >&2
+    echo "[manual] 说明：APP_DIR 是「我明确知道这个目录不是线上目录」的声明。" >&2
+    echo "[manual]   update.sh 在 3/6 构建时就是这么调的（在旁目录 $UNIT_DIR-next 里编，编好才切过去）。" >&2
+    exit 1
+    ;;
+  override)
+    # 带 APP_DIR 且和单元目录不同 = 调用方明确要求「只在别处构建」，放行但留痕。
+    # 一行字的价值：以后翻日志能立刻分清「被守卫拦下」与「守卫被显式绕过」。
+    echo "[manual] 在备用目录构建：$ROOT（线上目录是 $UNIT_DIR，由调用方通过 APP_DIR 显式指定）"
+    ;;
+esac
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "[manual] 缺少 $1，请先安装" >&2; exit 1; }; }
 need node
@@ -54,7 +73,7 @@ node_ge() {
 echo "[manual] Node $NODE_VER / npm $(npm -v)"
 # 带一个脚本指纹：远程排障时最怕"跑的到底是不是新脚本"说不清（本轮就吃过这个亏，
 # 只能靠 npm 装的包数反推）。这一行不同，说明解包没覆盖成功。
-echo "[manual] 脚本 build 2026-11-04-d / 包版本 $(node -p "require('./package.json').version" 2>/dev/null || echo '未知')"
+echo "[manual] 脚本 build 2026-11-12-a / 包版本 $(node -p "require('./package.json').version" 2>/dev/null || echo '未知')"
 
 # 硬底线 20.19：next 16 要 >=20.9，prisma 7 的 engines 明确写了 ^20.19 || ^22.12 || >=24。
 if ! node_ge 20 19; then

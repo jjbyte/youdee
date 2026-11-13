@@ -18,6 +18,7 @@
   - [顶层目录](#顶层目录)
   - [逐目录说明](#逐目录说明)
   - [几个「改了会影响哪里」的定位表](#几个改了会影响哪里的定位表)
+  - [合同附件与对象存储](#合同附件与对象存储)
 - [三、部署方式](#三部署方式)
   - [先选路径](#先选路径)
   - [路径 A：本地跑起来（5 分钟）](#路径-a本地跑起来5-分钟)
@@ -29,6 +30,8 @@
   - [常见故障对照](#常见故障对照)
 - [四、常用命令](#四常用命令)
 - [五、还缺客户提供的东西](#五还缺客户提供的东西)
+- [六、许可与使用范围](#六许可与使用范围)
+- [附：最近版本变更（0.1.30 → 0.1.35）](#附最近版本变更0130--0135)
 
 ---
 
@@ -63,7 +66,7 @@
 | 页面 | 路由 | 干什么 |
 |---|---|---|
 | 总览 | `/` | 本周单量、毛利分布、临期价格、待办提醒 |
-| 合同管理 | `/contracts` | 合同台账（商业 / 租赁 / 雇佣三类）+ 三类附件（合同 / 报价单 / 结算，可存本地或腾讯云 COS、单份不限大小）；按编号、名称、甲方、乙方、分类、签订日期、创建日期查 |
+| 合同管理 | `/contracts` | 合同台账（商业 / 租赁 / 雇佣三类，列表上方一排 chip 快速筛、带每类份数）+ 三类附件（合同 / 报价单 / 结算，可存本地或腾讯云 COS、单份不限大小、**可在线预览**）；按编号、名称、甲方、乙方、分类、签订日期、创建日期查 |
 | 报价单列表 | `/quotes` | 全部状态（草稿 / 已发出 / 已作废），默认草稿优先 |
 | 报价单编辑 | `/quotes/:id/edit` | 明细逐行录入、毛利率反算、风险检查、出单 |
 | 客户版预览 | `/quotes/:id/preview` | 打印 / PDF / 客户版 Excel 的纸面 |
@@ -72,7 +75,7 @@
 | 人员库 | `/staff` `/staff/:id` | 同上，按「场 / 天 / 小时」计价 |
 | 供应商库 | `/vendors` | 联系方式、开票信息、结算方式 |
 | 客户 / 项目 | `/guests` | 往来客户与历史项目 |
-| 设置 | `/settings` | 公司抬头、报价默认值（税口径 / 默认毛利率 / 预警线 / 有效期天数）、报价单模板（可上传 Excel 定制版式）、账号管理 |
+| 设置 | `/settings` | 公司抬头、报价默认值（税口径 / 默认毛利率 / 预警线 / 有效期天数）、报价单模板（可上传 Excel 定制版式）、对象存储、账号管理 |
 
 ### 六条「不出错」的设计
 
@@ -113,7 +116,7 @@
 | 图表 | recharts | 3.10.1 | 价格趋势、毛利分布 |
 | 图标 | lucide-react | 1.67.0 | 全项目统一一套 SVG 描边图标，**不用 emoji 当图标** |
 
-规模（当前版本 0.1.29）：**21 张表 / 12 个迁移 / 74 个接口路由 / 13 个页面 / 189 条单测 / 86 项部署自检**。
+规模（当前版本 0.1.35）：**21 张表 / 11 个迁移 / 75 个接口路由 / 13 个页面 / 218 条单测 / 86 项部署自检 / 23 项部署脚本自检**。
 
 ### 明确不做的事
 
@@ -136,13 +139,13 @@
 youdee/
 ├── src/                      # 应用源码（页面 + 接口 + 领域逻辑 + 服务层）
 ├── prisma/
-│   ├── schema.prisma         # 17 张表、关系、索引
-│   ├── migrations/           # 5 个手写迁移（EXCLUDE / 生成列 / 触发器只能用 SQL 写）
+│   ├── schema.prisma         # 21 张表、关系、索引
+│   ├── migrations/           # 11 个手写迁移（EXCLUDE / 生成列 / 触发器只能用 SQL 写）
 │   └── seed.ts               # 种子数据（幂等：已有用户就跳过）
 ├── design-system/            # 设计 token（265 个，CSS + JSON 两份）
 ├── public/                   # 构建期静态资源（logo、favicon）
 ├── scripts/db.mjs            # 本地数据库启停（仅开发机用，部署时不需要）
-├── tests/                    # 领域层单元测试（8 个文件 / 104 条）
+├── tests/                    # 单元测试（16 个文件 / 218 条，纯函数）
 ├── deploy/                   # 部署脚本 + 部署后自检
 ├── Dockerfile                # 生产镜像
 ├── docker-compose.yml        # app + postgres 18
@@ -219,7 +222,7 @@ src/server/
 
 分层是单向的：`app/api → services → store → db`，`domain` 谁都可用但自己不依赖任何东西。
 
-**`src/components/` —— 组件（58 个文件）**
+**`src/components/` —— 组件（60 个文件）**
 
 ```
 src/components/
@@ -239,8 +242,10 @@ src/components/
 | `design-system/design-tokens.css` | 颜色、间距、字号、圆角全部来自这里；组件里写裸 hex 视为缺陷 |
 | `prisma/migrations/*` | 每个迁移一个目录，`migration.sql` 手写。`EXCLUDE`、生成列、触发器 Prisma 生成不出来 |
 | `prisma/seed.ts` | 17 单位 / 8 供应商 / 35 分类 / 25 主体 / 48 条价格；**幂等**，已有用户就整段跳过 |
-| `tests/` | 只测 `domain/` 纯函数，不连库、不起服务，所以秒级跑完 |
-| `deploy/verify.mjs` | 部署后自检，86 项，逐项比对具体数值 |
+| `tests/` | 218 条单测。只测纯函数（`domain/` 的算价与校验，加上 `server/services/` 里不碰 IO 的部分：文件类型判定、表格解析、版本读取、对象键拼装），不连库、不起服务，所以秒级跑完 |
+| `deploy/verify.mjs` | 部署后自检，86 项，走真实接口逐项比对具体数值 |
+| `deploy/test-deploy.sh` | 部署脚本**自身**的逻辑自检，23 项，不需要 root、不启停服务、不碰库 |
+| `deploy/diagnose.sh` | 只读排障：单元配置 / `/health` 全量 / 进程 cwd 与单元目录、脚本目录三方对照 / 各 `-old` 目录分别是哪一版 / 端口 / 最近日志 |
 
 ### 几个「改了会影响哪里」的定位表
 
@@ -267,13 +272,17 @@ src/components/
   再按"小文件整份读、大文件头尾各读 1MB"判真实类型，最后落盘或直传 COS。几百 MB 的扫描件不会占内存。
 - **存储**：默认本地磁盘（`UPLOAD_DIR`）。在【设置 → 对象存储】填 SecretId / SecretKey / 存储桶 / 地域并启用后，
   **新上传**的附件直接进 COS；历史附件仍在本地，读取按 `contract_files.storage` 逐行分流，不会因为切换而 404。
+- **对象键**：`<对象键前缀>/<合同 id>/<uuid>.<扩展名>`，前缀在【设置 → 对象存储】里配，默认 `contracts/`。
+  键里不放原始文件名（重名、乱码、超长路径都会到上传时才炸，那时文件已传一半），文件名单独存在库里。
+  前缀和子目录可能是同一个词，拼装时按路径段去重一次：0.1.34 及以前生成的 `contracts/contracts/<合同 id>/…`
+  不会再出现；桶里的老对象不用动，读取走库里记的 `storage_key`，照常可用。
 - **下载**：桶保持私有。前端拿到的地址是 `/api/v1/contracts/:id/files/:fileId/raw`，
   服务端鉴权后 302 到 5 分钟有效的预签名地址；Office 文档强制下载，图片与 PDF 内联。
 - **在线预览**：抽屉里每份附件都有「预览」，不用先下载再找文件。分四种画法：
 
   | 格式 | 怎么显示 | 走哪个接口 |
   |---|---|---|
-  | PDF | 浏览器自带阅读器（iframe） | `raw` |
+  | PDF | 浏览器自带阅读器（iframe） | `.../content`（同源字节） |
   | JPG / PNG / WEBP | `<img>` | `raw` |
   | DOCX | `docx-preview` 解析成 HTML | `.../content`（同源字节） |
   | XLSX | 服务端 `exceljs` 解析成 JSON，前端画 `<table>` | `.../sheet` |
@@ -281,6 +290,13 @@ src/components/
 
   Word / Excel 的预览是**内容级**的：合并单元格、颜色、图片位置不会完全还原。
   如果要求"和原件一模一样"，仍然只能下载。
+
+- **PDF 也不能走 `raw`**（0.1.34 修）：云存储上传时对象元数据写过
+  `Content-Disposition: attachment`，预览能不能内联，全看预签名地址上那个
+  `response-content-disposition=inline` 查询参数有没有被自定义域名 / CDN 保留下来。
+  参数一丢，浏览器就把 PDF 存盘而不是渲染 —— 本地存储不走这条链路，症状只在线上出现。
+  现在 PDF 与 DOCX 一样走同源 `.../content`，由服务端按库里的 mime 自己写
+  `Content-Type` 与 `inline`，不依赖任何存储侧配置（新上传的对象元数据也已改成 `inline`）。
 
 - **预览为什么不让前端直接 fetch `raw`**：`raw` 对云存储文件是 302 到预签名地址，
   `fetch` 跟过去就成了跨域请求，而桶的 CORS 默认是空的 —— 现象是"点预览一直转圈"、
@@ -361,7 +377,7 @@ npm run db:start
 #### 第 5 步：建表 + 灌种子
 
 ```bash
-npm run db:migrate     # 建 17 张表
+npm run db:migrate     # 建 21 张表
 npm run db:seed        # 灌 17 单位 / 8 供应商 / 35 分类 / 25 主体 / 48 条价格
 ```
 
@@ -706,7 +722,7 @@ location / {
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;   # 必须，否则 Cookie 不带 Secure
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    client_max_body_size 6m;                      # 附件上限 5MB
+    client_max_body_size 512m;                    # 合同附件单份不限大小，这里只挡极端值；不配则 Nginx 默认 1m，传扫描件必 413
 }
 ```
 
@@ -730,11 +746,11 @@ location / {
 bash deploy/pack.sh
 
 # ② 两个文件一起上传（.sha256 用来校验包在传输中没损坏）
-scp dist/youdee-0.1.32-*.tar.gz dist/youdee-0.1.32-*.tar.gz.sha256 root@服务器:/tmp/
+scp dist/youdee-0.1.35-*.tar.gz dist/youdee-0.1.35-*.tar.gz.sha256 root@服务器:/tmp/
 
 # ③ 服务器上执行
 cd /opt/youdee
-sudo bash deploy/update.sh /tmp/youdee-0.1.32-20261112.tar.gz
+sudo bash deploy/update.sh /tmp/youdee-0.1.35-<日期>.tar.gz
 ```
 
 > **第一次用这套流程要引导一下**：`update.sh` 是 0.1.25 才加的，服务器上现有的
@@ -769,11 +785,17 @@ systemctl show -p WorkingDirectory youdee      # 这就是线上目录，唯一�
 **改过部署脚本先跑一遍自检**（纯逻辑，不碰服务、不需要 root）：
 
 ```bash
-bash deploy/test-deploy.sh     # 14 项：发布目录判定 7 + 健康检查判定 7
+bash deploy/test-deploy.sh     # 23 项：发布目录判定 7 + 健康检查判定 7 + 备用目录构建 9
 ```
 
-这些用例对应全部四次上线故障（`|| true` 位置错、pipefail 静默退出、版本号来源不明、
-发布目录判错）。改脚本前后各跑一次，比上线去试便宜得多。
+这些用例对应全部五次上线故障（`|| true` 位置错、pipefail 静默退出、版本号来源不明、
+发布目录判错、旁目录构建被自家守卫拦下）。改脚本前后各跑一次，比上线去试便宜得多。
+
+> **为什么 3/6 那次调用必须显式带 `APP_DIR`**（0.1.33 修）：`manual-deploy.sh` 自带
+> 「当前目录必须就是服务在跑的那个」守卫，而 `update.sh` 恰恰是**故意**在 `/opt/youdee-next`
+> 里构建。0.1.32 首次上线没传 `APP_DIR`，守卫判为「又在没人运行的目录里白忙」并 `exit 1`，
+> `update.sh` 把它报成「构建失败」——日志里一句编译错误都没有。现在失败文案会先看有没有
+> 产出 `.next/BUILD_ID`，分清「构建没走完」与「前置检查没过」。
 
 它按七步走，只有第 4 步开始才影响线上：
 
@@ -805,10 +827,10 @@ root 试跑会一路通过，然后线上失败。
 curl -s http://127.0.0.1:3000/api/v1/health
 # {"code":0,"data":{
 #   "status":"ok","db":"ok",
-#   "version":"0.1.32",                     ← 磁盘 package.json 里的版本 = 部署的这份代码
+#   "version":"0.1.35",                     ← 磁盘 package.json 里的版本 = 部署的这份代码
 #   "version_source":"package.json",        ← 上面那个值读自哪里；不是 package.json 就不可信
 #   "build_id":"zR3kP9xQ2m",                ← 磁盘 .next/BUILD_ID = 这份产物是哪次构建的
-#   "npm_version":"0.1.32",                 ← 仅供排错：npm 注入的环境变量
+#   "npm_version":"0.1.35",                 ← 仅供排错：npm 注入的环境变量
 #   "cwd":"/opt/youdee","uptime_s":12}}
 ```
 
@@ -867,7 +889,7 @@ curl -s http://127.0.0.1:3000/api/v1/health
 每次判断是否达标，脚本都会把**不达标的具体原因**打出来，而不是只给个"未通过"：
 
 ```
-[update]   不达标原因：version=0.1.27（期望 0.1.32）
+[update]   不达标原因：version=0.1.27（期望 0.1.35）
 [update]   不达标原因：version_source=env（版本号不是读自磁盘，不可信）
 [update]   不达标原因：build_id=oldBuildId（期望 zR3kP9xQ2m，跑的不是这次构建的产物）
 [update]   不达标原因：cwd=/opt/youdee-old（期望 /opt/youdee，进程跑的不是这个目录）
@@ -1024,7 +1046,7 @@ npm run dev            # 开发服务器
 npm run build          # 生产构建
 npm run start          # 生产启动（需先 build）
 npm run typecheck      # 类型检查
-npm test               # 领域层单测（175 条）
+npm test               # 单元测试（218 条，纯函数，秒级跑完）
 
 # 数据库（本地开发）
 npm run db:start       # 起本地 embedded-postgres（前台阻塞）
@@ -1041,7 +1063,12 @@ sh deploy/remote-up.sh         # 远端：构建并启动（Docker）
 sh deploy/manual-deploy.sh     # 远端：首次部署，构建并启动（裸机 / systemd）
 sudo bash deploy/update.sh <包>  # 远端：更新版本，带备份、迁移与自动回滚（systemd）
 node deploy/verify.mjs         # 部署后自检（86 项）
+bash deploy/test-deploy.sh     # 部署脚本自身的逻辑自检（23 项，不碰服务、不需 root）
+sudo bash deploy/diagnose.sh   # 线上出问题先跑这个：只读，打印目录/版本/端口/日志对照
 ```
+
+改动部署脚本或排查线上故障时，`test-deploy.sh`（改完就跑）与 `diagnose.sh`（先看现场）
+比直接改一行上线试要便宜得多——两者的用法分别在第三节「日常运维」的两段里。
 
 ---
 
@@ -1065,3 +1092,21 @@ node deploy/verify.mjs         # 部署后自检（86 项）
 ## 六、许可与使用范围
 
 内部工具，按「自用」授权。没有多租户隔离、没有对外注册，不适合直接改成 SaaS 对外服务。
+
+---
+
+## 附：最近版本变更（0.1.30 → 0.1.35）
+
+都是 2026-11-12 前后的提交。每条的「为什么」在这里只写一句，展开的排查过程见相应章节。
+
+| 版本 | 改了什么 | 对使用者的影响 |
+|---|---|---|
+| **0.1.35** | COS 对象键按**路径段**去重；合同附件的子目录只传合同 id | 桶里不再出现 `contracts/contracts/<合同 id>/…`。只影响新上传，老对象照常可读 |
+| **0.1.34** | PDF 预览改走同源 `.../content`，由服务端自己写 `inline`；新上传的对象元数据从 `attachment` 改为 `inline` | 线上点「预览」不再变成下载；PDF 与存储后端解耦，换 CDN / 自定义域名都不受影响 |
+| **0.1.33** | `update.sh` 3/6 调 `manual-deploy.sh` 时显式传 `APP_DIR`；失败文案区分「构建没走完」与「前置检查没过」 | 更新不再停在 3/6 却报「构建失败」而日志里没有编译错误 |
+| **0.1.32** | 发布目录以 systemd 单元的 `WorkingDirectory` 为准；`check_out` 比对进程 `cwd`；新增 `deploy/test-deploy.sh` | 在错误目录执行脚本会在第一步就停下，不再「全部成功、线上没变」 |
+| **0.1.31** | 合同附件在线预览：PDF / 图片 / DOCX / XLSX 各自渲染；新增同源 `.../content` 与 `.../sheet` | 附件不用先下载再找文件；DOC / XLS 老格式仍只能下载 |
+| **0.1.30** | `/health` 报 `version / version_source / build_id / npm_version / cwd`；新增只读的 `deploy/diagnose.sh` | 上线后能一眼看出「跑的是哪份代码、哪次构建、在哪个目录」 |
+
+升级到某一版之前，先看对应条目；0.1.30 起不再有数据库迁移之外的手工步骤，
+`update.sh` 会自己备份、构建、预启动自检、切换与回滚。

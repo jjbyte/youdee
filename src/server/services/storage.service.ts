@@ -263,10 +263,26 @@ function translate(e: unknown, action: string): AppError {
   );
 }
 
-/** 生成对象键。不含原始文件名，理由见文件头第 3 条 */
+/**
+ * 生成对象键。不含原始文件名，理由见文件头第 3 条。
+ *
+ * 前缀和子目录**可能是同一个词**：默认前缀就是 `contracts/`，而合同附件最早的调用点
+ * 传的子目录是 `contracts/<合同 id>` —— 直接拼出来就是 `contracts/contracts/<合同 id>/…`，
+ * 线上桶里真这么长了一堆。这里按「路径段」去重一次，两种写法都落到 `contracts/<合同 id>/…`。
+ *
+ * 只认整段相等（或 `root/` 开头），所以 `contracts` 前缀不会误吃掉 `contracts-old/…`
+ * 这类别的目录，也不会把 uuid 当目录名匹配掉。
+ */
 export function buildObjectKey(prefix: string, subdir: string, name: string): string {
+  const bare = prefix.replace(/^\/+/, '');
+  const head = bare === '' ? '' : bare.endsWith('/') ? bare : `${bare}/`;
+  const root = bare.replace(/\/+$/, '');
   const clean = subdir.replace(/^\/+|\/+$/g, '');
-  return `${prefix}${clean ? `${clean}/` : ''}${name}`;
+  const deduped =
+    root && (clean === root || clean.startsWith(`${root}/`))
+      ? clean.slice(root.length).replace(/^\/+/, '')
+      : clean;
+  return `${head}${deduped ? `${deduped}/` : ''}${name}`;
 }
 
 export interface CosPutResult {
@@ -300,8 +316,18 @@ export async function putFileToCos(opts: {
           Body: createReadStream(opts.filePath),
           ContentLength: opts.sizeBytes,
           ContentType: opts.contentType,
-          // 对象元数据里记下原始文件名：以后要批量导出时不用回库查
-          ContentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(opts.originalName)}`,
+          // 元数据里**不能**写 attachment。
+          //
+          // 这里曾经写的是 `attachment; filename*=…`，后果是"线上的 PDF 点预览反而下载"：
+          // 对象元数据是浏览器拿不到 inline 覆盖时的最后一道默认值，而预览靠的是
+          // 预签名地址上的 `response-content-disposition` 查询参数去覆盖它 ——
+          // 这层覆盖只在请求真的打到 COS 时才生效，一旦前面挂了自定义域名/CDN，
+          // 参数被中转丢掉，COS 就按元数据吐 attachment，浏览器当场存盘而不是渲染。
+          // 本地存储没有这条链路（`/uploads` 路由自己写 inline），于是症状只在生产出现。
+          //
+          // 现在元数据统一 inline（文件名仍然留着，另存为时用得上），
+          // 真正要强制下载的地方（Office 附件、下载按钮）由 `/raw` 路由显式传 attachment。
+          ContentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(opts.originalName)}`,
         },
         (err) => (err ? reject(err) : resolve()),
       );

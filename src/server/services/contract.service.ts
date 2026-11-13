@@ -482,8 +482,10 @@ export async function addContractFile(
     let url: string;
 
     if (useCos) {
-      // 对象键不带原始文件名：重名、乱码、超长路径都会到上传时才炸，那时文件已传一半
-      const key = buildObjectKey(await cosPrefix(), `contracts/${contractId}`, `${randomUUID()}.${staged.type.ext}`);
+      // 对象键不带原始文件名：重名、乱码、超长路径都会到上传时才炸，那时文件已传一半。
+      // 子目录只写合同 id：业务根目录（默认 `contracts/`）属于「设置 → 对象存储」的前缀，
+      // 这里再写一次就成了 contracts/contracts/…
+      const key = buildObjectKey(await cosPrefix(), contractId, `${randomUUID()}.${staged.type.ext}`);
       const put = await putFileToCos({
         filePath: staged.tmpPath,
         sizeBytes: staged.sizeBytes,

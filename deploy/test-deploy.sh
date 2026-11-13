@@ -21,7 +21,9 @@ export MSYS_NO_PATHCONV=1
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/update.sh"
+MD="$HERE/manual-deploy.sh"
 [ -f "$SRC" ] || { echo "找不到 $SRC" >&2; exit 1; }
+[ -f "$MD" ] || { echo "找不到 $MD" >&2; exit 1; }
 
 pass=0
 fail=0
@@ -39,8 +41,9 @@ eval "$(awk '/^is_abs\(\)/,/^}/' "$SRC")"
 eval "$(awk '/^unit_dir_of\(\)/,/^}/' "$SRC")"
 eval "$(awk '/^resolve_root\(\)/,/^}/' "$SRC")"
 eval "$(awk '/^check_out\(\)/,/^}/' "$SRC")"
-for fn in is_abs unit_dir_of resolve_root check_out; do
-  [ "$(type -t "$fn" 2>/dev/null)" = "function" ] || { echo "抽不出 $fn，update.sh 的结构变了，先修这个脚本" >&2; exit 1; }
+eval "$(awk '/^dir_verdict\(\)/,/^}/' "$MD")"
+for fn in is_abs unit_dir_of resolve_root check_out dir_verdict; do
+  [ "$(type -t "$fn" 2>/dev/null)" = "function" ] || { echo "抽不出 $fn，脚本的结构变了，先修这个测试脚本" >&2; exit 1; }
 done
 
 # ── 假 systemctl ────────────────────────────────────────────────────────
@@ -105,6 +108,34 @@ dirty='ok|0.1.31 || true)|ok|||'
 eq "版本号里混进 [|| true)] → 逐字段报错，不放过（0.1.27 的老坑）" \
   "bad:version=0.1.31 （期望 0.1.31）；db=空；version_source= true)（版本号不是读自磁盘，不可信）；build_id=ok（期望 BID1，跑的不是这次构建的产物）" \
   "$(check_out "$dirty" 0.1.31 BID1 1 /opt/youdee)"
+
+echo
+echo "[test] 3) 备用目录构建：manual-deploy 的目录守卫不能被 update.sh 撞上"
+# 0.1.32 首次上线真实停在这里：update.sh 在 /opt/youdee-next 里调 manual-deploy.sh 构建，
+# 而 manual-deploy 0.1.32 新加的守卫发现「当前目录 ≠ 单元目录」就 exit 1，
+# update.sh 把它报成「构建失败」—— 日志里一句编译错误都没有，方向全错。
+eq "就在线上目录里 → ok" \
+  "ok" "$(dir_verdict /opt/youdee /opt/youdee)"
+eq "★ 旁目录构建、调用方没说 APP_DIR → 必须 refuse（0.1.32 首次上线的现场）" \
+  "refuse" "$(dir_verdict /opt/youdee-next /opt/youdee)"
+eq "旁目录构建 + APP_DIR 显式声明 → override（放行，并打一行留痕）" \
+  "override" "$(dir_verdict /opt/youdee-next /opt/youdee /opt/youdee-next)"
+eq "单元没声明 WorkingDirectory → ok（无从比较，不拦）" \
+  "ok" "$(dir_verdict /opt/youdee-next '')"
+eq "尾斜杠不影响判断" \
+  "ok" "$(dir_verdict /opt/youdee/ /opt/youdee)"
+
+# 上一组只是把判定函数测通；真正决定线上成败的是 update.sh 有没有把 APP_DIR 传下去。
+# 这里直接读源码里那次调用，缺一项就红 —— 免得「函数改好了、调用点忘了改」再来一轮。
+CALL_BLOCK="$(awk '/^if ! \( cd "\$NEXT_DIR"/,/^fi$/' "$SRC")"
+eq "update.sh 调 manual-deploy 时传了 APP_DIR=\$NEXT_DIR" \
+  "有" "$(printf '%s' "$CALL_BLOCK" | grep -q 'APP_DIR="\$NEXT_DIR"' && echo 有 || echo 无)"
+eq "同一处仍带 SKIP_MIGRATE=1（迁移要留到停机窗口）" \
+  "有" "$(printf '%s' "$CALL_BLOCK" | grep -q 'SKIP_MIGRATE=1' && echo 有 || echo 无)"
+eq "同一处仍带 SKIP_SEED=1（种子同理）" \
+  "有" "$(printf '%s' "$CALL_BLOCK" | grep -q 'SKIP_SEED=1' && echo 有 || echo 无)"
+eq "失败文案不再一律说「构建失败」（要能区分前置检查没过）" \
+  "有" "$(printf '%s' "$CALL_BLOCK" | grep -q '前置检查没通过' && echo 有 || echo 无)"
 
 echo
 if [ "$fail" -eq 0 ]; then

@@ -40,6 +40,18 @@ async function call(method, path, { body, as } = {}) {
   return { status: res.status, json, raw: text, headers: res.headers };
 }
 
+/**
+ * 本地时区的 yyyy-mm-dd。
+ *
+ * 不要用 `new Date().toISOString().slice(0,10)`：那是 UTC 日期，而服务端 `db.ts` 的
+ * `today()` 取的是**本地**日期。在 GMT+8 的 00:00–07:59 之间两者差一天，于是
+ * 「报价日期」「开票日期」这类比对会每天红 8 小时 —— 一个每天必红的闸门，
+ * 人会习惯性忽略红灯，真出事那天也没人看。
+ */
+function localDate(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 async function main() {
   console.log(`自检目标：${BASE}\n`);
 
@@ -693,10 +705,20 @@ async function main() {
     dHead[dHead.length - 1] === '备注' && dHead.indexOf('备注') === dHead.indexOf('小计') + 1,
     dHead.join(' | ') || '没找到表头行',
   );
+  // 这一条原来断言的是"精简档收窄成 5 列"。0.1.21 引入多报价单模板后，规则变了：
+  // `customer-sheet.ts:296` 写明「有模板时列集合由模板决定，详细/精简开关随之失效」——
+  // 默认模板 8 列必然盖掉 layout=brief，这是**刻意设计**，不是 bug。
+  // 所以这条不再验"精简"，改成钉住模板优先级：brief 与 detailed 必须一模一样，
+  // 且含规格/备注/单价三个只有模板才给的列。哪天有人把开关做成"半生效"（比如单价
+  // 能被 unit_price=0 关掉），这里就会红 —— 而不是让差异悄悄出现在客户收到的 Excel 里。
   record(
-    '导出：精简档按参数收窄成 5 列（无规格/备注、无单价），不是照旧出全表',
-    bHead.length === 5 && !bHead.includes('单价') && !bHead.includes('规格') && !bHead.includes('备注'),
-    bHead.join(' | ') || '没找到表头行',
+    '导出：有模板时列集合由模板决定（详细/精简开关不生效）',
+    bHead.join('|') === dHead.join('|') &&
+      bHead.length === 8 &&
+      bHead.includes('规格') &&
+      bHead.includes('备注') &&
+      bHead.includes('单价'),
+    `brief=${bHead.join(' | ') || '无表头'}｜与 detailed ${bHead.join('|') === dHead.join('|') ? '一致' : '不一致'}`,
   );
   record(
     '导出：分组开关生效（详细档有「一、」分组行，关掉后没有）',
@@ -965,7 +987,7 @@ async function main() {
       },
     });
     const tplQuoteId = tplQuote.json?.data?.id;
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = localDate();
     record(
       '建单时把模板的供应商名称快照进单据（含报价日期）',
       tplQuote.json?.data?.template_supplier_name === `自检供应商${tplStamp}` &&
@@ -1070,6 +1092,522 @@ async function main() {
     await call('PATCH', `/users/${tempAdminId}`, { as: 'admin', body: { role: 'member' } });
     await call('DELETE', `/users/${tempAdminId}?hard=1`, { as: 'admin' });
   }
+
+  // 16. 发票台账 + 合同状态（v0.1.35）
+  //     前面一百多项一条都没碰过发票，而这一块的错法全是"不报错的错数"：
+  //     同号票被吞掉、冲红符号没归一、summary 和 items 各查一遍对不上、勾选下载下了整批。
+  //     每条都拿本脚本自己造的票验证，用购买方名里的 stamp 圈出一小片数据集，
+  //     跑完自己删干净（本段末尾就清，不依赖下面的自检单清理逻辑）。
+  const invStamp = String(Date.now()).slice(-6);
+  const invBuyer = `自检购买方${invStamp}中间段`;
+  const invSeller = `自检销售方${invStamp}`;
+  const invNo = (n) => `88${invStamp}${String(n).padStart(2, '0')}`;
+  // 日期一律走顶层的 localDate()（本地时区，与服务端 today() 同口径）
+  const invToday = localDate();
+  const invYesterday = localDate(new Date(Date.now() - 864e5));
+
+  // 金额一律定点比较：Number('1900.10') + Number('0.20') 是 1900.2999999999997，
+  // 浮点做这类断言会偶发假失败。脚本里不能 import TS 模块，所以这 20 行就地写。
+  const centsOf = (v) => {
+    const s = String(v ?? '0').trim();
+    const neg = s.startsWith('-');
+    const [i = '0', f = ''] = (neg ? s.slice(1) : s).split('.');
+    const c = BigInt(i || '0') * 100n + BigInt((`${f}00`).slice(0, 2));
+    return neg ? -c : c;
+  };
+  const fmtCents = (c) => {
+    const neg = c < 0n;
+    const a = neg ? -c : c;
+    return `${neg ? '-' : ''}${a / 100n}.${String(a % 100n).padStart(2, '0')}`;
+  };
+  const sumCents = (arr) => arr.reduce((acc, v) => acc + centsOf(v), 0n);
+
+  const invCreate = (extra) =>
+    call('POST', '/invoices', {
+      as: 'admin',
+      body: { buyer_name: invBuyer, seller_name: invSeller, issued_on: invToday, ...extra },
+    });
+
+  // 16.1 同号不同代码必须是两张票
+  //      按「发票号」单列判重会吞掉别家真票：8 位号在纸质票里跨省重号是常态，
+  //      而吞掉的票没有任何报错，只表现为"这家的票录不进去"。
+  // 号码带 stamp：软删的发票仍然占着 (code, no) 这个唯一键（删了不会腾出号来），
+  // 用固定号码的话第二次跑自检就会以 409 撞上上一次留下的那行，红得莫名其妙。
+  const invSameA = await invCreate({ invoice_code: '011001900111', invoice_no: invNo(10), total_amount: '10.00' });
+  const invSameB = await invCreate({ invoice_code: '022002900222', invoice_no: invNo(10), total_amount: '20.00' });
+  record(
+    '同号不同代码是两张票（唯一键是 code+no）',
+    Boolean(invSameA.json?.data?.id) &&
+      Boolean(invSameB.json?.data?.id) &&
+      invSameA.json.data.id !== invSameB.json.data.id,
+    `A=${invSameA.json?.code}/${String(invSameA.json?.data?.id ?? '').slice(0, 8)} B=${invSameB.json?.code}/${String(invSameB.json?.data?.id ?? '').slice(0, 8)}`,
+  );
+
+  // 16.1b 存量代码为空时，同号码的新票必须按重复处理（Spec §12-7「代码为空放宽匹配」）
+  //       不修的话：第一次上传没认出代码存成 ''，重传时认出代码就会**新建一行**——
+  //       同一张票两条记录，金额/税额/价税合计全部虚增，而且不会有任何报错。
+  //       这一条与 16.1 互为对照：16.1（两个代码都非空）必须放行，这条必须拦住。
+  //       两条一起才说明规则没有放宽过头变成"只看号码"（那会吞掉别家的真票）。
+  const invBlankCode = await invCreate({ invoice_code: '', invoice_no: invNo(12), total_amount: '40.00' });
+  const invBlankCodeDup = await invCreate({
+    invoice_code: '033002100311',
+    invoice_no: invNo(12),
+    total_amount: '40.00',
+  });
+  record(
+    '存量代码为空时同号码带代码重录被拒（409 / 40901）',
+    Boolean(invBlankCode.json?.data?.id) && invBlankCodeDup.status === 409 && invBlankCodeDup.json?.code === 40901,
+    `先建 code='' → ${invBlankCode.json?.code}；再建 code=033002100311 → ${invBlankCodeDup.status} ${invBlankCodeDup.json?.code} ${invBlankCodeDup.json?.message ?? ''}`,
+  );
+
+  // 16.2 同 code+no 再录一次必须被拒
+  //      静默覆盖会让"上一次人工核对过的数"被悄悄改掉；回 500 则让人以为系统坏了。
+  const invDup = await invCreate({ invoice_code: '011001900111', invoice_no: invNo(10), total_amount: '10.00' });
+  record(
+    '同 code+no 重复录入被拒（409 / 40901）',
+    invDup.status === 409 && invDup.json?.code === 40901,
+    `${invDup.status} ${invDup.json?.code} ${invDup.json?.message ?? ''}`,
+  );
+
+  // 16.3 全电票没有代码，必须存空串而不是 null
+  //      唯一索引不认 NULL 相等（多行 NULL 互不冲突），存 null 等于同一张全电票能被反复录进去。
+  const invElec = await invCreate({ invoice_code: '', invoice_no: invNo(11), total_amount: '30.00' });
+  record(
+    '全电票代码为空时存空串（不是 null）',
+    invElec.json?.code === 0 && invElec.json?.data?.invoice_code === '',
+    `code=${invElec.json?.code} invoice_code=${JSON.stringify(invElec.json?.data?.invoice_code)}`,
+  );
+
+  // 16.4 三项自洽 → ok
+  const invOk = await invCreate({
+    invoice_code: '111100001111',
+    invoice_no: invNo(1),
+    amount: '100.00',
+    tax_amount: '13.00',
+    total_amount: '113.00',
+  });
+  record(
+    '三项自洽记成 ok（100 + 13 = 113）',
+    invOk.json?.data?.amount_check === 'ok',
+    `amount_check=${invOk.json?.data?.amount_check} ${invOk.json?.data?.amount}/${invOk.json?.data?.tax_amount}/${invOk.json?.data?.total_amount}`,
+  );
+
+  // 16.5 容差正好 1 分算 ok；差 2 分算 mismatch 但**仍然入库**
+  //      OCR 的 1–2 分误差是多行明细合计的行业常态，拒绝入库等于让人为机器误差返工；
+  //      而"差 2 分也存"必须靠 amount_check 标出来，否则合计里混进错票没人知道。
+  const invNear = await invCreate({
+    invoice_code: '111100001111',
+    invoice_no: invNo(2),
+    amount: '100.00',
+    tax_amount: '13.00',
+    total_amount: '113.01',
+  });
+  record(
+    '差 1 分（容差内）仍记成 ok',
+    invNear.json?.data?.amount_check === 'ok',
+    `amount_check=${invNear.json?.data?.amount_check} total=${invNear.json?.data?.total_amount}`,
+  );
+  const invOff = await invCreate({
+    invoice_code: '111100001111',
+    invoice_no: invNo(3),
+    amount: '100.00',
+    tax_amount: '13.00',
+    total_amount: '113.02',
+  });
+  record(
+    '差 2 分记成 mismatch 且仍然入库（不拒收）',
+    invOff.status === 201 && invOff.json?.data?.amount_check === 'mismatch',
+    `HTTP ${invOff.status} amount_check=${invOff.json?.data?.amount_check} total=${invOff.json?.data?.total_amount}`,
+  );
+
+  // 16.6 缺一项用「价税合计 − 税额」推导
+  //      不推导的话，只拍了半张票的用户得自己算，而算错的合计数没人能发现。
+  const invDerived = await invCreate({
+    invoice_code: '111100001111',
+    invoice_no: invNo(4),
+    tax_amount: '13.00',
+    total_amount: '113.00',
+  });
+  record(
+    '缺不含税金额时按 total−tax 推导（derived，补出 100.00）',
+    invDerived.json?.data?.amount_check === 'derived' && invDerived.json?.data?.amount === '100.00',
+    `amount_check=${invDerived.json?.data?.amount_check} amount=${invDerived.json?.data?.amount}`,
+  );
+
+  // 16.7 空就是空，不能写成 0
+  //      用 '0.00' 冒充"没认出来"，会让合计少算却不报警 —— 而合计正是对账凭据。
+  const invBlank = await invCreate({ invoice_code: '111100001111', invoice_no: invNo(5), total_amount: '50.00' });
+  record(
+    '没填的两项读回 null（不能是 0.00）',
+    invBlank.json?.data?.amount === null && invBlank.json?.data?.tax_amount === null,
+    `amount=${JSON.stringify(invBlank.json?.data?.amount)} tax=${JSON.stringify(invBlank.json?.data?.tax_amount)}`,
+  );
+
+  // 16.8 numeric(14,2) 的尾零不能掉
+  //      SELECT 里一旦转了 float（或 ORM 当 number 返回），'1900.10' 会变成 '1900.1'，
+  //      对账时"这一分钱差在哪"能查半天，而且看起来像人录错了。
+  const invScale = await invCreate({ invoice_code: '111100001111', invoice_no: invNo(6), amount: '1900.10' });
+  record(
+    '金额尾零不丢（读回 1900.10，是字符串不是数字）',
+    invScale.json?.data?.amount === '1900.10' && typeof invScale.json?.data?.amount === 'string',
+    `amount=${JSON.stringify(invScale.json?.data?.amount)}（${typeof invScale.json?.data?.amount}）`,
+  );
+
+  // 16.9 冲红票：填正数也要归一成负数
+  //      漏了这一步，"冲红 3 张"在合计里等于三张正常票，账面上凭空多出一笔钱。
+  const invRed = await invCreate({
+    invoice_code: '111100001111',
+    invoice_no: invNo(7),
+    status: 'red',
+    amount: '100.00',
+    tax_amount: '13.00',
+    total_amount: '113.00',
+  });
+  const invRedId = invRed.json?.data?.id;
+  record(
+    '冲红票填正数被归一成三项负数',
+    invRed.json?.data?.amount === '-100.00' &&
+      invRed.json?.data?.tax_amount === '-13.00' &&
+      invRed.json?.data?.total_amount === '-113.00',
+    `${invRed.json?.data?.amount} / ${invRed.json?.data?.tax_amount} / ${invRed.json?.data?.total_amount}`,
+  );
+
+  // 16.10 改状态必须同步重定符号
+  //       只改 status 不改金额，就会出现"冲红 3 张但合计没变"——这种错只有月底对账才发现。
+  const invToNormal = await call('PATCH', `/invoices/${invRedId}/status`, { as: 'admin', body: { status: 'normal' } });
+  record(
+    '改状态时金额同步翻正，且 status_source 记成 manual',
+    invToNormal.json?.data?.amount === '100.00' &&
+      invToNormal.json?.data?.total_amount === '113.00' &&
+      invToNormal.json?.data?.status_source === 'manual',
+    `${invToNormal.json?.data?.total_amount} source=${invToNormal.json?.data?.status_source}`,
+  );
+
+  // 16.12 summary 与 items 必须是同一个口径
+  //       两条 SQL 各写一遍就会出现"合计和行数对不上"，而这种不一致没人能复现，
+  //       只会被当成"这套系统不可信"。这里拿自己造的这批票逐项对上。
+  const invListUrl = `/invoices?buyer=${encodeURIComponent(invBuyer)}&limit=100`;
+  const invList = await call('GET', invListUrl, { as: 'admin' });
+  const invRows = invList.json?.data?.items ?? [];
+  const invSummary = invList.json?.data?.summary ?? {};
+  const invAllCount = invList.json?.data?.total ?? -1;
+  const invSumTotal = sumCents(invRows.map((r) => r.total_amount));
+  const invMissing = invRows.filter((r) => r.amount === null || r.tax_amount === null || r.total_amount === null).length;
+  record(
+    'summary.count = total（同一次扫描，不是两条 SQL）',
+    invSummary.count === invAllCount && invAllCount > 0,
+    `summary.count=${invSummary.count} total=${invAllCount}`,
+  );
+  record(
+    'summary.sum_total_amount = items 逐条定点累加',
+    centsOf(invSummary.sum_total_amount) === invSumTotal,
+    `summary=${invSummary.sum_total_amount} 累加=${fmtCents(invSumTotal)}（${invRows.length} 行）`,
+  );
+  record(
+    'summary.missing_amount_count = 三列有任一为 null 的行数',
+    invSummary.missing_amount_count === invMissing,
+    `summary=${invSummary.missing_amount_count} 实际=${invMissing}`,
+  );
+
+  // 16.13 模糊查询命中中间一段字 + 日期边界含当天
+  //       日期条件写成 `>` / `<` 就会漏掉当天的票，而"当天开的票查不到"是最容易被投诉的一种。
+  const invFuzzy = await call('GET', `/invoices?buyer=${encodeURIComponent(`购买方${invStamp}中间`)}&limit=100`, {
+    as: 'admin',
+  });
+  const invDateIn = await call(
+    'GET',
+    `/invoices?buyer=${encodeURIComponent(invBuyer)}&issued_from=${invToday}&issued_to=${invToday}&limit=100`,
+    { as: 'admin' },
+  );
+  const invDateOut = await call(
+    'GET',
+    `/invoices?buyer=${encodeURIComponent(invBuyer)}&issued_from=2000-01-01&issued_to=${invYesterday}&limit=100`,
+    { as: 'admin' },
+  );
+  record(
+    '购买方模糊查只给中间一段字也能命中',
+    (invFuzzy.json?.data?.total ?? -1) === invAllCount,
+    `模糊命中 ${invFuzzy.json?.data?.total ?? '?'} / 全量 ${invAllCount}`,
+  );
+  record(
+    '开票日期区间含边界当天（且不含区间外）',
+    (invDateIn.json?.data?.total ?? -1) === invAllCount && (invDateOut.json?.data?.total ?? -1) === 0,
+    `当天区间 ${invDateIn.json?.data?.total ?? '?'} 条 / 截止昨天 ${invDateOut.json?.data?.total ?? '?'} 条`,
+  );
+
+  // 16.11 权限：改状态与删除都只有管理员
+  //       冲红会翻转金额符号、删除会让票从台账消失，这两件事不能让当天录票的人顺手做。
+  const invMemberStatus = await call('PATCH', `/invoices/${invRedId}/status`, {
+    as: 'member',
+    body: { status: 'red' },
+  });
+  const invMemberDel = await call('DELETE', `/invoices/${invRedId}`, { as: 'member' });
+  const invAdminDel = await call('DELETE', `/invoices/${invRedId}`, { as: 'admin' });
+  record('member 改不了发票状态（40301）', invMemberStatus.json?.code === 40301, `${invMemberStatus.json?.code} ${invMemberStatus.json?.message ?? ''}`);
+  record('member 删不了发票（40301）', invMemberDel.json?.code === 40301, `${invMemberDel.json?.code} ${invMemberDel.json?.message ?? ''}`);
+  record(
+    'admin 能软删发票（返回 deleted 与原件数）',
+    invAdminDel.json?.data?.deleted === true && typeof invAdminDel.json?.data?.file_count === 'number',
+    `${invAdminDel.json?.code} deleted=${invAdminDel.json?.data?.deleted} file_count=${invAdminDel.json?.data?.file_count}`,
+  );
+
+  // 16.16 合同状态只有一条写入路径
+  //       两处都收 status 的后果：抽屉保存时顺手提交，新建的默认值会把别人手工改过的状态冲掉，
+  //       而界面上看不出任何异常（"我明明选了已结算，保存后还是签订中"）。
+  const invContract = await call('POST', '/contracts', {
+    as: 'admin',
+    body: { title: `自检合同${invStamp}`, company_name: `自检公司${invStamp}`, category: 'commercial' },
+  });
+  const invContractId = invContract.json?.data?.id;
+  record(
+    '新建合同默认状态是 negotiating',
+    invContract.json?.data?.status === 'negotiating',
+    `status=${invContract.json?.data?.status ?? invContract.json?.message ?? ''}`,
+  );
+  const invContractPatch = await call('PATCH', `/contracts/${invContractId}`, {
+    as: 'admin',
+    body: { title: `自检合同${invStamp}改名`, status: 'settled' },
+  });
+  record(
+    'PATCH /contracts/:id 收不到 status（只改到标题）',
+    invContractPatch.json?.data?.status === 'negotiating' &&
+      invContractPatch.json?.data?.title === `自检合同${invStamp}改名`,
+    `status=${invContractPatch.json?.data?.status} title=${invContractPatch.json?.data?.title}`,
+  );
+  const invStatusPath = await call('PATCH', `/contracts/${invContractId}/status`, { as: 'admin', body: { status: 'settled' } });
+  record(
+    '只有 /contracts/:id/status 能改状态',
+    invStatusPath.json?.data?.status === 'settled',
+    `${invStatusPath.json?.code} status=${invStatusPath.json?.data?.status ?? invStatusPath.json?.message ?? ''}`,
+  );
+  const invStatuses = ['negotiating', 'performing', 'settling', 'settled', 'terminated'];
+  const invCycle = [];
+  for (const sv of invStatuses) {
+    const one = await call('PATCH', `/contracts/${invContractId}/status`, { as: 'admin', body: { status: sv } });
+    invCycle.push(`${sv}=${one.json?.data?.status ?? one.json?.code}`);
+  }
+  record(
+    '合同五态能来回切换（不设状态机，业务方要求）',
+    invCycle.every((x) => {
+      const [want, got] = x.split('=');
+      return want === got;
+    }),
+    invCycle.join(' '),
+  );
+  const invBadStatus = await call('PATCH', `/contracts/${invContractId}/status`, { as: 'admin', body: { status: 'bogus' } });
+  record(
+    '非法合同状态 400 / 40001（不静默回落）',
+    invBadStatus.status === 400 && invBadStatus.json?.code === 40001,
+    `${invBadStatus.status} ${invBadStatus.json?.code} ${invBadStatus.json?.message ?? ''}`,
+  );
+
+  // 16.15 合同挂票必须幂等
+  //       不幂等的话，用户手一抖点两下，同一份合同里就会有两行一样的票，
+  //       而"这份合同到底挂了几张票"从此没有答案（去重只能靠人眼）。
+  const invA = invOk.json?.data?.id;
+  const invB = invNear.json?.data?.id;
+  const invLink1 = await call('POST', `/contracts/${invContractId}/invoices`, {
+    as: 'admin',
+    body: { invoice_ids: [invA, invB] },
+  });
+  record('合同挂票首次 linked=2', invLink1.json?.data?.linked === 2, `linked=${invLink1.json?.data?.linked} ${invLink1.json?.message ?? ''}`);
+  const invLink2 = await call('POST', `/contracts/${invContractId}/invoices`, {
+    as: 'admin',
+    body: { invoice_ids: [invA, invB] },
+  });
+  const invLinked = await call('GET', `/contracts/${invContractId}/invoices`, { as: 'admin' });
+  record(
+    '同一批再挂一次 linked=0 且列表仍 2 条（幂等，不报错）',
+    invLink2.json?.data?.linked === 0 && (invLinked.json?.data?.items ?? []).length === 2,
+    `第二次 linked=${invLink2.json?.data?.linked} 列表=${(invLinked.json?.data?.items ?? []).length} 条`,
+  );
+  const invUnlink = await call('DELETE', `/contracts/${invContractId}/invoices/${invA}`, { as: 'admin' });
+  const invAfterUnlink = await call('GET', `/contracts/${invContractId}/invoices`, { as: 'admin' });
+  record(
+    '解除关联后只剩 1 条（只删边，票本身不动）',
+    invUnlink.json?.data?.deleted === true && (invAfterUnlink.json?.data?.items ?? []).length === 1,
+    `剩 ${(invAfterUnlink.json?.data?.items ?? []).length} 条`,
+  );
+
+  // 16.14 has_contract 过滤必须与 contract_count 同口径
+  //       软删的合同关联若被算成"已挂"，"还没挂合同"里就会筛出显示"已挂 1 份"的行，
+  //       用户只会认为筛选坏了 —— 而这种错没有任何报错。
+  await call('POST', `/contracts/${invContractId}/invoices`, { as: 'admin', body: { invoice_ids: [invA] } });
+  const invHasQuery = (v) =>
+    call('GET', `/invoices?buyer=${encodeURIComponent(invBuyer)}&has_contract=${v}&limit=100`, { as: 'admin' });
+  // 16.11 已经软删了一张票，所以"全量"必须重新取一次：用前面那个 10 会差一张，
+  // 然后这一项会以"少一条"的样子假失败，而数据其实是对的。
+  const invAlive = await call('GET', invListUrl, { as: 'admin' });
+  const invAliveCount = invAlive.json?.data?.total ?? -1;
+  const invHas1 = await invHasQuery(1);
+  const invHas0 = await invHasQuery(0);
+  const invHas1Ids = (invHas1.json?.data?.items ?? []).map((x) => x.id);
+  const invHas0Ids = (invHas0.json?.data?.items ?? []).map((x) => x.id);
+  record(
+    'has_contract=1 只出挂了合同的票',
+    invHas1Ids.length === 2 && invHas1Ids.includes(invA) && invHas1Ids.includes(invB),
+    `命中 ${invHas1Ids.length} 条（应为 2）`,
+  );
+  record(
+    'has_contract=0 不出已挂的票',
+    !invHas0Ids.includes(invA) && invHas0Ids.length === invAliveCount - 2,
+    `命中 ${invHas0Ids.length} 条 / 存活 ${invAliveCount}（应为 ${invAliveCount - 2}）`,
+  );
+  const invDelContract = await call('DELETE', `/contracts/${invContractId}`, { as: 'admin' });
+  const invHas1After = await invHasQuery(1);
+  const invHas0After = await invHasQuery(0);
+  record(
+    '合同软删后该票回到 has_contract=0（JOIN 过滤了 deleted_at）',
+    invDelContract.json?.data?.deleted === true &&
+      (invHas1After.json?.data?.total ?? -1) === 0 &&
+      (invHas0After.json?.data?.items ?? []).some((x) => x.id === invA),
+    `软删后 has_contract=1 命中 ${invHas1After.json?.data?.total ?? '?'} 条 / =0 命中 ${invHas0After.json?.data?.total ?? '?'} 条`,
+  );
+
+  // 16.17 原件：补挂 → raw 内联 → 勾选下载 ZIP 里的中文条目名
+  //       这条防的是"用户以为下了 3 张、实际拿到整批"，以及中文名在包里变乱码
+  //       （yazl 的 bit11 UTF-8 标记没置位时，Windows 解压会看到一串问号）。
+  const invPng = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    'base64',
+  );
+  const invFileName = `自检扫描件${invStamp}.png`;
+  const invRawPost = async (path, bytes, name) => {
+    const headers = {
+      'Content-Type': 'application/octet-stream',
+      'X-File-Name': encodeURIComponent(name),
+      Cookie: jar.admin ?? '',
+    };
+    let res;
+    try {
+      res = await fetch(BASE + '/api/v1' + path, { method: 'POST', headers, body: bytes });
+    } catch (e) {
+      // 服务端在读完 body 之前就返回（401/409 这类早退）时，个别情况下连接会被重置。
+      // 这里把它折成一条可读的失败证据，而不是让整个自检中断在第 120 项。
+      return { status: 0, json: { code: -1, message: `请求失败：${e instanceof Error ? e.message : e}` }, headers: new Headers() };
+    }
+    const text = await res.text();
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = { code: -1, message: `非 JSON 响应（${res.status}）：${text.slice(0, 120)}` };
+    }
+    return { status: res.status, json, headers: res.headers };
+  };
+  const invAttach = await invRawPost(`/invoices/${invA}/files`, invPng, invFileName);
+  const invFiles = invAttach.json?.data?.files ?? [];
+  const invFileId = invFiles[0]?.id;
+  record(
+    '给已有发票补挂原件（跳过识别，file_count 跟着变）',
+    invAttach.status === 201 && invFiles.length === 1 && invAttach.json?.data?.file_count === 1,
+    `HTTP ${invAttach.status} files=${invFiles.length} file_count=${invAttach.json?.data?.file_count} ${invAttach.json?.message ?? ''}`,
+  );
+
+  if (invFileId) {
+    const invRawRes = await fetch(`${BASE}/api/v1/invoices/${invA}/files/${invFileId}/raw`, {
+      headers: { Cookie: jar.admin ?? '' },
+      redirect: 'manual',
+    });
+    const invStorage = invFiles[0]?.storage;
+    record(
+      '原件 raw 走内联（local 200 image/png，COS 则 302 预签名）',
+      invStorage === 'cos'
+        ? invRawRes.status === 302
+        : invRawRes.status === 200 && (invRawRes.headers.get('content-type') ?? '').includes('image/png'),
+      `storage=${invStorage} HTTP ${invRawRes.status} type=${invRawRes.headers.get('content-type') ?? '-'}`,
+    );
+
+    // ZIP：勾选下载只打勾中的那一张。服务端若忽略 ids，用户就会拿到整批却以为只下了 3 张——
+    // 这比"下不了"糟得多（包是拿去报销的，多出来的票要一张张手工删）。
+    const invZipRes = await fetch(`${BASE}/api/v1/invoices/zip?ids=${invA}`, {
+      headers: { Cookie: jar.admin ?? '' },
+    });
+    const invZipBuf = Buffer.from(await invZipRes.arrayBuffer());
+    if (invStorage === 'cos' && invZipRes.status !== 200) {
+      record(
+        '勾选下载的 ZIP 条目名是中文原名（UTF-8 位已置）',
+        true,
+        `存储为 COS，本机未验（HTTP ${invZipRes.status}）`,
+      );
+    } else {
+      // 中央目录：EOCD(PK\x05\x06) → 条目数 + CD 偏移，逐条读 flag(bit11) 与文件名
+      const invZipEntries = (buf) => {
+        let eocd = -1;
+        for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i -= 1) {
+          if (buf.readUInt32LE(i) === 0x06054b50) {
+            eocd = i;
+            break;
+          }
+        }
+        if (eocd < 0) return [];
+        const count = buf.readUInt16LE(eocd + 10);
+        let off = buf.readUInt32LE(eocd + 16);
+        const out = [];
+        for (let k = 0; k < count; k += 1) {
+          if (buf.readUInt32LE(off) !== 0x02014b50) break;
+          const flags = buf.readUInt16LE(off + 8);
+          const nameLen = buf.readUInt16LE(off + 28);
+          const extraLen = buf.readUInt16LE(off + 30);
+          const commentLen = buf.readUInt16LE(off + 32);
+          out.push({
+            name: buf.subarray(off + 46, off + 46 + nameLen).toString('utf8'),
+            utf8: (flags & 0x800) !== 0,
+          });
+          off += 46 + nameLen + extraLen + commentLen;
+        }
+        return out;
+      };
+      const invEntries = invZipEntries(invZipBuf);
+      const invHit = invEntries.find((e) => e.name === invFileName);
+      record(
+        '勾选下载的 ZIP 条目名是中文原名（UTF-8 位已置）',
+        invZipRes.status === 200 &&
+          (invZipRes.headers.get('content-type') ?? '').includes('zip') &&
+          Boolean(invHit) &&
+          invHit.utf8 === true &&
+          invEntries.length === 1,
+        `HTTP ${invZipRes.status} 条目=${invEntries.map((e) => `${e.name}${e.utf8 ? '(utf8)' : ''}`).join(',') || '无'}`,
+      );
+    }
+  } else {
+    record('原件 raw 走内联（local 200 image/png，COS 则 302 预签名）', false, '原件没挂上，后续两项无从验证');
+    record('勾选下载的 ZIP 条目名是中文原名（UTF-8 位已置）', false, '同上');
+  }
+
+  // 16.18 未配识别密钥时上传要 409 并指路设置页
+  //       回 400/500 或一句干巴巴的"未配置"，用户只会在上传按钮上反复重试；
+  //       配了密钥就别真调 OCR（一次调用要花钱），这一项按"未验"记通过。
+  const invOcr = await call('GET', '/settings/ocr', { as: 'admin' });
+  const invOcrReady = invOcr.json?.data?.enabled === true && invOcr.json?.data?.secret_key_set === true;
+  if (invOcrReady) {
+    record('未配识别密钥时上传给 409 + 指路文案', true, '库里已配密钥，未真调 OCR（省钱）');
+  } else {
+    const invUpload = await invRawPost('/invoices/upload', invPng, '自检上传.png');
+    const invMsg = invUpload.json?.message ?? '';
+    record(
+      '未配识别密钥时上传给 409 + 指路文案',
+      invUpload.status === 409 && (invMsg.includes('设置') || invMsg.includes('发票识别')),
+      `HTTP ${invUpload.status} ${invMsg}`,
+    );
+  }
+
+  // 自检数据自己清：这一批票与这份合同只是上面这些检查的脚手架。
+  // 留着的话每跑一次用户台账里就多十几行「自检购买方…」，而且它们和真票长得一模一样
+  // （下面那段自检单清理是同一个道理）。发票走软删，原件与关联都不动，可恢复。
+  const invToClean = await call('GET', `${invListUrl}`, { as: 'admin' });
+  let invRemoved = 0;
+  for (const row of invToClean.json?.data?.items ?? []) {
+    const gone = await call('DELETE', `/invoices/${row.id}`, { as: 'admin' });
+    if (gone.json?.code === 0) invRemoved += 1;
+  }
+  await call('DELETE', `/contracts/${invContractId}`, { as: 'admin' });
+  const invLeft = await call('GET', `/invoices?q=${invStamp}&limit=100`, { as: 'admin' });
+  record(
+    '自检发票清干净（不污染台账）',
+    (invLeft.json?.data?.total ?? -1) === 0,
+    `删了 ${invRemoved} 张，残留 ${invLeft.json?.data?.total ?? '?'} 条`,
+  );
 
   // 自检单跑完自己删掉：它只是用来验证「出单」这一步，留着的话每跑一次列表里就多一张
   // 「自检样例」，跑三遍用户就分不清哪张是自己的单了。（导出那几项已经读完了，删了不影响。）

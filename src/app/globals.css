@@ -79,6 +79,44 @@ button {
   grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr);
 }
 
+/**
+ * 窄屏（平板竖屏、手机）：侧栏退成图标栏。
+ *
+ * 216px 的侧栏在 390px 的手机上占掉一半，正文只剩 126px —— 标题折成四行、
+ * 每个筛选项按字换行、表格被挤成一条竖线。侧栏本来就有「折叠」这个形态
+ * （56px，只有图标），这里只是让它在窄屏成为默认，不另造一套移动端导航。
+ *
+ * 收的是**文字**，不是语义：直接 `display:none` 会把导航的可访问名一起抹掉，
+ * 读屏软件那边就只剩一串没有名字的图标链接。所以用"只剩一像素"的写法——
+ * 名字仍在文档里，Tab 过去照样能念出来。
+ */
+@media (max-width: 900px) {
+  .shell,
+  .shell[data-collapsed="true"] {
+    grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr);
+  }
+  .nav-item > span,
+  .nav-collapse > span,
+  .brand-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  /* 折叠按钮在窄屏是空操作（上面那条规则已经把两种状态都压成图标栏了），
+     留着一个按下去没反应的按钮比没有按钮更让人困惑。 */
+  .nav-collapse { display: none; }
+  /* 标题与右侧动作在窄屏换行：不换行时动作组会把标题挤成"发票/台账"四个字一列的竖条 */
+  .page-head { flex-wrap: wrap; gap: var(--space-4); }
+  .page { padding: var(--space-5) var(--space-4) var(--space-7); }
+  .topbar { padding: 0 var(--space-4); }
+}
+
 .sidebar {
   background: var(--sidebar-bg);
   color: var(--sidebar-fg);
@@ -592,6 +630,29 @@ button {
   background: var(--surface);
   overflow: auto;
 }
+/**
+ * 表格右缘的"右边还有列"提示：一条覆盖在容器上的窄渐变，不是给表格做 mask。
+ *
+ * 为什么不用 mask-image：那会让最右列的文字本身淡掉，读不清；
+ * 这里只是盖一层从透明到纸白的渐变，字在它下面，滚过去就露出来。
+ * 挂载与否由 JS 判（`scrollLeft + clientWidth >= scrollWidth - 1` 时**整个移除**）：
+ * 一直挂着的渐隐是假提示——滑到底还看见阴影，人会以为后面还有东西。
+ */
+.tbl-more {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 56px;
+  pointer-events: none;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    color-mix(in srgb, var(--surface) 55%, transparent) 45%,
+    var(--surface) 100%
+  );
+}
 .tbl {
   width: 100%;
   border-collapse: separate;
@@ -634,6 +695,11 @@ button {
   box-shadow: var(--table-sticky-col-shadow);
 }
 .tbl th.col-sticky { z-index: 3; }
+/* 冻结列表头的底色要盖回表头色：`.col-sticky` 的默认底色是纸白（给单元格用的），
+   不盖的话左上角那一格会白成一块，看起来像表头坏了。
+   （单元格的 hover / 选中底色由更高优先级的 tr:hover / tr[data-selected] 规则覆盖，不用管。）
+   发票台账是第一个用冻结首列的表。 */
+.tbl th.col-sticky { background: var(--table-header-bg); }
 /* 比价表格冻结前两列：token 里只有 left:0，第二列需要第一列的宽度来接 */
 .tbl.cmp-tbl .col-sticky:nth-child(1) {
   width: var(--cmp-tbl-col-1);

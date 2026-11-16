@@ -23,9 +23,12 @@ import { AppError } from '../http';
 import { likePattern, paginated, type PageQuery } from '../params';
 import {
   DEFAULT_CONTRACT_CATEGORY,
+  DEFAULT_CONTRACT_STATUS,
   isContractCategory,
+  isContractStatus,
   parseContractInput,
   type ContractCategory,
+  type ContractStatus,
   type FieldIssue,
 } from '@/domain/contract';
 import type { CurrentUser } from '../auth/session';
@@ -82,6 +85,8 @@ export interface ContractDTO {
   project_name: string | null;
   /** 商业 / 租赁 / 雇佣 */
   category: ContractCategory;
+  /** 签订中 / 履约中 / 结算中 / 已结算 / 已终止。写入路径只有 PATCH /contracts/:id/status */
+  status: ContractStatus;
   signed_on: string | null;
   amount: string | null;
   note: string | null;
@@ -111,6 +116,7 @@ interface ContractRow extends QueryResultRow {
   customer_name: string | null;
   project_name: string | null;
   category: string;
+  status: string;
   signed_on: string | null;
   amount: string | null;
   note: string | null;
@@ -153,7 +159,7 @@ interface QuoteRow extends QueryResultRow {
 
 const SELECT = `
   SELECT c.id, c.contract_no, c.title, c.company_name, c.customer_name, c.project_name,
-         c.category, c.signed_on, c.amount, c.note, c.created_by, u.name AS created_by_name,
+         c.category, c.status, c.signed_on, c.amount, c.note, c.created_by, u.name AS created_by_name,
          c.created_at, c.updated_at, c.deleted_at,
          (SELECT count(*) FROM contract_files f WHERE f.contract_id = c.id)::int AS file_count,
          (SELECT count(*) FROM contract_files f WHERE f.contract_id = c.id AND f.category = 'contract')::int AS contract_file_count,
@@ -173,6 +179,7 @@ function toDTO(r: ContractRow): ContractDTO {
     project_name: r.project_name,
     // 库里的值认不出时按商业合同显示：老数据 / 手工改库都不该让详情页炸掉
     category: isContractCategory(r.category) ? r.category : DEFAULT_CONTRACT_CATEGORY,
+    status: isContractStatus(r.status) ? r.status : DEFAULT_CONTRACT_STATUS,
     // date 列由 db.ts 的类型解析器原样返回 yyyy-mm-dd，不做时区转换
     signed_on: r.signed_on,
     amount: r.amount,
@@ -249,6 +256,12 @@ export interface ContractListQuery {
    * 模糊匹配在这里没有意义，还会让人以为"租"能搜到租赁合同。
    */
   category: ContractCategory | null;
+  /**
+   * 状态筛选：不传 = 全部。与 category 一样只做精确匹配（五态是封闭枚举），
+   * 认不出的值由 route 层当"不筛"处理——筛选条件脏了应该出全部结果，
+   * 而不是一页空白让人以为合同没了。
+   */
+  status?: ContractStatus | null;
   signedFrom: string | null;
   signedTo: string | null;
   createdFrom: string | null;
@@ -288,6 +301,7 @@ export async function listContracts(query: ContractListQuery) {
   if (query.customer) add((n) => `c.customer_name ILIKE $${n}`, likePattern(query.customer));
   if (query.project) add((n) => `c.project_name ILIKE $${n}`, likePattern(query.project));
   if (query.category) add((n) => `c.category = $${n}`, query.category);
+  if (query.status) add((n) => `c.status = $${n}`, query.status);
   if (query.signedFrom) add((n) => `c.signed_on >= $${n}::date`, query.signedFrom);
   if (query.signedTo) add((n) => `c.signed_on <= $${n}::date`, query.signedTo);
   // 创建日期是 timestamptz：用半开区间 [当天 0 点, 次日 0 点) 而不是 ::date，
@@ -627,4 +641,27 @@ export async function unlinkQuote(contractId: string, quoteId: string): Promise<
   );
   if (!rows[0]) throw new AppError(40401, '这条关联不存在，可能已经被取消了。', 404);
   return { deleted: true };
+}
+
+/**
+ * 改合同状态（**唯一写入路径**：`PATCH /contracts/:id/status`）。
+ *
+ * 为什么不塞进 `patchContract`：两处都收，就会出现"抽屉保存顺手把状态冲回默认"——
+ * 抽屉里把 status 一起提交，新建时的默认值就会覆盖别人手工改过的状态，
+ * 而且界面上看不出任何异常。所以 `parseContractInput` 干脆不收 status。
+ *
+ * 五态之间**任意切换，不设状态机**：能从「已结算」直接跳回「签订中」。
+ * 这是业务方明确要求的（他们就是会改主意），只在 `updated_at` 上留痕，不加拦截。
+ * 非法值一律 400（不静默回落）——静默回落的后果是"我明明选了已结算，
+ * 保存后还是签订中"，而没人会怀疑是代码把值吃了。
+ */
+export async function setContractStatus(id: string, status: ContractStatus): Promise<ContractDetailDTO> {
+  const rows = await q<{ id: string }>(
+    `UPDATE contracts SET status = $1, updated_at = now()
+      WHERE id = $2 AND deleted_at IS NULL
+      RETURNING id`,
+    [status, id],
+  );
+  if (!rows[0]) throw new AppError(40401, '这份合同不存在，可能已经被删掉了。', 404);
+  return getContract(id);
 }

@@ -51,6 +51,46 @@ export function contractCategoryLabel(v: string | null | undefined): string {
   return hit ? hit.label : CONTRACT_CATEGORIES[0].label;
 }
 
+/**
+ * 合同状态。五态，**顺序即界面顺序**（签订中 → 履约中 → 结算中 → 已结算 / 已终止）。
+ *
+ * 与 category 同一套做法：状态码存英文、中文只在界面。理由：以后加一态或改叫法，
+ * 不用动一行数据。
+ *
+ * **不设状态机**：能从「已结算」直接跳回「签订中」。这是业务方明确要求的
+ * （他们就是会改主意），只在 updated_at 与操作日志里留痕，不加拦截。
+ * 非法值一律 40001，**不静默回落**——静默回落的后果是"我明明选了已结算，
+ * 保存后列表里还是签订中"，而没人会怀疑是代码把值吃了。
+ *
+ * **写入路径只有一条**：`PATCH /contracts/:id/status`。
+ * `parseContractInput` 故意不收 status：两处都收，就会出现"抽屉保存顺手把状态
+ * 冲回默认"这类事故（新建时的默认值覆盖掉手工改过的状态）。
+ */
+export const CONTRACT_STATUSES = [
+  { value: 'negotiating', label: '签订中' },
+  { value: 'performing', label: '履约中' },
+  { value: 'settling', label: '结算中' },
+  { value: 'settled', label: '已结算' },
+  { value: 'terminated', label: '已终止' },
+] as const;
+
+export type ContractStatus = (typeof CONTRACT_STATUSES)[number]['value'];
+
+/** 新建合同的默认状态。与库里的 DEFAULT 'negotiating' 必须一致（两边各一套默认就会打架） */
+export const DEFAULT_CONTRACT_STATUS: ContractStatus = 'negotiating';
+
+/** 存量合同的回填值（迁移里 UPDATE ... = 'performing'，业务方确认过） */
+export const LEGACY_CONTRACT_STATUS: ContractStatus = 'performing';
+
+export function isContractStatus(v: unknown): v is ContractStatus {
+  return typeof v === 'string' && CONTRACT_STATUSES.some((s) => s.value === v);
+}
+
+export function contractStatusLabel(v: string | null | undefined): string {
+  const hit = CONTRACT_STATUSES.find((s) => s.value === v);
+  return hit ? hit.label : CONTRACT_STATUSES[0].label;
+}
+
 export interface FieldIssue {
   field: string;
   message: string;
@@ -121,6 +161,10 @@ export interface ParseResult {
 
 /**
  * 解析并校验提交体。
+ *
+ * **故意不收 `status`**：合同状态只有 `PATCH /contracts/:id/status` 一条写入路径。
+ * 两处都收就会出现"抽屉保存顺手把状态冲回默认"——新建时 `status` 的默认值会覆盖
+ * 掉别人手工改过的状态，而这种覆盖在界面上看不出任何异常。
  *
  * @param raw  请求体（snake_case 键）
  * @param opts.partial  true = PATCH，只校验出现过的键；false = 新建，必填项必须给

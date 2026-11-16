@@ -2,9 +2,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '@/lib/api';
 import { cx, formatDate, formatMoney, formatTimeRel } from '@/lib/format';
-import type { Contract, ContractCategory, Page } from '@/lib/types';
-import { CONTRACT_CATEGORIES, contractCategoryLabel } from '@/domain/contract';
-import { Badge } from '@/components/ui/badge';
+import type { Contract, ContractCategory, ContractStatus, Page } from '@/lib/types';
+import {
+  CONTRACT_CATEGORIES,
+  CONTRACT_STATUSES,
+  contractCategoryLabel,
+  contractStatusLabel,
+} from '@/domain/contract';
+import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input, SearchInput, Select } from '@/components/ui/field';
 import { Table, TableWrap, Td, Th } from '@/components/ui/table';
@@ -19,6 +24,18 @@ import { ContractDrawer } from '@/components/contracts/contract-drawer';
 const PAGE_SIZE = 20;
 
 type FileFilter = '' | 'has' | 'missing';
+
+/**
+ * 状态徽标的色相只用来区分"走到哪一步"，不用来判好坏：
+ * 已终止不是错误（业务方会主动终止），所以给它中性灰而不是危险红。
+ */
+const STATUS_TONE: Record<ContractStatus, BadgeTone> = {
+  negotiating: 'neutral',
+  performing: 'info',
+  settling: 'warn',
+  settled: 'success',
+  terminated: 'manual',
+};
 
 /**
  * 合同管理。
@@ -38,6 +55,8 @@ export default function ContractsPage() {
   const [company, setCompany] = useState('');
   const [customer, setCustomer] = useState('');
   const [category, setCategory] = useState<'' | ContractCategory>('');
+  /** 合同状态：签订中 / 履约中 / 结算中 / 已结算 / 已终止。'' = 不限 */
+  const [status, setStatus] = useState<'' | ContractStatus>('');
   const [signedFrom, setSignedFrom] = useState('');
   const [signedTo, setSignedTo] = useState('');
   const [createdFrom, setCreatedFrom] = useState('');
@@ -74,6 +93,7 @@ export default function ContractsPage() {
         createdFrom: createdFrom || undefined,
         createdTo: createdTo || undefined,
         hasFile: fileFilter === '' ? undefined : fileFilter === 'has',
+        status: status || undefined,
         includeDeleted: includeDeleted && isAdmin ? true : undefined,
       };
       const [list, ...rest] = await Promise.all([
@@ -101,6 +121,7 @@ export default function ContractsPage() {
     company,
     customer,
     category,
+    status,
     signedFrom,
     signedTo,
     createdFrom,
@@ -140,6 +161,7 @@ export default function ContractsPage() {
       || company.trim()
       || customer.trim()
       || category
+      || status
       || signedFrom
       || signedTo
       || createdFrom
@@ -155,6 +177,7 @@ export default function ContractsPage() {
     setCompany('');
     setCustomer('');
     setCategory('');
+    setStatus('');
     setSignedFrom('');
     setSignedTo('');
     setCreatedFrom('');
@@ -366,6 +389,26 @@ export default function ContractsPage() {
               <option value="missing">还没传</option>
             </Select>,
           )}
+          {/* 状态筛选放在最后：先按"谁的合同"收窄，再看"走到哪一步"，与真实翻台账的顺序一致 */}
+          {label(
+            '合同状态',
+            <Select
+              value={status}
+              aria-label="合同状态筛选"
+              style={{ width: 130 }}
+              onChange={(e) => {
+                setStatus(e.target.value as '' | ContractStatus);
+                setPage(1);
+              }}
+            >
+              <option value="">全部</option>
+              {CONTRACT_STATUSES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </Select>,
+          )}
           {isAdmin
             ? label(
                 '删除状态',
@@ -451,6 +494,7 @@ export default function ContractsPage() {
                 <thead>
                   <tr>
                     <Th>合同名称</Th>
+                    <Th>状态</Th>
                     <Th>甲方（公司）</Th>
                     <Th>乙方（客户）</Th>
                     <Th>签订时间</Th>
@@ -482,6 +526,13 @@ export default function ContractsPage() {
                           <span className="cell-sub truncate">
                             {r.contractNo ? <span className="num">{r.contractNo}</span> : '没有编号'}
                           </span>
+                        </Td>
+                        <Td>
+                          {r.status ? (
+                            <Badge tone={STATUS_TONE[r.status] ?? 'neutral'}>{contractStatusLabel(r.status)}</Badge>
+                          ) : (
+                            <span className="t-3">—</span>
+                          )}
                         </Td>
                         <Td>
                           <div className="truncate">{r.companyName}</div>

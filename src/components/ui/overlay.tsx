@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, type ReactNode, type Ref } from 'react';
 import { cx } from '@/lib/format';
 import { IconCheck, IconClose, IconError, IconInfo } from '@/components/icons';
 import { IconButton } from './button';
@@ -15,6 +15,7 @@ export function Drawer({
   width,
   closeOnScrim = true,
   escDisabled = false,
+  bodyRef,
 }: {
   open: boolean;
   onClose: () => void;
@@ -32,6 +33,11 @@ export function Drawer({
    * 层级更高的那层负责响应，下面这层必须让路。
    */
   escDisabled?: boolean;
+  /**
+   * 正文滚动容器。给调用方一个把手，在"错误横幅在顶部、用户正停在底部点保存"时
+   * 把正文滚回顶部——否则那条错误在屏幕外，用户只看得到按钮没反应。
+   */
+  bodyRef?: Ref<HTMLDivElement>;
 }) {
   useEffect(() => {
     if (!open || escDisabled) return;
@@ -68,7 +74,7 @@ export function Drawer({
             <IconClose size={16} />
           </IconButton>
         </div>
-        <div className="drawer__body">{children}</div>
+        <div className="drawer__body" ref={bodyRef}>{children}</div>
         {footer ? <div className="drawer__foot">{footer}</div> : null}
       </aside>
     </>
@@ -142,7 +148,7 @@ export function Toast({
 
   if (!message) return null;
   const Icon = tone === 'danger' ? IconError : tone === 'warn' ? IconInfo : IconCheck;
-  const iconClass = tone === 'danger' ? 't-danger' : tone === 'warn' ? 't-warn' : 't-success';
+  const iconClass = tone === 'danger' ? 't-danger' : tone === 'warn' ? 't-warning' : 't-success';
   return (
     <div
       role="status"

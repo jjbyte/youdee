@@ -24,10 +24,16 @@ import type {
   ContractFile,
   ContractFileCategory,
   ContractQuote,
+  ContractStatus,
   CurrentUser,
   DashboardSummary,
+  InvoiceBrief,
+  InvoiceDetail,
+  InvoicePage,
+  InvoiceUploadResult,
   ItemDetail,
   ItemListItem,
+  OcrSettings,
   Page,
   Price,
   PriceLookupResult,
@@ -244,6 +250,35 @@ export function qs(params: Record<string, string | number | boolean | null | und
   const s = sp.toString();
   return s ? `?${s}` : '';
 }
+
+/**
+ * 发票查询条件。列表与 ZIP **共用同一份**（ZIP 只是忽略 page/limit）——
+ * 各写一份的话，"筛出来的"和"下下来的"早晚不是同一批。
+ *
+ * `qs()` 会把键名转成 snake_case：invoiceNo → invoice_no、hasContract → has_contract。
+ */
+export type InvoiceQuery = {
+  /** 什么都搜（号码 / 购买方 / 销售方 / 备注）：picker 里只有一个输入框时用它 */
+  q?: string;
+  /** 精确 */
+  invoiceNo?: string;
+  invoiceCode?: string;
+  /** 模糊 */
+  buyer?: string;
+  seller?: string;
+  issuedFrom?: string;
+  issuedTo?: string;
+  status?: 'normal' | 'red';
+  hasFile?: boolean;
+  /**
+   * 是否已挂合同：1 只看挂了的，0 只看还没挂的。
+   * 用 0/1 而不是布尔：spec 里这类开关统一写 `has_file=0|1`，
+   * `String(false)` 传出去是 "false"，能不能被解析全看服务端那一刻的实现。
+   */
+  hasContract?: 0 | 1;
+  contractId?: string;
+  includeDeleted?: boolean;
+};
 
 export const api = {
   // ── 认证 ──
@@ -500,6 +535,8 @@ export const api = {
       project?: string;
       /** 商业 / 租赁 / 雇佣；不传 = 全部 */
       category?: ContractCategory;
+      /** 签订中 / 履约中 / 结算中 / 已结算 / 已终止；不传 = 全部 */
+      status?: ContractStatus;
       signedFrom?: string;
       signedTo?: string;
       createdFrom?: string;
@@ -555,6 +592,93 @@ export const api = {
     }),
   unlinkContractQuote: (id: string, quoteId: string) =>
     request<{ deleted: boolean }>(`/contracts/${id}/quotes/${quoteId}`, { method: 'DELETE' }),
+
+  /**
+   * 合同状态：**唯一的写入路径**。
+   *
+   * `PATCH /contracts/:id` 故意不收 status —— 两处都收就会出现"抽屉保存顺手把状态冲回默认"
+   * 这类事故。所以界面上下拉选完立刻走这个接口，不进合同表单的保存队列。
+   */
+  setContractStatus: (id: string, status: ContractStatus) =>
+    request<ContractDetail>(`/contracts/${id}/status`, { method: 'PATCH', body: { status } }),
+  /** 合同已关联的发票 */
+  contractInvoices: (id: string) => request<{ items: InvoiceBrief[] }>(`/contracts/${id}/invoices`),
+  /**
+   * 批量关联（幂等：同一次点两下不会出现两条一样的记录，服务端 ON CONFLICT DO NOTHING）。
+   * 所以前端不需要防抖，也不需要先查后写。
+   */
+  linkContractInvoices: (id: string, invoiceIds: string[]) =>
+    request<{ linked: number; items: InvoiceBrief[] }>(`/contracts/${id}/invoices`, {
+      method: 'POST',
+      body: { invoiceIds },
+    }),
+  unlinkContractInvoice: (id: string, invoiceId: string) =>
+    request<{ deleted: boolean }>(`/contracts/${id}/invoices/${invoiceId}`, { method: 'DELETE' }),
+
+  // ── 发票台账 ──
+  /**
+   * 发票列表。一次查询同时返回本页 items 与**全量** summary（服务端窗口聚合），
+   * 所以不要在这里另起一次"统计"请求——两次扫表之间有人插一张票，合计就和行数对不上。
+   */
+  invoices: (params: InvoiceQuery & { page?: number; limit?: number } = {}) =>
+    request<InvoicePage>(`/invoices${qs(params)}`),
+  invoice: (id: string) => request<InvoiceDetail>(`/invoices/${id}`),
+  /** 手工录入（无原件）：识别失败时的出口 */
+  createInvoice: (body: Record<string, unknown>) =>
+    request<InvoiceDetail>('/invoices', { method: 'POST', body }),
+  /** 部分更新：不传 = 不动，null / 空串 = 清空 */
+  updateInvoice: (id: string, body: Record<string, unknown>) =>
+    request<InvoiceDetail>(`/invoices/${id}`, { method: 'PATCH', body }),
+  /** 改状态：仅 admin。服务端会同步把三项金额重定符号（冲红记负数） */
+  setInvoiceStatus: (id: string, status: 'normal' | 'red') =>
+    request<InvoiceDetail>(`/invoices/${id}/status`, { method: 'PATCH', body: { status } }),
+  /** 软删：仅 admin。原件一字节不动，restoreInvoice 即可恢复 */
+  deleteInvoice: (id: string) =>
+    request<{ deleted: boolean; fileCount: number }>(`/invoices/${id}`, { method: 'DELETE' }),
+  restoreInvoice: (id: string) => request<InvoiceDetail>(`/invoices/${id}/restore`, { method: 'POST' }),
+  /**
+   * 上传识别：**原始字节流**，不是 multipart。
+   * 与合同附件同一条链路（uploadRaw）：浏览器从磁盘流式读，顺带能拿上传进度。
+   */
+  uploadInvoice: (file: File, opts: { onProgress?: (ratio: number) => void; signal?: AbortSignal } = {}) =>
+    uploadRaw<InvoiceUploadResult>('/invoices/upload', file, {
+      'X-File-Name': encodeURIComponent(file.name),
+    }, opts),
+  /**
+   * 给**已有发票**补原件：跳过识别，只把这份扫描件挂上去（后端 `/invoices/:id/files`）。
+   *
+   * 和 `uploadInvoice` 是两件事，别合并：那个会先跑 OCR 再决定"新建 / 合并 / 报错"，
+   * 这个只往一张已经存在的票上贴文件。所以体积限制也不同——OCR 那条要 base64 进
+   * 请求体（原始 ≈7.5MB 封顶），这条是纯字节流，按服务端的 20MB 走。
+   */
+  uploadInvoiceFile: (
+    id: string,
+    file: File,
+    opts: { onProgress?: (ratio: number) => void; signal?: AbortSignal } = {},
+  ) =>
+    uploadRaw<InvoiceDetail>(`/invoices/${id}/files`, file, {
+      'X-File-Name': encodeURIComponent(file.name),
+    }, opts),
+  /**
+   * 批量下载 ZIP 的地址。**用地址导航，不要 fetch→blob**：
+   * blob 会把整包读进浏览器内存，2GB 的包直接崩标签页；原生下载是浏览器流式写盘。
+   *
+   * 传了 `ids` 服务端就只按 id 打包、忽略其余条件（前端勾选时也只发 ids，见台账页）。
+   */
+  invoiceZipUrl: (params: InvoiceQuery & { ids?: string } = {}) =>
+    `${API_BASE}/invoices/zip${qs(params)}`,
+  /** 原件：PDF/JPG/PNG 服务端按 inline 流式返回，所以能直接塞进 iframe / img */
+  invoiceFileUrl: (id: string, fileId: string) => `${API_BASE}/invoices/${id}/files/${fileId}/raw`,
+
+  // ── 发票识别设置 ──
+  /** 登录即可读（上传按钮要据此置灰），但**永不回 secretKey 原文** */
+  ocrSettings: () => request<OcrSettings>('/settings/ocr'),
+  /** secretKey 留空/不传 = 不改；有值 = 换新密钥 */
+  updateOcrSettings: (body: { enabled?: boolean; secretId?: string; secretKey?: string; region?: string }) =>
+    request<OcrSettings>('/settings/ocr', { method: 'PATCH', body }),
+  /** 真调一次识别（内置样例图），返回耗时——只测配置对不对，不写库 */
+  testOcr: () =>
+    request<{ ok: boolean; latencyMs: number; note: string }>('/settings/ocr/test', { method: 'POST' }),
 
   /**
    * 导出 Excel。客户版带上预览页的四个版式参数——客户版 Excel 与打印走同一份版面模型，

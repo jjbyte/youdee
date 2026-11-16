@@ -8,6 +8,7 @@ import {
   IconCollapse,
   IconContract,
   IconDensity,
+  IconInvoice,
   IconLogout,
   IconMaterial,
   IconQuote,
@@ -30,6 +31,8 @@ function crumbs(pathname: string): string[] {
   if (pathname.startsWith('/vendors')) return ['供应商'];
   // 合同管理是独立台账，不是报价单的附属：合同先于报价签，两边各自查各自的
   if (pathname.startsWith('/contracts')) return ['合同管理'];
+  // 发票是财务台账，跟合同是"挂靠"关系而不是父子关系，所以平级
+  if (pathname.startsWith('/invoices')) return ['发票台账'];
   if (pathname.startsWith('/quotes')) {
     if (pathname === '/quotes') return ['报价单'];
     if (pathname.endsWith('/edit')) return ['报价单', '编辑'];
@@ -191,6 +194,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           collapsed={collapsed}
           active={isActive('/quotes')}
           icon={<IconQuote size={20} />}
+        />
+        {/* 发票放在报价单之后：它是"钱回来以后"的凭据，日常动线在报价单之后 */}
+        <NavLink
+          href="/invoices"
+          label="发票"
+          collapsed={collapsed}
+          active={isActive('/invoices')}
+          icon={<IconInvoice size={20} />}
         />
 
         <div className="nav-spacer" />

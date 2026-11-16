@@ -5,7 +5,16 @@ const nextConfig: NextConfig = {
   // pg 必须在这里：它有动态 require 的 native 绑定，被打包后会找不到。
   // cos-nodejs-sdk-v5 同理：它按需拼请求、依赖 Node 的 http/fs，被 bundle 后
   // 容易出现"开发能传、生产 upload 失败"的差异，交给运行时 require 最稳。
-  serverExternalPackages: ['pg', 'sharp', 'exceljs', 'cos-nodejs-sdk-v5'],
+  // tencentcloud-sdk-nodejs-ocr 同一类问题（它靠 -common 拼 Node http 请求）：
+  // 被 bundle 后表现为"开发能识别、生产 502"，所以产品包与它的 common 包都要列出。
+  serverExternalPackages: [
+    'pg',
+    'sharp',
+    'exceljs',
+    'cos-nodejs-sdk-v5',
+    'tencentcloud-sdk-nodejs-ocr',
+    'tencentcloud-sdk-nodejs-common',
+  ],
   // 钉死工程根，别让 Turbopack 自己向上猜（它按 lockfile/workspace 推断）。
   // 猜错的后果很隐蔽：PostCSS 插件按错误的根去解析，报 "Cannot find module"，
   // 而同一台机器上 node -e "require.resolve(...)" 又是好的 —— 两头对不上，很难查。

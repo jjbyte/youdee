@@ -578,6 +578,13 @@ export type ContractFileCategory = 'contract' | 'quote' | 'settlement';
 /** 合同分类：与 src/domain/contract.ts 的 CONTRACT_CATEGORIES 一一对应 */
 export type ContractCategory = 'commercial' | 'lease' | 'employment';
 
+/**
+ * 合同状态：直接复用 `src/domain/contract.ts` 的枚举类型，前端不另写一份 union。
+ * 两处各写一份，加第六个状态时必然一边改一边忘，而忘的那一边会静默把新状态当默认值。
+ */
+import type { ContractStatus } from '@/domain/contract';
+export type { ContractStatus };
+
 /** 合同附件（PDF / 图片 / Word / Excel）。一个合同可挂多份，按 category 分组 */
 export interface ContractFile {
   id: string;
@@ -636,6 +643,8 @@ export interface Contract {
   projectName: string | null;
   /** 商业 / 租赁 / 雇佣 */
   category: ContractCategory;
+  /** 签订中 / 履约中 / 结算中 / 已结算 / 已终止。任意切换，只有 PATCH /contracts/:id/status 能写 */
+  status: ContractStatus;
   /** yyyy-mm-dd；未知时为 null（不拿建单日冒充） */
   signedOn: string | null;
   amount: string | null;
@@ -656,4 +665,150 @@ export interface Contract {
 export interface ContractDetail extends Contract {
   files: ContractFile[];
   quotes: ContractQuote[];
+}
+
+// ── 发票台账 ─────────────────────────────────────────────────
+
+/** 正常 / 冲红。冲红不是"作废"，是把金额翻成负数抵掉 */
+export type InvoiceStatus = 'normal' | 'red';
+
+/** 状态怎么来的：ocr 自动判定 / manual 人工改过（人工改过的不再被重传覆盖） */
+export type InvoiceStatusSource = 'ocr' | 'manual';
+
+/** 三项金额自洽性：ok / derived（由另两项推算）/ mismatch（差 > 0.01 元，界面标黄） */
+export type InvoiceAmountCheck = 'ok' | 'derived' | 'mismatch';
+
+/** 发票台账的一行。三个金额是字符串，**前端不做浮点运算** */
+export interface InvoiceListItem {
+  id: string;
+  /** 全电 20 位 / 纸质 8 位 */
+  invoiceNo: string;
+  /** 纸质票 10/12 位；全电票为空串（不是 null） */
+  invoiceCode: string;
+  status: InvoiceStatus;
+  statusSource: InvoiceStatusSource;
+  /** OCR 的 SubType 原值，如 VatElectronicInvoiceFull */
+  invoiceType: string;
+  /** 票种中文，直接显示，前端不维护映射表 */
+  invoiceTypeLabel: string;
+  /** yyyy-mm-dd；认不出时为 null（不拿上传日冒充） */
+  issuedOn: string | null;
+  buyerName: string;
+  buyerTaxNo: string | null;
+  sellerName: string;
+  sellerTaxNo: string | null;
+  /** 不含税金额。冲红为负；没认出来就是 null（不是 0） */
+  amount: string | null;
+  taxAmount: string | null;
+  totalAmount: string | null;
+  amountCheck: InvoiceAmountCheck;
+  remark: string | null;
+  fileCount: number;
+  /** 关联合同数 */
+  contractCount: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+/**
+ * 列表统计（与 items 同一套查询条件、一次扫描出来的）。
+ * 金额是「非空求和」，缺金额的另给张数——写成 0 会让合计悄悄少算。
+ */
+export interface InvoiceSummary {
+  count: number;
+  sumAmount: string;
+  sumTaxAmount: string;
+  sumTotalAmount: string;
+  /** 三列任一为空的行数 */
+  missingAmountCount: number;
+  /** 命中范围内冲红张数。缺这个字段时界面不显示「含冲红」那一格 */
+  /**
+   * 命中范围内的冲红张数。**必现**（无冲红时是 0，不是缺字段）——
+   * 冲红行金额记负、会翻合计的符号，这个数字相当于给合计配的一句注释，
+   * 缺了它用户就只能怀疑合计算错了。
+   */
+  redCount: number;
+}
+
+export interface InvoicePage extends Page<InvoiceListItem> {
+  summary: InvoiceSummary;
+}
+
+/** 发票原件。一个发票可挂多份；同一份物理文件可被多行引用（多页 PDF） */
+export interface InvoiceFile {
+  id: string;
+  storage: 'local' | 'cos';
+  /** 浏览器可直接点的地址（云存储是后端的签名跳转） */
+  url: string;
+  originalName: string;
+  /** 只收 application/pdf、image/jpeg、image/png */
+  mime: string;
+  /** 服务端按字节判定的真实扩展名：pdf / jpg / png。决定能不能在页面里看 */
+  ext: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+/** 发票上挂着的合同（发票侧只读，解除关联在这里做） */
+export interface InvoiceLinkedContract {
+  id: string;
+  contractNo: string | null;
+  title: string;
+  companyName: string;
+  status: ContractStatus | null;
+  /** 合同已被软删：关联还在，界面标灰 */
+  deleted: boolean;
+}
+
+export interface InvoiceDetail extends InvoiceListItem {
+  files: InvoiceFile[];
+  contracts: InvoiceLinkedContract[];
+}
+
+/** 合同侧看到的发票摘要（合同抽屉、发票 picker 用） */
+export interface InvoiceBrief {
+  id: string;
+  invoiceNo: string;
+  invoiceCode: string;
+  issuedOn: string | null;
+  sellerName: string;
+  buyerName: string;
+  totalAmount: string | null;
+  status: InvoiceStatus;
+  /** 发票已被软删：关联保留，界面标灰并提示可恢复 */
+  deleted: boolean;
+}
+
+/** 同一份文件里还识别出的其它票（多页 PDF / 混贴） */
+export interface InvoiceUploadExtra {
+  invoiceNo: string;
+  totalAmount: string | null;
+  page: number;
+  saved: boolean;
+  reason?: string;
+}
+
+export interface InvoiceUploadResult {
+  /** 落库的那张（duplicated 时是已存在的那张） */
+  item: InvoiceDetail;
+  /** true = 票号已存在，本次未新建 */
+  duplicated: boolean;
+  /** true = 命中去重但该票原先没原件，已把这份原件补上 */
+  attachedFile: boolean;
+  extraItems: InvoiceUploadExtra[];
+  /** 例：'金额三项差 0.02 元，已标黄' */
+  warnings: string[];
+}
+
+/**
+ * 发票识别（腾讯云 OCR）设置。
+ * 服务端**永不回传 secretKey 原文**，只给「配没配 + 末四位」，所以输入框留空 = 不改。
+ */
+export interface OcrSettings {
+  enabled: boolean;
+  secretId: string;
+  secretKeySet: boolean;
+  secretKeyHint: string;
+  region: string;
 }

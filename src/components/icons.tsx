@@ -51,6 +51,7 @@ import {
   Plus,
   Printer,
   Receipt,
+  ReceiptText,
   RefreshCw,
   Rows3,
   Ruler,
@@ -89,6 +90,11 @@ export const IconVendor = icon(Factory);
 /** 合同管理：签过字的那一页，不是"又一叠文件" */
 export const IconContract = icon(FileSignature);
 export const IconQuote = icon(Receipt);
+/**
+ * 发票台账：票据本身（有票头与明细行）。报价单用的是 Receipt（带锯齿口的小票），
+ * 两个图标在 20px 下仍能分开——同一层相邻两项不能是同一个形状。
+ */
+export const IconInvoice = icon(ReceiptText);
 export const IconInbox = icon(Inbox);
 export const IconGuest = icon(GraduationCap);
 export const IconSettings = icon(Settings);

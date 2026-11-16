@@ -1,20 +1,31 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage } from '@/lib/api';
-import type { ContractCategory, ContractDetail, ContractFile, ContractFileCategory, QuoteListItem } from '@/lib/types';
-import { CONTRACT_CATEGORIES } from '@/domain/contract';
-import { cx, fileSize, formatDate, formatMoney, formatTimeRel } from '@/lib/format';
+import type {
+  ContractCategory,
+  ContractDetail,
+  ContractFile,
+  ContractFileCategory,
+  ContractStatus,
+  InvoiceBrief,
+  QuoteListItem,
+} from '@/lib/types';
+import { CONTRACT_CATEGORIES, CONTRACT_STATUSES, contractStatusLabel } from '@/domain/contract';
+import { cx, fileSize, formatDate, formatDecimalString, formatMoney, formatTimeRel } from '@/lib/format';
 import { canPreview } from '@/lib/file-preview';
+import { invoiceStatusLabel } from '@/lib/labels';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Field, Input, Select, Textarea } from '@/components/ui/field';
 import { Drawer } from '@/components/ui/overlay';
 import { InlineLoading, Note } from '@/components/ui/states';
 import { ContractFilePreview } from './file-preview';
+import { InvoicePicker } from './invoice-picker';
 import {
   IconDownload,
   IconExternal,
   IconFile,
+  IconInvoice,
   IconPaperclip,
   IconPlus,
   IconQuote,
@@ -154,6 +165,14 @@ export function ContractDrawer({
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [linkingId, setLinkingId] = useState<string | null>(null);
 
+  // 关联发票 / 合同状态
+  const [linkedInvoices, setLinkedInvoices] = useState<InvoiceBrief[]>([]);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const [unlinkingInvoiceId, setUnlinkingInvoiceId] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+
   const contractInput = useRef<HTMLInputElement>(null);
   const quoteInput = useRef<HTMLInputElement>(null);
   const settlementInput = useRef<HTMLInputElement>(null);
@@ -173,15 +192,39 @@ export function ContractDrawer({
    * 靠 state 回填再去加载会直接走 `!id` 分支清空表单，于是第一次点开一片空白、
    * 关掉再点才有内容（那时 currentId 已经被回填过了）。
    */
+  /**
+   * 单独刷「已关联的发票」。
+   *
+   * 不能拿 `load(contractId)` 来刷：那会把 `form` 一起回填，用户在抽屉里改了一半的字段
+   * 会被静默丢掉。挂票 / 解挂只影响边，不该动合同本身的表单。
+   * 读失败也只在这一块提示——合同才是这页的主角，不能因为边的接口没上就打不开合同。
+   */
+  const loadInvoices = useCallback(async (id: string | null) => {
+    if (!id) {
+      setLinkedInvoices([]);
+      setInvoiceError(null);
+      return;
+    }
+    try {
+      const inv = await api.contractInvoices(id);
+      setLinkedInvoices(inv.items);
+      setInvoiceError(null);
+    } catch {
+      setInvoiceError('已关联的发票没读出来，稍后刷新再试。不影响合同本身的保存。');
+    }
+  }, []);
+
   const load = useCallback(async (id: string | null) => {
     if (!id) {
       setDetail(null);
       setForm(EMPTY);
+      setLinkedInvoices([]);
       setLoading(false);
       return;
     }
     const seq = ++loadSeq.current;
     setLoading(true);
+    void loadInvoices(id);
     try {
       const d = await api.contract(id);
       if (seq !== loadSeq.current) return;
@@ -194,7 +237,7 @@ export function ContractDrawer({
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
-  }, []);
+  }, [loadInvoices]);
 
   useEffect(() => {
     if (!open) {
@@ -211,6 +254,10 @@ export function ContractDrawer({
     setQuoteQuery('');
     setQuoteResults(null);
     setQuoteError(null);
+    setInvoiceError(null);
+    setLinkedInvoices([]);
+    setPickerOpen(false);
+    setStatusError(null);
     if (!contractId) {
       // 重新打开"新建"时不能残留上一份的表单
       setCurrentId(null);
@@ -344,7 +391,45 @@ export function ContractDrawer({
     }
   }
 
+  /**
+   * 改合同状态。**不进表单、不跟着「保存修改」提交**：
+   * `PATCH /contracts/:id` 刻意不收 status，只有这一条写入路径。
+   * 选完立刻生效，失败时下拉会跟着 detail 回弹（受控组件），不会留下"看着改了其实没改"。
+   */
+  async function changeStatus(next: ContractStatus) {
+    if (!currentId || next === statusValue) return;
+    setStatusBusy(true);
+    setStatusError(null);
+    try {
+      const d = await api.setContractStatus(currentId, next);
+      // 只覆盖 detail，**不碰 form**：状态是独立动作，顺手把用户填了一半的表单冲掉是最气人的一种 bug
+      setDetail((prev) => ({ ...(prev ?? d), status: d.status ?? next }));
+      onChanged(`合同状态已改为「${d.status ? contractStatusLabel(d.status) : contractStatusLabel(next)}」。`);
+    } catch (e) {
+      setStatusError(errorMessage(e));
+    } finally {
+      setStatusBusy(false);
+    }
+  }
+
+  async function unlinkInvoice(inv: InvoiceBrief) {
+    if (!currentId) return;
+    setUnlinkingInvoiceId(inv.id);
+    setInvoiceError(null);
+    try {
+      await api.unlinkContractInvoice(currentId, inv.id);
+      await loadInvoices(currentId);
+      onChanged(`发票 ${inv.invoiceNo} 已从这份合同上摘掉（票本身还在台账里）。`);
+    } catch (e) {
+      setInvoiceError(errorMessage(e));
+    } finally {
+      setUnlinkingInvoiceId(null);
+    }
+  }
+
   const files = detail?.files ?? [];
+  /** 新建合同还没状态：先显示库里默认的「签订中」，同时下拉禁用（保存后才可改） */
+  const statusValue: ContractStatus = detail?.status ?? CONTRACT_STATUSES[0]?.value ?? 'negotiating';
   const quotes = detail?.quotes ?? [];
   const isDeleted = detail?.deletedAt != null;
   const filesOf = (c: ContractFileCategory) => files.filter((f) => f.category === c);
@@ -369,7 +454,7 @@ export function ContractDrawer({
       }
       width="760px"
       closeOnScrim={false}
-      escDisabled={previewFile !== null}
+      escDisabled={previewFile !== null || pickerOpen}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -396,6 +481,38 @@ export function ContractDrawer({
       ) : null}
 
       <div className="flex flex-col gap-[var(--space-4)]">
+        {/* 状态独立成块：它不走「保存修改」，选完即生效。
+            放进下面的表单里，人就会以为要再点一次保存，然后关掉抽屉——状态没变。 */}
+        <div className="flex items-end gap-[var(--space-3)] px-[var(--space-3)] py-[var(--space-2)] border border-[var(--border)] rounded-[var(--radius-md)] bg-[var(--surface-sunken)]">
+          <label className="flex flex-col gap-[var(--space-1)]">
+            <span className="t-2xs t-3">合同状态</span>
+            <Select
+              value={statusValue}
+              aria-label="合同状态"
+              style={{ width: 150 }}
+              disabled={!currentId || statusBusy || isDeleted}
+              onChange={(e) => void changeStatus(e.target.value as ContractStatus)}
+            >
+              {CONTRACT_STATUSES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <span className="t-2xs t-3 pb-[var(--space-1)] max-w-[280px]">
+            {currentId
+              ? '选完立刻生效，不用再点保存。五态可以任意来回切，系统不拦。'
+              : '新建的合同先存成「签订中」；保存后可以随时改状态。'}
+          </span>
+          {statusBusy ? <InlineLoading label="正在改…" /> : null}
+        </div>
+        {statusError ? (
+          <div className="field-error" role="alert">
+            {statusError}
+          </div>
+        ) : null}
+
         <Field label="合同名称" htmlFor="ct-title" required error={fieldErrors.title}>
           <Input
             id="ct-title"
@@ -621,6 +738,75 @@ export function ContractDrawer({
         )}
       </div>
 
+      {/* ── 关联发票 ── */}
+      <div className="mt-[var(--space-6)] pt-[var(--space-4)] border-t border-[var(--border)]">
+        <div className="flex items-center justify-between gap-[var(--space-3)] mb-[var(--space-2)]">
+          <div className="flex items-center gap-[var(--space-2)] min-w-0">
+            <IconInvoice size={16} />
+            <span className="fw-semi t-sm">关联发票</span>
+            {linkedInvoices.length > 0 ? <Badge tone="neutral">{linkedInvoices.length} 张</Badge> : null}
+            <span className="t-2xs t-3 truncate">这份合同的钱是哪几张票开的</span>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<IconPlus size={16} />}
+            disabled={!currentId || isDeleted}
+            onClick={() => setPickerOpen(true)}
+          >
+            关联发票
+          </Button>
+        </div>
+
+        {!currentId ? (
+          <Note tone="neutral">先把合同保存下来，再来挂发票。</Note>
+        ) : invoiceError ? (
+          <Note tone="warn">{invoiceError}</Note>
+        ) : linkedInvoices.length === 0 ? (
+          <Note tone="neutral">
+            还没挂发票。结算前把对应的进项票挂上，月底对账才答得出「这笔钱是哪张票」。
+          </Note>
+        ) : (
+          <ul className="flex flex-col gap-[var(--space-2)]">
+            {linkedInvoices.map((inv) => (
+              <li
+                key={inv.id}
+                className={cx(
+                  'flex items-center gap-[var(--space-3)] px-[var(--space-3)] py-[var(--space-2)]',
+                  'border border-[var(--border)] rounded-[var(--radius-md)]',
+                  inv.deleted && 't-3',
+                )}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate t-sm">
+                    <span className="num">{inv.invoiceNo}</span>
+                    <span className="t-2xs t-3">
+                      {inv.invoiceCode ? ` · 代码 ${inv.invoiceCode}` : ' · 全电'}
+                    </span>
+                  </div>
+                  <div className="t-2xs t-3 truncate">
+                    销售方 {inv.sellerName || '—'} · 开票 {formatDate(inv.issuedOn)}
+                    {inv.deleted ? ' · 这张票已被删除，可恢复' : ''}
+                  </div>
+                </div>
+                <span className="num t-sm">{formatDecimalString(inv.totalAmount, { symbol: true })}</span>
+                <Badge tone={inv.status === 'red' ? 'danger' : 'neutral'}>{invoiceStatusLabel(inv.status)}</Badge>
+                {isDeleted ? null : (
+                  <button
+                    type="button"
+                    className="btn btn--link t-xs"
+                    disabled={unlinkingInvoiceId === inv.id}
+                    onClick={() => void unlinkInvoice(inv)}
+                  >
+                    解除
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       {/* ── 三类附件 ── */}
       {SECTIONS.map((s) => {
         const list = filesOf(s.key);
@@ -683,6 +869,17 @@ export function ContractDrawer({
       {detail?.signedOn ? (
         <p className="t-2xs t-3 mt-[var(--space-4)]">签订日期：{formatDate(detail.signedOn)}</p>
       ) : null}
+
+      <InvoicePicker
+        open={pickerOpen}
+        contractId={currentId}
+        linkedIds={linkedInvoices.map((i) => i.id)}
+        onClose={() => setPickerOpen(false)}
+        onLinked={(message) => {
+          void loadInvoices(currentId);
+          onChanged(message);
+        }}
+      />
 
       <ContractFilePreview
         open={previewFile !== null}

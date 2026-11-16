@@ -7,6 +7,8 @@
  * 非时间类单位不生成 unit_mode 标签，展示退回 unit_code 中文，不拼「按㎡」。
  */
 import type {
+  InvoiceAmountCheck,
+  InvoiceStatus,
   ItemType,
   PricingNature,
   ProjectType,
@@ -202,6 +204,33 @@ export function effectiveStateLabel(state: string | null | undefined): string {
   if (!state) return '';
   return EFFECTIVE_STATE_LABELS[state] ?? state;
 }
+
+// ── 发票 ────────────────────────────────────────────────────
+/**
+ * 合同状态的中文**不在这里**：它跟着枚举放在 `src/domain/contract.ts`
+ * （`CONTRACT_STATUSES` + `contractStatusLabel`）。两处各写一份中文，
+ * 早晚一处先改，界面上就会出现「结算中 / 待结算」两个说法。
+ */
+
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  normal: '正常',
+  red: '冲红',
+};
+
+export function invoiceStatusLabel(s: InvoiceStatus | null | undefined): string {
+  if (!s) return '';
+  return INVOICE_STATUS_LABELS[s] ?? s;
+}
+
+/**
+ * 三项金额对不对得上。null 表示还没算（老数据）：这时不显示任何标记，
+ * 而不是默认说它"没问题"。
+ */
+export const INVOICE_AMOUNT_CHECK_TEXT: Record<InvoiceAmountCheck, string> = {
+  ok: '',
+  derived: '有一项是推算的',
+  mismatch: '三项差几分，待核',
+};
 
 export function missingReasonText(reason: string): string {
   if (reason === 'NO_VALID_PRICE') return '今天没有有效价';

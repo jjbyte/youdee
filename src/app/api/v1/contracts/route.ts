@@ -2,7 +2,7 @@ import { body, ok, requireUser, searchParams } from '@/server/http';
 import { dateParam, pageQuery } from '@/server/params';
 import { route } from '@/server/wrap';
 import { createContract, listContracts } from '@/server/services/contract.service';
-import { isContractCategory } from '@/domain/contract';
+import { isContractCategory, isContractStatus } from '@/domain/contract';
 
 /**
  * 合同台账。
@@ -27,6 +27,9 @@ export const GET = route(async (req) => {
   // 筛选条件脏了应该出全部结果，而不是一页空白让人以为合同没了
   const rawCategory = txt('category');
   const category = isContractCategory(rawCategory) ? rawCategory : null;
+  // 状态筛选：五态封闭枚举，认不出的按"不筛"处理（理由同上）
+  const rawStatus = txt('status');
+  const status = isContractStatus(rawStatus) ? rawStatus : null;
 
   return ok(
     await listContracts({
@@ -37,6 +40,7 @@ export const GET = route(async (req) => {
       customer: txt('customer'),
       project: txt('project'),
       category,
+      status,
       signedFrom: dateParam(sp, 'signed_from'),
       signedTo: dateParam(sp, 'signed_to'),
       createdFrom: dateParam(sp, 'created_from'),

@@ -1,5 +1,5 @@
 'use client';
-import type { ReactNode, ThHTMLAttributes, TdHTMLAttributes } from 'react';
+import type { ReactNode, Ref, ThHTMLAttributes, TdHTMLAttributes } from 'react';
 import { cx } from '@/lib/format';
 
 /** 表格外壳：1px 边框 + 8px 圆角 + 独立滚动容器 */
@@ -7,13 +7,23 @@ export function TableWrap({
   children,
   className,
   maxHeight,
+  scrollRef,
 }: {
   children: ReactNode;
   className?: string;
   maxHeight?: string;
+  /**
+   * 滚动容器本身。调用方要用它判断"右边还有没有列"（滚动提示），
+   * 或者把某一行滚进视野；`ref` 转不进来，所以单独开一个口子。
+   */
+  scrollRef?: Ref<HTMLDivElement>;
 }) {
   return (
-    <div className={cx('tbl-wrap', className)} style={maxHeight ? { maxHeight } : undefined}>
+    <div
+      ref={scrollRef}
+      className={cx('tbl-wrap', className)}
+      style={maxHeight ? { maxHeight } : undefined}
+    >
       {children}
     </div>
   );

@@ -49,6 +49,34 @@ export function formatMoney(
   return symbol ? `¥${s}` : s;
 }
 
+/**
+ * 十进制字符串直通格式化（**不经过 Number**）。
+ *
+ * 为什么不复用 formatMoney：那条路会 `Number()` 一次——`1900.10` 变成 `1900.1`，
+ * 靠 `toFixed(2)` 才补回两位小数；有效数字一多（numeric(14,2) 允许 14 位），
+ * 最后一位就可能被改掉。发票台账是要拿去跟税局核对的，一个字符都不能动，
+ * 所以这里纯字符串拼装：只补千分位、只补/截小数位，**不重新舍入**。
+ */
+export function formatDecimalString(
+  v: string | null | undefined,
+  opts: { decimals?: number; symbol?: boolean; empty?: string } = {},
+): string {
+  const { decimals = 2, symbol = false, empty = EM_DASH } = opts;
+  if (v === null || v === undefined) return empty;
+  const s = String(v).trim();
+  if (s === '') return empty;
+  const m = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(s);
+  // 不是纯十进制（含千分位、科学计数法、货币符号）就退回旧实现，别在这里猜
+  if (!m) return formatMoney(s, { decimals, symbol, empty });
+  const intPart = (m[2] ?? '0').replace(/^0+(?=\d)/, '');
+  const fracRaw = m[3] ?? '';
+  const frac = (fracRaw + '0'.repeat(decimals)).slice(0, decimals);
+  const isZero = /^0*$/.test(intPart) && (!frac || /^0*$/.test(frac));
+  const sign = m[1] === '-' && !isZero ? MINUS : '';
+  const body = decimals > 0 ? `${group(intPart)}.${frac}` : group(intPart);
+  return `${sign}${symbol ? '¥' : ''}${body}`;
+}
+
 /** 数量：整数不带小数点，非整数最多 2 位 */
 export function formatQty(v: string | number | null | undefined, empty: string = EM_DASH): string {
   const n = toNum(v);

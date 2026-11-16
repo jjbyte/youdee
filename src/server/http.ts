@@ -70,8 +70,12 @@ const ERROR_STATUS: Record<number, number> = {
   40901: 409, 40902: 409, 40903: 409, 40904: 409, 40905: 409, 40906: 409, 40907: 409,
   41301: 413, 41501: 415,
   42201: 422, 42202: 422, 42203: 422, 42204: 422, 42205: 422, 42206: 422, 42207: 422,
+  // 发票识别：没认出来（图片模糊 / 版式不支持 / 不是增值税发票）
+  42208: 422,
   42901: 429,
   50001: 500,
+  // 发票识别：服务侧问题。50202 没开通/欠费、50203 本次没结果、50204 超时
+  50202: 502, 50203: 502, 50204: 504,
 };
 
 /**
@@ -107,6 +111,15 @@ export function translatePgError(e: unknown): AppError | null {
       contracts_amount_nonneg: new AppError(40001, '合同金额不能为负数。', 400, { field: 'amount' }),
       contracts_title_not_blank: new AppError(40001, '合同名称不能为空。', 400, { field: 'title' }),
       contracts_company_not_blank: new AppError(40001, '公司名称不能为空。', 400, { field: 'company_name' }),
+      contracts_status_valid: new AppError(40001, '合同状态只能是签订中 / 履约中 / 结算中 / 已结算 / 已终止。', 400, {
+        field: 'status',
+      }),
+      invoices_status_valid: new AppError(40001, '发票状态只能是正常或冲红。', 400, { field: 'status' }),
+      invoices_status_source_valid: new AppError(50001, '发票状态来源非法，已拒绝保存。', 500),
+      invoices_amount_check_valid: new AppError(50001, '金额校验结论非法，已拒绝保存。', 500),
+      invoices_amount_range: new AppError(40001, '发票金额超出可表示范围（绝对值需小于 1 万亿）。', 400, {
+        field: 'total_amount',
+      }),
     };
     if (err.constraint && map[err.constraint]) return map[err.constraint]!;
     return new AppError(40001, '数据未通过完整性校验，请检查填写内容。', 400);
@@ -119,6 +132,14 @@ export function translatePgError(e: unknown): AppError | null {
       quotes_quote_no_version_key: '单号重复，请重试。',
       categories_sibling_unique: '同一层下已有同名分类。',
       price_tiers_pkey: '同一价格下阶梯起始数量重复。',
+      // 发票唯一键是 (invoice_code, invoice_no)：同一张票不能录两遍，
+      // 但不同发票代码下的同号票不会被误吞（纸质票的 8 位号码会重复）。
+      // 这句只用在拿不到具体代码/号码的兜底路径（正常路径见 invoice.service 的 duplicateHint，
+      // 会带上实际的一对号）。第二句是软删带来的真实场景：删票不腾号，
+      // 用户删掉录错的票再重录同一号码会撞上那张看不见的行，所以必须给出恢复路径。
+      invoices_code_no_key:
+        '这张票已经记过了（同一发票代码 + 号码）。要改就打开那张改；如果它已经被删除、列表里看不到，让管理员在「已删除」里找到它恢复。',
+      contract_invoices_pkey: '这张发票已经关联过这份合同了。',
     };
     const msg = (err.constraint && dup[err.constraint]) || '已存在相同记录。';
     return new AppError(40901, msg, 409);
@@ -137,7 +158,11 @@ export function translatePgError(e: unknown): AppError | null {
 /** 统一出口：把任何异常变成合规响应 */
 export function handleError(e: unknown): NextResponse {
   if (e instanceof AppError) {
-    return fail(e.code, e.message, e.httpStatus, e.extra?.detail, e.extra?.field, e.top);
+    // ERROR_STATUS 是错误码 → HTTP 状态码的唯一对照表。构造时显式给的 status 优先；
+    // 没给（用了默认 400）时按表兜底 —— 否则漏写一个 httpStatus，40301 就会回成 400，
+    // 前端按状态码分支的拦截（比如"没权限"的提示）全部失效。
+    const status = e.httpStatus === 400 ? (ERROR_STATUS[e.code] ?? e.httpStatus) : e.httpStatus;
+    return fail(e.code, e.message, status, e.extra?.detail, e.extra?.field, e.top);
   }
   const translated = translatePgError(e);
   if (translated) {

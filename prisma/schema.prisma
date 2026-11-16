@@ -52,6 +52,10 @@ model User {
   templatesCreated      QuoteTemplate[]  @relation("TemplateCreatedBy")
   contractsCreated      Contract[]       @relation("ContractCreatedBy")
   contractQuotesCreated ContractQuote[]  @relation("ContractQuoteCreatedBy")
+  /// 发票录入人（反向关系，Prisma 要求两端都声明）
+  createdInvoices       Invoice[]        @relation("InvoiceCreatedBy")
+  /// 合同↔发票关联的建立人
+  contractInvoices      ContractInvoice[] @relation("ContractInvoiceCreatedBy")
   logs                  PriceChangeLog[]
   notifications         Notification[]
 
@@ -101,6 +105,12 @@ model Contract {
   projectName  String?   @map("project_name") @db.VarChar(200)
   /// 合同分类：commercial 商业 / lease 租赁 / employment 雇佣。默认商业，老数据已回填
   category     String    @default("commercial") @db.VarChar(20)
+  /// 合同状态：negotiating 签订中 / performing 履约中 / settling 结算中 / settled 已结算 / terminated 已终止
+  ///
+  /// 存量一律 performing（业务方确认），新建默认 negotiating。状态码存英文、中文只在界面——
+  /// 理由同 category：以后加状态或改叫法不用动数据。
+  /// **写入路径只有一条**：PATCH /contracts/:id/status（见 invoice-spec §4.1）
+  status       String    @default("negotiating") @db.VarChar(20)
   /// 签订日期；未知时留空，不拿建单日冒充
   signedOn     DateTime? @map("signed_on") @db.Date
   /// 合同金额（元）；null = 未记录，不是 0
@@ -115,9 +125,11 @@ model Contract {
   createdByUser User?           @relation("ContractCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
   files         ContractFile[]
   quotes        ContractQuote[]
+  invoices      ContractInvoice[]
 
   @@index([signedOn(sort: Desc)])
   @@index([category])
+  @@index([status])
   @@index([deletedAt])
   @@index([createdAt(sort: Desc)])
   @@map("contracts")
@@ -164,6 +176,105 @@ model ContractQuote {
   @@id([contractId, quoteId])
   @@index([quoteId])
   @@map("contract_quotes")
+}
+
+/// 发票台账。一张票一行，字段以「财务能拿去对账」为准，不以「OCR 返回了什么」为准。
+///
+/// 三条不可让渡：
+///   1) 金额零浮点：三个金额列 numeric(14,2)，DTO 一律字符串（db.ts 已把 numeric 映射成 string）。
+///   2) 唯一键是 (invoice_code, invoice_no)：纸质票的 8 位号码在不同发票代码下会重复，
+///      只按号码判重会把两张真票当成一张吞掉。invoice_code 用**空串**而非 NULL 兜全电票
+///      —— 唯一索引对 NULL 不生效（多行 NULL 互不冲突）。
+///   3) status 与金额符号绑在一起：red → 三项负数，normal → 正数。改状态必须同时重定符号。
+model Invoice {
+  id               String    @id @default(uuid()) @db.Uuid
+  /// 发票号码：全电 20 位 / 纸质 8 位。规范化后只保留数字与大写字母
+  invoiceNo        String    @map("invoice_no") @db.VarChar(32)
+  /// 发票代码：纸质票 10/12 位；全电票与多数电子票为空 → 存空串，不存 NULL
+  invoiceCode      String    @default("") @map("invoice_code") @db.VarChar(20)
+  /// normal 正常 / red 冲红。与 deleted_at 正交：冲红是业务状态，删除是可见性
+  status           String    @default("normal") @db.VarChar(10)
+  /// 状态怎么来的：ocr 自动判定 / manual 人工改过。人工改过的不再被重传覆盖
+  statusSource     String    @default("ocr") @map("status_source") @db.VarChar(10)
+  /// 票种：OCR 的 SubType 原值（VatSpecialInvoice / VatElectronicInvoiceFull / …）
+  invoiceType      String    @default("Unknown") @map("invoice_type") @db.VarChar(40)
+  /// 票种中文（SubTypeDescription 原值），列表直接显示，避免前端维护映射表
+  invoiceTypeLabel String    @map("invoice_type_label") @db.VarChar(60)
+  /// 开票日期；OCR 认不出时为空，不拿上传日冒充
+  issuedOn         DateTime? @map("issued_on") @db.Date
+  buyerName        String    @default("") @map("buyer_name") @db.VarChar(200)
+  buyerTaxNo       String?   @map("buyer_tax_no") @db.VarChar(30)
+  sellerName       String    @default("") @map("seller_name") @db.VarChar(200)
+  sellerTaxNo      String?   @map("seller_tax_no") @db.VarChar(30)
+  /// 不含税金额（元）。冲红为负
+  amount           Decimal?  @db.Decimal(14, 2)
+  /// 税额（元）。冲红为负
+  taxAmount        Decimal?  @map("tax_amount") @db.Decimal(14, 2)
+  /// 价税合计（元）。冲红为负
+  totalAmount      Decimal?  @map("total_amount") @db.Decimal(14, 2)
+  /// ok / derived（由另两项推算）/ mismatch（|amount+tax-total| > 0.01）
+  amountCheck      String    @default("ok") @map("amount_check") @db.VarChar(10)
+  /// OCR 原始响应里与本票相关的那一段（jsonb）：口径变了能回溯，不必再花一次钱重识别
+  ocrRaw           Json?     @map("ocr_raw")
+  /// 腾讯云 RequestId：出问题时要拿它找腾讯云对账
+  ocrRequestId     String?   @map("ocr_request_id") @db.VarChar(64)
+  remark           String?   @db.Text
+  createdBy        String?   @map("created_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// 软删：票是凭据，误删可恢复；物理文件由周任务回收
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  createdByUser User?             @relation("InvoiceCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  files         InvoiceFile[]
+  contracts     ContractInvoice[]
+
+  @@unique([invoiceCode, invoiceNo])
+  @@index([invoiceNo])
+  @@index([issuedOn(sort: Desc)])
+  @@index([status])
+  @@index([deletedAt])
+  @@index([createdAt(sort: Desc)])
+  @@map("invoices")
+}
+
+/// 发票原件（PDF / JPG / PNG）。一个发票可挂多份；同一份物理文件可被多行引用。
+model InvoiceFile {
+  id           String   @id @default(uuid()) @db.Uuid
+  invoiceId    String   @map("invoice_id") @db.Uuid
+  /// local 本地磁盘（UPLOAD_DIR/invoices/…）| cos 腾讯云对象存储
+  storage      String   @default("local") @db.VarChar(10)
+  /// local 时是 UPLOAD_DIR 下的相对路径；cos 时是对象键（不含桶名）
+  storageKey   String   @map("storage_key") @db.VarChar(300)
+  url          String   @db.VarChar(1000)
+  originalName String   @map("original_name") @db.VarChar(200)
+  mime         String   @db.VarChar(120)
+  /// bigint：与 contract_files 同型，避免以后再改
+  sizeBytes    BigInt   @map("size_bytes")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  /// 物理回收要按 storage_key 反查引用数
+  @@index([storageKey])
+  @@map("invoice_files")
+}
+
+/// 合同 ↔ 发票。多对多：一张合同常挂多张进项票，一张票也可能被多个项目合同引用。
+model ContractInvoice {
+  contractId String   @map("contract_id") @db.Uuid
+  invoiceId  String   @map("invoice_id") @db.Uuid
+  createdBy  String?  @map("created_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  invoice  Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  user     User?    @relation("ContractInvoiceCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@id([contractId, invoiceId])
+  @@index([invoiceId])
+  @@map("contract_invoices")
 }
 
 /// 供应商。type 五值：online / factory / rental / freelancer / internal

@@ -102,6 +102,7 @@ tar -czf "$OUT" \
   --exclude=./pgdata \
   --exclude=./.pgtest \
   --exclude=./.workbuddy \
+  --exclude=./.tmp-shots \
   --exclude=./dist \
   --exclude=./.env \
   --exclude=./.env.local \

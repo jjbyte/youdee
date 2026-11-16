@@ -34,13 +34,17 @@ Thumbs.db
 coverage/
 .vitest/
 
-# 构建/联调期间的临时脚本（agent 产出，非交付物；文件保留在本地但不入库）
-.workbuddy/*.mjs
-.workbuddy/*.out.txt
-# 联调截图（UI 核对用的过程产物）
-.workbuddy/shots/
-# agent 的工作笔记：本地记录，不是代码也不是文档，不进公开仓库
-.workbuddy/memory/
+# agent 的工作区：临时脚本、联调截图、测试用 fixture（pdf/docx/xlsx）、工作笔记，
+# 全是过程产物，既不是代码也不是文档，整目录不入库。
+# 以前按后缀列黑名单（*.mjs / *.out.txt / shots/ / memory/），结果 fixtures 下的
+# 二进制样例差点跟着提交——按后缀枚举永远会漏一个。
+.workbuddy/
+# 三档视口验收截图（看过就删，不入库）
+.tmp-shots/
 
 # TS 增量编译缓存（每次构建都变，入库只会制造无意义的 diff）
 tsconfig.tsbuildinfo
+
+# look-and-fix 的截图与 dev 日志：看完就删，不进仓库
+.tmp-shots/
+.tmp-dev*.log

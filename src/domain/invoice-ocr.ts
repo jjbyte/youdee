@@ -10,8 +10,11 @@
  *      必须按 SubType 分组取。一把梭 `info.Code` 会让全电票全部变成"没有代码"的脏数据。
  *   3) 纯函数才能用固定 fixture 单测到"取错字段就红"。
  *
- * 收单范围：只收增值税发票（Type ∈ {3, 16}）。火车票/机票/定额票也能识别，
- * 但本台账要的是进项发票，混进来会污染"金额合计"。
+ * 收单范围：只收增值税发票、全电发票（Type 3 / 16），外加 **电子发票（铁路电子客票）**
+ * —— 它也是 Type 16（全电票大类），但字段集与全电发票完全不同，走单独的映射分支。
+ *
+ * 纸质火车票、机票行程单、定额发票、出租车票这些不是发票（是报销凭证），仍然拒收：
+ * 混进来会污染"金额合计"，而合计正是这张台账唯一要保证对的数。
  */
 import {
   applyDetectedSign,
@@ -23,9 +26,11 @@ import {
   parseIssuedOn,
   parseOcrMoney,
   reconcileAmounts,
+  toCents,
   type AmountCheck,
   type InvoiceStatus,
 } from './invoice-record';
+import { fmtAmount } from './money';
 
 /* ── SubType 分组表（务必按组取字段，不能混取）────────────────── */
 
@@ -47,6 +52,25 @@ export const VAT_ELECTRONIC_INFO_SUBTYPES = [
 
 /** 收单的票据大类：3 增值税发票 / 16 全电发票。其余一律拒收 */
 export const ACCEPTED_INVOICE_TYPES: readonly number[] = [3, 16];
+
+/**
+ * 电子发票（铁路电子客票）的 SubType。
+ *
+ * 它属于 Type 16（全电票大类），但 **`SingleInvoiceInfos.ElectronicTrainTicketFull`
+ * 是另一个结构体**：没有 `Code`、没有 `Seller`、`Fare` 与 `Total` 是两个不同的数。
+ * 所以不能塞进 `VAT_ELECTRONIC_INFO_SUBTYPES` 了事 —— 那样取出来的字段会全错。
+ */
+export const RAIL_TICKET_SUBTYPE = 'ElectronicTrainTicketFull';
+
+/**
+ * 铁路电子客票的销售方。
+ *
+ * 这个结构体里**没有 Seller 字段**（票面只印「购买方信息」和开票人），
+ * 而台账里销售方是必填的（空着就不知道钱付给谁了）。
+ * 中国铁路的电子客票统一由中国国家铁路集团有限公司（原中国铁路总公司）作为
+ * 开票主体，所以这里给一个固定值，界面上可以在抽屉里改。
+ */
+export const RAIL_SELLER_NAME = '中国铁路集团有限公司';
 
 export function isVatInvoiceInfoGroup(subType: string): boolean {
   return (VAT_INVOICE_INFO_SUBTYPES as readonly string[]).includes(subType);
@@ -134,7 +158,7 @@ export interface MappedInvoice {
 }
 
 export interface MappedSkip {
-  /** 42208 = 没认出来 / 不是增值税发票；41501 = 票种不支持 */
+  /** 42208 = 没认出来 / 不是发票；41501 = 票种不支持（能认出但不是台账收的） */
   code: 42208 | 41501;
   page: number;
   subType: string;
@@ -184,7 +208,9 @@ function pickInfo(
       const hit = asRec(container[subTypeHint]);
       if (hit) return { subType: subTypeHint, info: hit };
     }
-    for (const key of [...VAT_INVOICE_INFO_SUBTYPES, ...VAT_ELECTRONIC_INFO_SUBTYPES]) {
+    // 兜底扫描要连铁路客票一起看：SubType 偶发缺失时，只按增值税那两组找
+    // 会把一张铁路票判成「没认出票据信息」。
+    for (const key of [...VAT_INVOICE_INFO_SUBTYPES, ...VAT_ELECTRONIC_INFO_SUBTYPES, RAIL_TICKET_SUBTYPE]) {
       const hit = asRec(container[key]);
       if (hit) return { subType: key, info: hit };
     }
@@ -194,12 +220,126 @@ function pickInfo(
 
 /* ── 单张映射 ─────────────────────────────────────────────── */
 
+/* ── 铁路电子客票（Type 16 的另一套字段）──────────────────────── */
+
+/** 含税合计 − 税额 = 不含税金额；任一缺失返回 null（不猜） */
+function subtractMoney(total: string | null, tax: string | null): string | null {
+  const t = toCents(total);
+  const x = toCents(tax);
+  if (t === null || x === null) return null;
+  const diff = t - x;
+  return diff < 0n ? null : fmtAmount(diff);
+}
+
+/**
+ * `ElectronicTrainTicketFull`（电子发票·铁路电子客票）→ 一行的入库字段。
+ *
+ * 与增值税那条路的四处不同，每一处都能让数算错：
+ *   1. **`Fare` 是含税票价，`Total` 是金额**。票面上乘客看到的「票价」已经含着税额，
+ *      拿 `Total` 当价税合计会让合计少算一张票的税额；反过来拿 `Fare` 当不含税
+ *      会让合计多算一次税。所以：价税合计取 `Fare`，不含税取 `Total`（没有就用
+ *      `Fare − Tax` 推），三个数再交给 `reconcileAmounts` 自校验。
+ *   2. **结构体里没有 `Seller`**：票面只印购买方与开票人。销售方按铁路的
+ *      统一开票主体落库（`RAIL_SELLER_NAME`），入账后可以在抽屉里改。
+ *   3. **没有 `Code`**：铁路电子客票是 20 位全电号码，代码存空串，
+ *      与全电票共用同一条判重口径（代码为空时按号码匹配）。
+ *   4. 没有 `PretaxAmount` / `SubTotal` / `Title`，日期字段叫 `Date`（开票日期），
+ *      不是 `DateGetOn`（乘车日期）—— 后者是行程时间，拿它当开票日期会让
+ *      「按开票日期查」这一整列错位。
+ */
+function mapRailInvoice(args: {
+  info: Record<string, unknown>;
+  page: number;
+  subType: string;
+  type: number | null;
+  label: string;
+}): MapOneResult {
+  const { info, page, subType, type, label } = args;
+  const warnings: string[] = [];
+
+  const invoiceNo = normalizeInvoiceNo(pickStr(info, 'Number'));
+  if (invoiceNo === null) {
+    return { ok: false, skip: { code: 42208, page, subType, type, reason: 'invoice_no_unreadable' } };
+  }
+
+  const rawDate = pickStr(info, 'Date');
+  const issuedOn = parseIssuedOn(rawDate);
+  if (!issuedOn) {
+    warnings.push(
+      rawDate
+        ? `开票日期「${normalizeText(rawDate)}」没认出格式，先空着，请在详情里补上`
+        : '没有识别到开票日期，请在详情里补上',
+    );
+  }
+
+  const buyerName = normalizeText(pickStr(info, 'Buyer'));
+  const buyerTaxNo = normalizeTaxNo(pickStr(info, 'BuyerTaxID'));
+
+  const fareRaw = pickStr(info, 'Fare');
+  const totalRaw = pickStr(info, 'Total');
+  const taxRaw = pickStr(info, 'Tax');
+
+  const fare = parseOcrMoney(fareRaw);
+  const pretaxField = parseOcrMoney(totalRaw);
+  const taxAmount = parseOcrMoney(taxRaw);
+
+  // 票价优先（含税）。票价缺失才退回「金额」字段——那种情况下这个数到底是含税
+  // 还是不含税，接口没说清，所以只在没有票价时用，并留一条提示让人核对。
+  const totalAmount = fare ?? pretaxField;
+  if (!fare && pretaxField) warnings.push('没有票价字段，价税合计暂用「金额」，请核对一下是不是含税数');
+
+  const amount =
+    pretaxField !== null && (fare === null || pretaxField !== fare)
+      ? pretaxField
+      : subtractMoney(totalAmount, taxAmount);
+  if (totalAmount && taxAmount && amount === null) {
+    warnings.push('票价小于税额，不含税金额先空着，请核对');
+  }
+
+  const detected = detectInvoiceStatus({
+    title: pickStr(info, 'TypeOfVoucher'),
+    typeLabel: label,
+    remark: pickStr(info, 'Remark'),
+    amounts: { amount: null, taxAmount: taxRaw || null, totalAmount: (fareRaw || totalRaw) || null },
+  });
+
+  const reconciled = reconcileAmounts({ amount, taxAmount, totalAmount });
+  const signed = applyDetectedSign(reconciled.amounts, detected.status);
+  if (reconciled.warning) warnings.push(reconciled.warning);
+  if (signed.warning) warnings.push(signed.warning);
+
+  return {
+    ok: true,
+    invoice: {
+      invoiceNo,
+      invoiceCode: '',
+      issuedOn,
+      buyerName,
+      buyerTaxNo,
+      sellerName: RAIL_SELLER_NAME,
+      sellerTaxNo: null,
+      amount: signed.amounts.amount,
+      taxAmount: signed.amounts.taxAmount,
+      totalAmount: signed.amounts.totalAmount,
+      amountCheck: reconciled.check,
+      status: detected.status,
+      statusReason: detected.reason,
+      invoiceType: subType,
+      invoiceTypeLabel: label || '电子发票（铁路电子客票）',
+      page,
+      raw: { subType, ...info },
+      warnings,
+    },
+  };
+}
+
 /**
  * 一个 `MixedInvoiceItems[]` 元素 → 一行的入库字段。
  *
  * 拒收路径（都不落库，直接返回原因）：
- *   - `Type` 不在 {3,16} → 42208「这张不是增值税发票」（火车票 / 定额票 / 机票混不进来）
- *   - `SubType` 不在分组表里 → 41501（增值税卷票、销货清单等：能识别但不是我们要的进项票）
+ *   - `Type` 不在 {3,16} → 42208「这张不是发票」（纸质火车票 / 定额票 / 出租车票混不进来）
+ *   - `SubType` 既不是增值税两组、也不是铁路电子客票 → 41501（增值税卷票、销货清单、
+ *     航空运输电子客票行程单等：能识别，但不是本台账收的票种）
  *   - 号码规范化不过 → 42208（认不出号码的票入库后永远搜不到，等于占位）
  *   - 识别结果自带错误码（Code !== 'OK'）→ 42208
  */
@@ -226,11 +366,30 @@ export function mapInvoiceItem(item: unknown): MapOneResult {
     return { ok: false, skip: { code: 42208, page, subType: subTypeHint, type, reason: 'no_invoice_info' } };
   }
   const subType = picked.subType;
+  const info = picked.info;
+
+  /**
+   * 票种中文名。放在这里是因为红票判定与铁路客票分支都要用它，
+   * 而两处必须是**同一个值** —— 各算一遍早晚会分叉。
+   */
+  const label = normalizeText(
+    (typeof it?.SubTypeDescription === 'string' ? it.SubTypeDescription : '')
+      || (typeof it?.TypeDescription === 'string' ? it.TypeDescription : ''),
+  );
+
+  /*
+   * 铁路电子客票必须在分组校验**之前**分出去：它是 Type 16，但既不属于
+   * `VatInvoiceInfo` 也不属于 `VatElectronicInfo`，落到下面那道校验里会被
+   * 当成"不支持的子票种"拒掉（41501）—— 而那正是上一版收不到铁路票的原因。
+   */
+  if (subType === RAIL_TICKET_SUBTYPE) {
+    return mapRailInvoice({ info, page, subType, type, label });
+  }
+
   if (!isVatInvoiceInfoGroup(subType) && !isVatElectronicInfoGroup(subType)) {
     return { ok: false, skip: { code: 41501, page, subType, type, reason: 'unsupported_sub_type' } };
   }
 
-  const info = picked.info;
   const warnings: string[] = [];
 
   // ① 号码：一定是 `Number`。`ElectronicFullNumber` 只是纸质全电票的辅助字段，
@@ -276,13 +435,11 @@ export function mapInvoiceItem(item: unknown): MapOneResult {
   // ⑥ 红票判定要在符号归一**之前**，而且必须用**原始文本**——
   //    parseOcrMoney 只保数值、符号由 signAmounts 决定，拿清洗后的数去判永远是正数，
   //    红票会被当成正常票入账（而负号是 OCR 唯一能给出的红票线索）。
-  const label = normalizeText(
-    (typeof it?.SubTypeDescription === 'string' ? it.SubTypeDescription : '')
-      || (typeof it?.TypeDescription === 'string' ? it.TypeDescription : ''),
-  );
   const detected = detectInvoiceStatus({
     title: pickStr(info, 'Title'),
     typeLabel: label,
+    // 红字发票的红冲信息常常只写在备注里（标题仍叫「电子发票（普通发票）」）
+    remark: pickStr(info, 'Remark'),
     amounts: { amount: amountRaw || null, taxAmount: taxRaw || null, totalAmount: totalRaw || null },
   });
 

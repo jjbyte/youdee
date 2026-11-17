@@ -53,13 +53,20 @@ export function hasInvoiceFilter(f: InvoiceFilters): boolean {
   );
 }
 
-/** 小筛选项：标签在上、控件在下，与合同页、供应商页同一套节奏 */
-function label(text: string, node: ReactNode, hint?: string) {
+/**
+ * 小筛选项：标签在上、控件在下，与合同页、供应商页同一套节奏。
+ *
+ * **刻意只允许两行（标签 + 控件），不带第三行说明**。整条筛选栏是
+ * `items-end` 对齐的：哪个格子多一行说明，它自己的控件就被顶高一截，
+ * 底边对齐之后呈现出来的效果就是"这个下拉框比旁边那排输入框高了两毫米"——
+ * 用户说不清哪里不对，只觉得歪。需要解释的口径（比如"含已删除时合计无对账意义"）
+ * 写在结果区那边更合适：那里能看到合计，话才有着落。
+ */
+function label(text: string, node: ReactNode) {
   return (
     <label className="flex flex-col gap-[var(--space-1)]">
       <span className="t-2xs t-3">{text}</span>
       {node}
-      {hint ? <span className="t-2xs t-3">{hint}</span> : null}
     </label>
   );
 }
@@ -162,7 +169,6 @@ export function InvoiceFiltersBar({
             <option value="linked">已挂合同</option>
             <option value="unlinked">还没挂</option>
           </Select>,
-          '挂上合同才对得上账',
         )}
         {isAdmin
           ? label(
@@ -176,9 +182,6 @@ export function InvoiceFiltersBar({
                 <option value="live">在用</option>
                 <option value="deleted">已删除</option>
               </Select>,
-              /* 切到「已删除」后合计会把已删的票一起算进来——这句话放在下拉旁边，
-                 比只在上方统计卡解释更早一秒被看到 */
-              '含已删除时合计无对账意义',
             )
           : null}
 

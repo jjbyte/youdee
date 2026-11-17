@@ -59,5 +59,9 @@ export function previewBlockedHint(ext: string | null | undefined): string {
   if (e === 'xls') {
     return '老版 Excel（.xls）无法在线预览。下载后用 Excel 打开、另存为 .xlsx 再上传，就能在这里直接看。';
   }
+  if (e === 'ofd') {
+    return 'OFD 是国标版式文件，浏览器打不开。下载后用 OFD 阅读器（或点开电子税务局里的发票）看；'
+      + '要在这里直接看，请在开票方或电子税务局另存一份 PDF 再补挂上来。';
+  }
   return '这种格式不支持在页面里预览，请下载后用本地软件打开。';
 }

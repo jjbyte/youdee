@@ -16,8 +16,8 @@ export const ATTACH_MAX_BYTES = 20 * 1024 * 1024;
 /** OCR 那条链路的原始字节上限（base64 后 ≤10MB 折算回来） */
 export const OCR_MAX_BYTES = 7.5 * 1024 * 1024;
 
-/** 服务端只收这三种；docx/xlsx 不是发票原件，ofd 得用户自己另存 */
-const INVOICE_EXT_RE = /\.(pdf|jpe?g|png)$/i;
+/** 与服务端 `INVOICE_ACCEPT_EXTS` 同一份名单：docx/xlsx 不是发票原件，ofd 是（数电票） */
+const INVOICE_EXT_RE = /\.(pdf|ofd|jpe?g|png)$/i;
 
 export type AttachCheck = { ok: true } | { ok: false; reason: string };
 
@@ -26,7 +26,7 @@ export function checkInvoiceAttach(name: string, size: number): AttachCheck {
   if (!INVOICE_EXT_RE.test(name)) {
     return {
       ok: false,
-      reason: `「${name}」不是 PDF / JPG / PNG。OFD 请先打开发票再「另存为 PDF」。`,
+      reason: `「${name}」不是 PDF / OFD / JPG / PNG。Word / Excel 不是发票原件，GIF / WEBP 请转成 JPG。`,
     };
   }
   if (size <= 0) {

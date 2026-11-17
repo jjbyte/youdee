@@ -330,3 +330,133 @@ describe('整份响应（多页 PDF / 混贴）', () => {
     expect(mapRecognizeResult({ MixedInvoiceItems: 'nope' }).items).toEqual([]);
   });
 });
+
+/**
+ * 电子发票（铁路电子客票）：Type 16，但 `SingleInvoiceInfos.ElectronicTrainTicketFull`
+ * 是另一套字段。这三条 fixture 覆盖三种真会遇到的形态：
+ *   ① 票价 > 金额（正常一张：含税价与不含税金额都在）；
+ *   ② 只有票价（多数字段缺失，靠「票价 − 税额」推不含税）；
+ *   ③ 票价为负（退票冲红，接口不给红票标记，只能看负号）。
+ */
+const RAIL = {
+  Code: 'OK',
+  Type: 16,
+  Page: 1,
+  SubType: 'ElectronicTrainTicketFull',
+  SubTypeDescription: '电子发票（铁路电子客票）',
+  SingleInvoiceInfos: {
+    ElectronicTrainTicketFull: {
+      TypeOfVoucher: '电子发票（铁路电子客票）',
+      ElectronicTicketNum: '26179123456789012345',
+      Number: '26339123456789012345',
+      Date: '2026年11月02日',
+      // 诱饵：乘车日期与开票日期不是同一天，取错字段「按开票日期查」就整列错位
+      DateGetOn: '2026年11月05日',
+      TimeGetOn: '08:32',
+      StationGetOn: '上海虹桥',
+      StationGetOff: '南京南',
+      TrainNumber: 'G7002',
+      Seat: '二等座',
+      SeatNumber: '05车12A',
+      UserName: '王小明',
+      UserID: '320101199001011234',
+      Fare: '109.00',
+      Total: '100.00',
+      Tax: '9.00',
+      TaxRate: '9%',
+      Buyer: '有底文化传播（上海）有限公司',
+      BuyerTaxID: '91310115MA1K38XQ2F',
+      // 诱饵：结构体里没有 Seller，塞一个也不该被采信
+      Seller: '不该被取到的销售方',
+    },
+  },
+};
+
+describe('电子发票（铁路电子客票）', () => {
+  const r = mapInvoiceItem(RAIL);
+
+  it('能映射成功，且票种落在铁客票这一支', () => {
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('should map');
+    expect(r.invoice.invoiceType).toBe('ElectronicTrainTicketFull');
+    expect(r.invoice.invoiceTypeLabel).toBe('电子发票（铁路电子客票）');
+  });
+
+  it('号码取 Number（20 位全电号），代码为空串', () => {
+    if (!r.ok) throw new Error('should map');
+    expect(r.invoice.invoiceNo).toBe('26339123456789012345');
+    expect(r.invoice.invoiceCode).toBe('');
+  });
+
+  it('开票日期取 Date，不是 DateGetOn', () => {
+    if (!r.ok) throw new Error('should map');
+    expect(r.invoice.issuedOn).toBe('2026-11-02');
+  });
+
+  it('购买方照取，销售方默认中国铁路集团有限公司（结构体没有 Seller）', () => {
+    if (!r.ok) throw new Error('should map');
+    expect(r.invoice.buyerName).toBe('有底文化传播（上海）有限公司');
+    expect(r.invoice.buyerTaxNo).toBe('91310115MA1K38XQ2F');
+    expect(r.invoice.sellerName).toBe('中国铁路集团有限公司');
+    expect(r.invoice.sellerName).not.toBe('不该被取到的销售方');
+    expect(r.invoice.sellerTaxNo).toBeNull();
+  });
+
+  it('票价为含税金额：价税合计 = Fare，不含税 = Total', () => {
+    if (!r.ok) throw new Error('should map');
+    expect(r.invoice.totalAmount).toBe('109.00');
+    expect(r.invoice.taxAmount).toBe('9.00');
+    expect(r.invoice.amount).toBe('100.00');
+    // 三项自洽（100 + 9 = 109），不标黄、不报警
+    expect(r.invoice.amountCheck).toBe('ok');
+    expect(r.invoice.warnings).toEqual([]);
+  });
+
+  it('只有票价时按「票价 − 税额」推不含税，仍自洽', () => {
+    const onlyFare = {
+      ...RAIL,
+      SingleInvoiceInfos: {
+        ElectronicTrainTicketFull: { ...RAIL.SingleInvoiceInfos.ElectronicTrainTicketFull, Total: '' },
+      },
+    };
+    const m = mapInvoiceItem(onlyFare);
+    if (!m.ok) throw new Error('should map');
+    expect(m.invoice.totalAmount).toBe('109.00');
+    expect(m.invoice.amount).toBe('100.00');
+    // 推出来的数落进三项里而不是凭空补位，所以自洽结论是 ok（不会每张票都报警）
+    expect(m.invoice.amountCheck).toBe('ok');
+    expect(m.invoice.warnings).toEqual([]);
+  });
+
+  it('票价为负（退票）→ 判冲红并三项取负', () => {
+    const refund = {
+      ...RAIL,
+      SingleInvoiceInfos: {
+        ElectronicTrainTicketFull: {
+          ...RAIL.SingleInvoiceInfos.ElectronicTrainTicketFull,
+          Fare: '-109.00',
+          Tax: '-9.00',
+          Total: '-100.00',
+        },
+      },
+    };
+    const m = mapInvoiceItem(refund);
+    if (!m.ok) throw new Error('should map');
+    expect(m.invoice.status).toBe('red');
+    expect(m.invoice.statusReason).toBe('amount_negative');
+    expect(m.invoice.totalAmount).toBe('-109.00');
+    expect(m.invoice.amountCheck).toBe('ok');
+  });
+
+  it('没有号码 → 42208（不落一行搜不到的票）', () => {
+    const noNo = {
+      ...RAIL,
+      SingleInvoiceInfos: { ElectronicTrainTicketFull: { Fare: '109.00', Tax: '9.00' } },
+    };
+    const m = mapInvoiceItem(noNo);
+    expect(m.ok).toBe(false);
+    if (m.ok) throw new Error('should reject');
+    expect(m.skip.code).toBe(42208);
+    expect(m.skip.reason).toBe('invoice_no_unreadable');
+  });
+});

@@ -6,7 +6,7 @@ import { getInvoiceFileRef, openInvoiceFileStream } from '@/server/services/invo
 import { presignCosDownload } from '@/server/services/storage.service';
 
 /**
- * 发票原件：PDF / JPG / PNG 内联预览。
+ * 发票原件：PDF / OFD / JPG / PNG 内联返回（OFD 浏览器多半打不开，会落到下载）。
  *
  * 两种存放位置两种取法：
  *   - `local`：由本路由把字节**流式**吐出（同源、带 Cookie，前端 `<img>`/`<iframe>` 直接用）。

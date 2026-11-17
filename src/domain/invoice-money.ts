@@ -184,14 +184,20 @@ export function isNegativeAmountText(v: string | null | undefined): boolean {
  * **没有红票标记字段**（`RedLetterInvoiceMark` 只在 `VatInvoiceVerify` 的结构体里）。
  * 所以只能：
  *   1. 三项金额任一为负 → red（用的是**原始文本**，见 `isNegativeAmountText`）
- *   2. 票面名称 / 票种描述含「红字」「红冲」→ red
+ *   2. 票面名称 / 票种描述 / **备注** 含「红字」「红冲」「冲红」→ red
  *   3. 其它 → normal
+ *
+ * 为什么要把备注也算进来：数电红字发票的票面标题常常仍是「电子发票（普通发票）」，
+ * 红字信息只出现在备注里（如「被红冲蓝字数电发票号码：xxx」）。只看标题会漏判，
+ * 而漏判的代价是合计里多进一笔正数。
  *
  * 判定错的代价是合计偏大或偏小，所以入库后必须让人能改（`status_source='manual'`）。
  */
 export function detectInvoiceStatus(input: {
   title?: string | null;
   typeLabel?: string | null;
+  /** 票面备注。红字发票的红冲信息常只在这里出现 */
+  remark?: string | null;
   /** OCR 原始文本或已清洗的金额都可以：负号按文本判 */
   amounts: InvoiceAmounts;
 }): DetectedStatus {
@@ -200,8 +206,10 @@ export function detectInvoiceStatus(input: {
   );
   if (anyNegative) return { status: 'red', reason: 'amount_negative' };
 
-  const text = `${input.title ?? ''}${input.typeLabel ?? ''}`;
-  if (text.includes('红字') || text.includes('红冲')) return { status: 'red', reason: 'title_red' };
+  const text = `${input.title ?? ''}${input.typeLabel ?? ''}${input.remark ?? ''}`;
+  if (text.includes('红字') || text.includes('红冲') || text.includes('冲红')) {
+    return { status: 'red', reason: 'title_red' };
+  }
 
   return { status: 'normal', reason: 'heuristic_normal' };
 }

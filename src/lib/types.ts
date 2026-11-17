@@ -789,6 +789,21 @@ export interface InvoiceUploadExtra {
   reason?: string;
 }
 
+/**
+ * 上传时识别出红冲票，而系统里已有同号发票（在用、仍为「正常」）。
+ *
+ * 服务端**不会**自动改那张的状态：冲红会翻转三项金额、直接改「合计」。
+ * 它把判断和依据一起交出来，由人在弹窗里点一下。
+ */
+export interface InvoiceUploadRedHint {
+  invoiceId: string;
+  invoiceNo: string;
+  totalAmount: string | null;
+  currentStatus: InvoiceStatus;
+  /** 判定依据（人话）：票面金额是负数 / 票面有「红字」字样 */
+  basis: string;
+}
+
 export interface InvoiceUploadResult {
   /** 落库的那张（duplicated 时是已存在的那张） */
   item: InvoiceDetail;
@@ -797,6 +812,8 @@ export interface InvoiceUploadResult {
   /** true = 命中去重但该票原先没原件，已把这份原件补上 */
   attachedFile: boolean;
   extraItems: InvoiceUploadExtra[];
+  /** 需要人确认「要不要把已有那张标成冲红」的候选，通常为空 */
+  redHints: InvoiceUploadRedHint[];
   /** 例：'金额三项差 0.02 元，已标黄' */
   warnings: string[];
 }

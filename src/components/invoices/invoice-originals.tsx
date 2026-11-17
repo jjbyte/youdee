@@ -90,7 +90,7 @@ export function InvoiceOriginals({
             <input
               ref={inputRef}
               type="file"
-              accept=".pdf,.jpg,.jpeg,.png"
+              accept=".pdf,.ofd,.jpg,.jpeg,.png"
               className="sr-only"
               aria-label="选择要补的发票原件"
               onChange={(e) => {

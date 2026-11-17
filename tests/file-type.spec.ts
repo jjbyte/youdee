@@ -282,3 +282,30 @@ describe('detectFileTypePartial —— 大文件只看头尾', () => {
     expect(detectFileTypePartial(Buffer.from('hello world'), null, 11)).toMatchObject({ ok: false });
   });
 });
+
+/**
+ * OFD（国标版式文档）也是 ZIP，判据只有一条：根目录有 `OFD.xml`。
+ *
+ * 这三条钉的是"别把它当 Office 拒掉、也别把普通压缩包当 OFD 收下"：
+ * 前者会让数电票传不上来，后者会让任意 zip 混进发票原件里。
+ */
+describe('detectFileType —— OFD 版式文档', () => {
+  it('根目录有 OFD.xml → 判成 ofd', () => {
+    const buf = makeZip(['OFD.xml', 'Doc_0/Document.xml', 'Doc_0/Pages/Page_0/Content.xml']);
+    expect(detectFileType(buf)).toMatchObject({ ok: true, type: { ext: 'ofd', mime: 'application/ofd' } });
+  });
+
+  it('文件名的层级不对（Doc_0/OFD.xml）就不算 —— 入口必须在根目录', () => {
+    const buf = makeZip(['Doc_0/OFD.xml', 'Doc_0/Document.xml']);
+    expect(detectFileType(buf)).toMatchObject({ ok: false, code: 'unknown' });
+  });
+
+  it('没有 OFD.xml 的普通压缩包仍然被拒', () => {
+    expect(detectFileType(makeZip(['a.txt', 'b.jpg']))).toMatchObject({ ok: false, code: 'unknown' });
+  });
+
+  it('大文件只看头尾时也能认出 OFD（中央目录在尾部）', () => {
+    const buf = makeZip(['OFD.xml', 'Doc_0/Document.xml']);
+    expect(detectFileTypePartial(buf, buf, buf.length)).toMatchObject({ ok: true, type: { ext: 'ofd' } });
+  });
+});

@@ -16,7 +16,7 @@ import { InlineLoading, Note } from '@/components/ui/states';
  *     真要换一把权限更小的子账号密钥，才在下面填。
  *
  * 界面必须说清两件做不到的事（写死在文案里，不留给客户经理口头解释）：
- *  · OFD 数电票传不上来（识别接口不收 OFD，先另存 PDF）；
+ *  · OFD 只认数电票的**第一页**（多页 OFD 会被截断）；
  *  · 识别只保证"图上有这些字"，**不判断真伪**。
  */
 export function OcrSettingsForm() {
@@ -187,8 +187,8 @@ export function OcrSettingsForm() {
         假票、废票照样会进台账。真伪核验要接税务的查验接口，这一版没做。
       </Note>
       <Note tone="neutral">
-        只收 PNG / JPG / PDF，单份识别上限约 7.5MB（超过的会被拦下，先压缩或拆页）。
-        OFD 数电票请先在电子税务局另存为 PDF 再传。
+        收 PNG / JPG / PDF / OFD，单份识别上限约 7.5MB（超过的会被拦下，先压缩或拆页）。
+        OFD 只识别第一页——多页 OFD 请另存成 PDF，否则后面的页不会入账。
       </Note>
       <Note tone="neutral">
         红票（冲红）自动判定只能靠启发式：识别接口不返回红票标记。所以界面会一直显示「含冲红 N 张」，

@@ -45,6 +45,23 @@ export interface UploadExtraItem {
   reason?: string;
 }
 
+/**
+ * 这次上传识别出一张**红冲票**，而系统里已经有同号的发票（在用、且当前是「正常」）。
+ *
+ * 为什么不在服务端直接把那张改成冲红：改状态会把三项金额翻成负数，是**会改合计**的动作。
+ * 识别又不保证对（红票只有启发式线索：负号、票面/备注里的「红字」字样），
+ * 所以让人看见这条判断、由他点一下，比替他改账安全。没点的话什么都不变。
+ */
+export interface UploadRedHint {
+  invoice_id: string;
+  invoice_no: string;
+  /** 库里那张的价税合计，用来确认「说的是不是同一张票」 */
+  total_amount: string | null;
+  current_status: 'normal' | 'red';
+  /** 判定依据（人话），让用户自己判断这个红票结论可信不可信 */
+  basis: string;
+}
+
 export interface UploadResult {
   /** 落库的那张（或本来就存在的那张） */
   item: InvoiceDetailDTO;
@@ -54,7 +71,16 @@ export interface UploadResult {
   attached_file: boolean;
   /** 同一文件里还识别出的其它票 */
   extra_items: UploadExtraItem[];
+  /** 需要人确认「要不要把已有那张标成冲红」的候选，通常为空 */
+  red_hints: UploadRedHint[];
   warnings: string[];
+}
+
+/** 红票判定依据 → 人话。枚举值是我们的（`title_red` / `amount_negative`），不来自腾讯云 */
+function redBasisText(reason: string): string {
+  return reason === 'amount_negative'
+    ? '票面金额是负数'
+    : '票面上有「红字 / 红冲 / 冲红」字样';
 }
 
 function insertInvoiceSql(): string {
@@ -125,7 +151,7 @@ export async function persistUpload(opts: {
     if (why) {
       throw new AppError(
         42208,
-        '这张不是增值税发票（火车票 / 机票 / 定额票不在台账范围内）。本台账只收增值税专用发票、普通发票与全电发票。',
+        '这张不是发票（纸质火车票、机票行程单、定额发票、出租车票这些是报销凭证）。本台账收增值税专用/普通/全电发票，以及电子发票（铁路电子客票）。',
         422,
         { field: 'file' },
       );
@@ -134,7 +160,7 @@ export async function persistUpload(opts: {
     if (unsupported) {
       throw new AppError(
         42208,
-        '这张票能识别，但不是本台账收的票种（增值税卷票 / 销货清单 / 机动车发票之类）。换一张专票或普票，或用「手工录入」先把票号记下来。',
+        '这张票能识别，但不是本台账收的票种（增值税卷票 / 销货清单 / 航空运输电子客票行程单之类）。换一张专票、普票或铁路电子客票，或用「手工录入」先把票号记下来。',
         422,
         { field: 'file' },
       );
@@ -157,6 +183,9 @@ export async function persistUpload(opts: {
       let firstDuplicated = false;
       let firstAttached = false;
       const extra: UploadExtraItem[] = [];
+      const redHints: UploadRedHint[] = [];
+      /** 新插入的红票号码：入库后要提示人「这一张是按冲红记的」 */
+      const insertedRed: string[] = [];
       let referenced = 0;
 
       for (let i = 0; i < outcome.items.length; i += 1) {
@@ -165,8 +194,18 @@ export async function persistUpload(opts: {
         // 原来这里是 `invoice_code = $1 AND invoice_no = $2` 全等：一次没认出代码存成 ''，
         // 重传时认出代码就会新建一行——同一张票两条记录，金额与税额全部虚增，且没有提示。
         // 只按号码取候选（走 invoices_invoice_no_idx），再用领域函数筛，两边就不会分叉。
-        const existing = await client.query<{ id: string; invoice_code: string; invoice_no: string }>(
-          `SELECT id, invoice_code, invoice_no
+        const existing = await client.query<{
+          id: string;
+          invoice_code: string;
+          invoice_no: string;
+          status: string;
+          total_amount: string | null;
+          deleted_at: Date | null;
+        }>(
+          /* `status` / `total_amount` / `deleted_at` 只为「红冲确认」而取：
+             红票要不要提示人改状态，取决于库里那张现在是正常还是已冲红、有没有被删。
+             多取三列不额外扫表，却省掉一次事务内二次查询。 */
+          `SELECT id, invoice_code, invoice_no, status, total_amount, deleted_at
              FROM invoices
             WHERE invoice_no = $1
             ORDER BY (invoice_code = $2) DESC, created_at`,
@@ -178,6 +217,23 @@ export async function persistUpload(opts: {
         );
 
         if (hit) {
+          /*
+           * 识别成红冲票、而同号发票已经在库且仍是「正常」→ 攒一条待确认提示。
+           *
+           * 不在这里直接把 hit 改成红冲：那会把三项金额翻成负数、改掉「合计」这个
+           * 对账数字，而红票判定只是启发式（负号 / 票面文字）。让人看见并点一下，
+           * 比替他改账安全；他不点，这里就什么都不变。
+           * 已经删掉的、本来就是红票的都不问——前者不在台账里，后者已经是答案。
+           */
+          if (m.status === 'red' && hit.status === 'normal' && !hit.deleted_at) {
+            redHints.push({
+              invoice_id: hit.id,
+              invoice_no: hit.invoice_no,
+              total_amount: hit.total_amount,
+              current_status: 'normal',
+              basis: redBasisText(m.statusReason),
+            });
+          }
           // 命中去重：只在"这张票还没有原件"时补挂；否则丢弃这份原件
           const n = await fileCountInTx(client, hit.id);
           let attached = false;
@@ -204,6 +260,8 @@ export async function persistUpload(opts: {
 
         const inserted = await client.query<{ id: string }>(insertInvoiceSql(), insertParams(m, outcome.requestId, actor.id));
         const id = inserted.rows[0]!.id;
+        // 库里没有同号票 → 按"这就是一张红冲票"直接入账（金额已经是负数）
+        if (m.status === 'red') insertedRed.push(m.invoiceNo);
         await insertInvoiceFileRow(client, id, stored!);
         referenced += 1;
         if (i === 0) {
@@ -215,7 +273,7 @@ export async function persistUpload(opts: {
       }
 
       if (!firstId) throw new AppError(42208, '这张票没认出来，请重传一次或用「手工录入」。', 422, { field: 'file' });
-      return { firstId, firstDuplicated, firstAttached, extra, referenced };
+      return { firstId, firstDuplicated, firstAttached, extra, redHints, insertedRed, referenced };
     });
 
     // ② 这份物理文件一行都没被引用（命中的票本来就有原件）→ 立刻回收，别留孤儿
@@ -232,9 +290,12 @@ export async function persistUpload(opts: {
           : '这张票之前就记过了，本次没有重复录入。要改就打开原来那张改。',
       );
     }
+    for (const no of outcomeTx.insertedRed) {
+      warnings.push(`${no}：识别成红冲票，已按冲红入库（三项金额是负数）。`);
+    }
     const skippedNote = outcome.skipped.length;
     if (skippedNote > 0) {
-      warnings.push(`这份文件里还有 ${skippedNote} 处内容没认成增值税发票，已忽略。`);
+      warnings.push(`这份文件里还有 ${skippedNote} 处内容没认成发票，已忽略。`);
     }
 
     const item = await getInvoice(outcomeTx.firstId);
@@ -243,6 +304,7 @@ export async function persistUpload(opts: {
       duplicated: outcomeTx.firstDuplicated,
       attached_file: outcomeTx.firstAttached,
       extra_items: outcomeTx.extra,
+      red_hints: outcomeTx.redHints,
       warnings,
     };
   } catch (e) {

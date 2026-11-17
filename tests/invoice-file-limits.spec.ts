@@ -10,18 +10,22 @@ import { ATTACH_MAX_BYTES, checkInvoiceAttach, OCR_MAX_BYTES, pdfTooBigForOcr } 
  * 写成测试是因为这个数字一旦被谁"统一"掉，大扫描件会在最后一步被服务端拒收，
  * 而用户已经在抽屉里等了半天。
  */
-describe('checkInvoiceAttach — 补原件只收 pdf/jpg/png，上限 20MB', () => {
-  it('三种允许的类型都能过（大小写不敏感）', () => {
+describe('checkInvoiceAttach — 补原件只收 pdf/ofd/jpg/png，上限 20MB', () => {
+  it('四种允许的类型都能过（大小写不敏感）', () => {
     expect(checkInvoiceAttach('发票.pdf', 1024).ok).toBe(true);
     expect(checkInvoiceAttach('scan.JPG', 1024).ok).toBe(true);
     expect(checkInvoiceAttach('scan.jpeg', 1024).ok).toBe(true);
     expect(checkInvoiceAttach('scan.PNG', 1024).ok).toBe(true);
+    // 数电票从电子税务局下发的原始格式，2026-11 起收
+    expect(checkInvoiceAttach('发票.OFD', 1024).ok).toBe(true);
   });
 
-  it('OFD / docx 被拒，并告诉用户怎么办（另存为 PDF）', () => {
-    const r = checkInvoiceAttach('发票.ofd', 1024);
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('另存为 PDF');
+  it('docx / gif 被拒，并说清哪些不在范围内', () => {
+    const docx = checkInvoiceAttach('合同.docx', 1024);
+    expect(docx.ok).toBe(false);
+    if (!docx.ok) expect(docx.reason).toContain('不是 PDF / OFD / JPG / PNG');
+    const gif = checkInvoiceAttach('截图.gif', 1024);
+    expect(gif.ok).toBe(false);
   });
 
   it('正好 20MB 能过，多一个字节不能过', () => {

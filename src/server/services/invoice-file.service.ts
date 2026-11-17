@@ -32,11 +32,18 @@ import { toInvoiceFileDTO, type InvoiceFileDTO } from './invoice-dto';
  */
 export const INVOICE_FILE_HARD_MAX_BYTES = 20 * 1024 * 1024;
 
-/** 发票只收这三种：webp 拒收（OCR 文档未承诺支持），OFD 拒收（要走另一个接口） */
-export const INVOICE_ACCEPT_EXTS: readonly FileExt[] = ['pdf', 'jpg', 'png'];
-export const INVOICE_ACCEPT_LABEL = 'PDF / JPG / PNG';
-/** 前端上传框的 accept（OFD 明确不在里面：它要走另一个接口，收进来只会失败） */
-export const INVOICE_ACCEPT_ATTR = '.pdf,.jpg,.jpeg,.png';
+/**
+ * 发票收这四种：PDF / OFD / JPG / PNG。
+ *
+ * OFD 是数电票的国标版式（下载发票时税局给的就是它），不收等于让用户自己去转格式。
+ * 通用票据识别（高级版）官方支持 OFD 的第一页，所以能直接进识别链路；
+ * 卷票/销货清单那类不收是票种问题（见 `domain/invoice-ocr`），不是格式问题。
+ * webp 仍然拒收：OCR 文档没承诺支持，且它不是发票的下发格式。
+ */
+export const INVOICE_ACCEPT_EXTS: readonly FileExt[] = ['pdf', 'ofd', 'jpg', 'png'];
+export const INVOICE_ACCEPT_LABEL = 'PDF / OFD / JPG / PNG';
+/** 前端上传框的 accept —— 与上面两个常量必须一致，否则选文件时就把 OFD 筛掉了 */
+export const INVOICE_ACCEPT_ATTR = '.pdf,.ofd,.jpg,.jpeg,.png';
 
 /** 落盘后的位置信息 */
 export interface StoredFile {
@@ -70,7 +77,7 @@ export function assertInvoiceExt(staged: StagedUpload): void {
     throw new AppError(
       41501,
       `发票原件只收${INVOICE_ACCEPT_LABEL}，你传的是 ${staged.type.label}。`
-        + '（OFD 版数电票请先另存为 PDF；GIF/WEBP 请转成 JPG。）',
+        + '（GIF / WEBP 请转成 JPG；Word / Excel 不是发票原件。）',
       415,
       { field: 'file' },
     );
@@ -368,7 +375,7 @@ export function decodeUploadName(raw: string): string {
  *      真正的上限仍是 `stageUploadStream` 的 maxBytes）
  *   ③ 空 body 守卫（断流走到 pipeline 里会变成 500）
  *   ④ 落盘 + 魔数嗅探（只看字节，不信 Content-Type 与扩展名）
- *   ⑤ 扩展名白名单（发票只收 PDF/JPG/PNG）—— 不通过就地清临时文件
+ *   ⑤ 扩展名白名单（发票只收 PDF / OFD / JPG / PNG）—— 不通过就地清临时文件
  */
 export async function stageInvoiceRawUpload(req: RawInvoiceUpload): Promise<StagedUpload> {
   if ((req.contentType ?? '').includes('multipart/form-data')) {
@@ -394,10 +401,31 @@ export async function stageInvoiceRawUpload(req: RawInvoiceUpload): Promise<Stag
     throw new AppError(40001, '没有收到文件内容。', 400, { field: 'file' });
   }
 
-  const staged = await stageUploadStream(stream, {
-    originalName,
-    maxBytes: INVOICE_FILE_HARD_MAX_BYTES,
-  });
+  let staged: StagedUpload;
+  try {
+    staged = await stageUploadStream(stream, {
+      originalName,
+      maxBytes: INVOICE_FILE_HARD_MAX_BYTES,
+    });
+  } catch (e) {
+    /*
+     * 字节级类型判定失败的文案要按业务重写。
+     *
+     * `stageUploadStream` 是合同附件与发票共用的，它给的是"这个压缩包不是 Word 或
+     * Excel 文档"这类**Office 语境**的提示 —— 对着一个传错文件的会计说这句，
+     * 只会让他以为系统在找 Word。发票这边一律翻译成"收哪些格式"。
+     */
+    if (e instanceof AppError && e.code === 41501) {
+      throw new AppError(
+        41501,
+        `认不出这个文件的格式。发票原件收 ${INVOICE_ACCEPT_LABEL}——图片请存成 JPG / PNG，`
+          + '数电票可以直接传 OFD 或 PDF。',
+        415,
+        { field: 'file' },
+      );
+    }
+    throw e;
+  }
 
   try {
     assertInvoiceExt(staged);

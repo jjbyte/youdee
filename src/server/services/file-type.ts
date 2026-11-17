@@ -7,9 +7,9 @@
  *
  * 三类文件的判定方式不同：
  *   - 图片 / PDF：固定魔数，几字节就能判。
- *   - docx / xlsx：本质是 ZIP。只看 `PK\x03\x04` 会把任意压缩包放进来，
+ *   - docx / xlsx / ofd：本质都是 ZIP。只看 `PK\x03\x04` 会把任意压缩包放进来，
  *     所以要读 ZIP 中央目录里的文件名：有 `word/document.xml` 才是 Word，
- *     有 `xl/workbook.xml` 才是 Excel。
+ *     有 `xl/workbook.xml` 才是 Excel，根目录有 `OFD.xml` 才是 OFD。
  *   - doc / xls（97-2003）：OLE2 复合文档，魔数只能说明"是个 Office 老文件"。
  *     具体是 Word 还是 Excel，看内部流的名字（`WordDocument` / `Workbook`），
  *     流名在文件里以 UTF-16LE 明文存储，扫一遍就能看到。
@@ -19,7 +19,7 @@
  */
 
 /** 支持的文件扩展名（内部统一用小写，jpeg 归一到 jpg） */
-export type FileExt = 'jpg' | 'png' | 'webp' | 'pdf' | 'doc' | 'docx' | 'xls' | 'xlsx';
+export type FileExt = 'jpg' | 'png' | 'webp' | 'pdf' | 'ofd' | 'doc' | 'docx' | 'xls' | 'xlsx';
 
 export interface FileType {
   ext: FileExt;
@@ -37,6 +37,13 @@ const TYPES: Record<FileExt, FileType> = {
   png: { ext: 'png', mime: 'image/png', kind: 'image', label: 'PNG 图片' },
   webp: { ext: 'webp', mime: 'image/webp', kind: 'image', label: 'WEBP 图片' },
   pdf: { ext: 'pdf', mime: 'application/pdf', kind: 'file', label: 'PDF' },
+  /**
+   * OFD（GB/T 33190）本质是 ZIP + XML 的版式文档，数电票下发时常常给这份。
+   *
+   * `application/ofd` 是税务局/OFD 阅读器约定的 MIME。库里存它，`/raw` 路由就能按
+   * 这个 mime 写 Content-Type，浏览器会调起本地 OFD 阅读器（没有就下载）。
+   */
+  ofd: { ext: 'ofd', mime: 'application/ofd', kind: 'file', label: 'OFD 版式文件' },
   doc: { ext: 'doc', mime: 'application/msword', kind: 'file', label: 'Word 文档' },
   docx: {
     ext: 'docx',
@@ -187,6 +194,19 @@ function probeMagic(buf: Buffer): Probe | null {
   return null;
 }
 
+/**
+ * 这个 ZIP 是不是 OFD（国标版式文档，数电票的另一种下发格式）。
+ *
+ * 判据只有一条：根目录有 `OFD.xml`。GB/T 33190 规定它是整个文档的入口，
+ * 任何合规 OFD 都必须有；反过来，docx/xlsx 的包里不会有同名的根级文件。
+ *
+ * 为什么不看 `Doc_0/`：那层目录名是由 OFD.xml 引用的，允许改（有的生成器叫 Doc_1
+ * 或多文档并存），拿它当判据会在"换个生成器就认不出来"这种地方翻车。
+ */
+function looksLikeOfd(names: string[]): boolean {
+  return names.some((n) => /^OFD\.xml$/i.test(n));
+}
+
 /** 拿到 ZIP 目录项（或拿不到时给头部特征）之后，判它到底是哪种 Office 文件 */
 function judgeZip(names: string[] | null, head: Buffer): Probe {
   if (names) {
@@ -261,6 +281,8 @@ export function detectFileType(buf: Buffer): Probe {
     if (!names) {
       return { ok: false, code: 'broken', hint: '这个压缩包读不出目录，可能已损坏。用 Office 打开后另存一份再传。' };
     }
+    // OFD 必须先判：它也是 ZIP，落到 judgeZip 里只会被当成"不是 Word 或 Excel"拒掉
+    if (looksLikeOfd(names)) return { ok: true, type: TYPES.ofd };
     return judgeZip(names, buf);
   }
 
@@ -293,7 +315,10 @@ export function detectFileTypePartial(head: Buffer, tail: Buffer | null, totalSi
     // 尾部窗口里 EOCD 记录的中央目录偏移是绝对值，换算成窗口内下标
     const base = tail ? totalSize - tail.length : 0;
     const names = tail && tail.length >= 22 ? zipEntryNamesInWindow(tail, base) : null;
-    if (names) return judgeZip(names, head);
+    if (names) {
+      if (looksLikeOfd(names)) return { ok: true, type: TYPES.ofd };
+      return judgeZip(names, head);
+    }
     // 中央目录不在尾部窗口里（超大 ZIP）→ 用头部条目名，认不出就拒
     return judgeZip(null, head);
   }

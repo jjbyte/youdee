@@ -43,7 +43,7 @@ export const POST = route(async (req) => {
   //     `content-length` 只是提前拒（可伪造、也可缺失，chunked 上传就没有）；
   //   - 真实类型用 magic bytes 嗅探（detectFileType / detectFileTypePartial），
   //     不信 Content-Type、也不信扩展名；
-  //   - 白名单只收 PDF / JPG / PNG（前端 accept=.pdf,.jpg,.jpeg,.png 只是提示）。
+  //   - 白名单只收 PDF / OFD / JPG / PNG（前端 accept 只是提示，真正的门在这里）。
   const body = req.body;
   if (!body || typeof body !== 'object') {
     throw new AppError(40001, '没有收到文件内容。', 400, { field: 'file' });

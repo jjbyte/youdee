@@ -107,7 +107,7 @@ model Invoice {
 ### 2.3 `invoice_files`
 
 ```prisma
-/// 发票原件（PDF / JPG / PNG）。一个发票可挂多份；同一份物理文件可被多行引用。
+/// 发票原件（PDF / OFD / JPG / PNG）。一个发票可挂多份；同一份物理文件可被多行引用。
 model InvoiceFile {
   id           String   @id @default(uuid()) @db.Uuid
   invoiceId    String   @map("invoice_id") @db.Uuid
@@ -296,6 +296,12 @@ interface UploadResult {
     invoice_no: string; total_amount: string | null;
     page: number; saved: boolean; reason?: string;
   }>;
+  red_hints: Array<{                       // 识别成红票 + 同号票已在库（在用、仍为正常）→ 等人确认
+    invoice_id: string; invoice_no: string;
+    total_amount: string | null;           // 库里那张的价税合计，用来确认是同一张
+    current_status: 'normal' | 'red';
+    basis: string;                         // 判定依据的人话（金额为负 / 票面有「红字」）
+  }>;
   warnings: string[];                     // 例：'金额三项差 0.02 元，已标黄'
 }
 ```
@@ -334,7 +340,7 @@ interface UploadResult {
 | 关键入参 | `EnablePdf: true`、`EnableMultiplePage: true`、`EnableOther: true`（默认已是 true，仍显式写，避免服务端默认值变更）、`EnableCutImage: false`、`EnableItemPolygon: false`、`EnableSeal: false`（都省流量省时间） |
 | 频率 | 5 次/秒（官方）→ 前端并发 3，留余量给重试 |
 | 超时 | `profile.httpProfile.reqTimeout = 20`（默认 60s 会让一个卡住的上传拖死整批） |
-| 体积 | **base64 后 ≤10MB**；像素单边 20–10000px；格式 PNG/JPG/JPEG/PDF（**不收 GIF、不收 OFD**） |
+| 体积 | **base64 后 ≤10MB**；像素单边 20–10000px；格式 PNG/JPG/JPEG/PDF，**以及 OFD 的第一页**（2026-10 官方文档明确支持增值税电子发票与电子发票（铁路电子客票）的 OFD；不收 GIF） |
 | 响应结构 | `Response.MixedInvoiceItems[].SingleInvoiceInfos.<SubType>`；另有 `TotalPDFCount`、`RequestId` |
 | 异常对象 | `TencentCloudSDKHttpException`：字段 `code`（如 `FailedOperation.ImageBlur`）、`message`、`requestId`、`traceId`、`httpCode?` |
 
@@ -348,7 +354,7 @@ RECEIVE ──▶ SNIFF ──▶ STAGE ──▶ OCR ──▶ NORMALIZE ──
   │          │          │        │          └─ 符号归一 / 容差判定 / 日期解析 / 号码规范化
   │          │          │        └─ 见 5.4 三种降级
   │          │          └─ stageUploadStream → 临时盘（不占内存）
-  │          └─ 只收 pdf / jpg / png（webp 拒：OCR 文档未承诺支持）
+  │          └─ 只收 pdf / ofd / jpg / png（ofd 按 ZIP 内的 OFD.xml 嗅探；webp 拒）
   └─ 空 body / 断流 → 40001
 ```
 
@@ -376,13 +382,35 @@ RECEIVE ──▶ SNIFF ──▶ STAGE ──▶ OCR ──▶ NORMALIZE ──
 |---|---|
 | `VatInvoiceInfo` | `VatSpecialInvoice`、`VatCommonInvoice`、`VatElectronicCommonInvoice`、`VatElectronicSpecialInvoice`、`VatElectronicInvoiceBlockchain`、`VatElectronicInvoiceToll` |
 | `VatElectronicInfo` | `VatElectronicInvoiceFull`、`VatElectronicSpecialInvoiceFull` |
-| 其它（`AirTransport`、`TrainTicket`、`QuotaInvoice`、`OtherInvoice` …） | Type 不在 3/16 → **拒收**：42208「这张不是增值税发票」 |
+| 铁路电子客票 | `ElectronicTrainTicketFull`（Type 16，**单独分支**，见 5.3.1） |
+| 其它（`AirTransport`、`TrainTicket`、`QuotaInvoice`、`OtherInvoice` …） | Type 不在 3/16 → **拒收**：42208「这张不是发票」；Type 16 但 SubType 是 `ElectronicFlightTicketFull`（机票行程单）→ 41501 票种不支持 |
 
-> 收单范围（本轮明确不做）：只收 `Type ∈ {3, 16}`。火车票/机票/定额票也能识别，但我们的台账要的是进项发票，混进来会污染"金额合计"。
+> 收单范围：`Type ∈ {3, 16}`，外加 **`ElectronicTrainTicketFull`（电子发票·铁路电子客票）**——它也是 Type 16，但字段集与全电发票完全不同，走单独分支（见 5.3.1）。纸质火车票、机票行程单、定额发票、出租车票仍然拒收：它们是报销凭证不是发票，混进来会污染"金额合计"。
 
 **日期解析规则**（`parseIssuedOn`，纯函数）：接受 `2026年04月11日` / `2026-04-11` / `2026/4/11` / `2026.04.11`；先全角转半角、去空白；用 `isRealDate` 校验日历真实性（`2026-02-30` 拒）；解析不出返回 `null` 并在 `warnings` 里提一句，不阻塞入库。
 
 **号码规范化**：全角转半角、去空格与横杠、字母转大写；非 `[0-9A-Z]{6,32}` → 视为未识别（42208）。理由同 `normalizeTaxNo`：OCR 常把 `0` 认成 `O`、把空格当字符。
+
+### 5.3.1 电子发票（铁路电子客票）的字段口径
+
+`ElectronicTrainTicketFull` 属于 Type 16，但**不能用增值税那套映射**：它的 `SingleInvoiceInfos`
+里既没有 `Code`，也没有 `Seller`，金额字段的含义也不一样。
+
+| 我们的列 | 取值 | 说明 |
+|---|---|---|
+| `invoice_no` | `Number` | 20 位；铁路客票没有「发票代码」，`invoice_code` 存**空串** |
+| `issued_on` | `Date` | **不是 `DateGetOn`**（那是乘车日期）。取错会让「按开票日期查」整列错位 |
+| `buyer_name` / `buyer_tax_no` | `Buyer` / `BuyerTaxID` | 票面只印购买方信息 |
+| `seller_name` | 固定 **「中国铁路集团有限公司」** | 结构体**没有** `Seller` 字段；落地后可在抽屉里改 |
+| `total_amount`（价税合计） | `Fare` | **票价就是含税金额**（乘客实付的数，税额已在里面） |
+| `tax_amount` | `Tax` | |
+| `amount`（不含税） | `Total`，缺失时用 `Fare − Tax` | 三个数再交给 `reconcileAmounts` 自校验 |
+
+其他：`TypeOfVoucher`（如「电子发票（铁路电子客票）」）与 `Remark` 参与红票判定；
+退票票面 `Fare` 为负 → 判冲红、三项取负。
+
+拒收的相邻票种：`TrainTicket`（纸质火车票，Type 2）→ 42208；`ElectronicFlightTicketFull`
+（电子发票·机票行程单，Type 16）→ 41501。它们不是发票/不在本期范围，混进来会污染合计。
 
 ### 5.4 三种降级
 
@@ -400,14 +428,30 @@ RECEIVE ──▶ SNIFF ──▶ STAGE ──▶ OCR ──▶ NORMALIZE ──
 
 ```
 判定顺序（domain/invoice-record.ts，纯函数，可单测）
-1. Total / PretaxAmount / Tax 任一为负         → status='red'
-2. Title 或 SubTypeDescription 含「红字」「红冲」→ status='red'
-3. 其它                                        → status='normal'
+1. Total / PretaxAmount / Tax 任一为负                  → status='red'
+2. Title / SubTypeDescription / **Remark** 含「红字」「红冲」「冲红」 → status='red'
+3. 其它                                                 → status='normal'
 归一：status='red' 时把三项取负（若原本已是负数则取绝对值再取负，避免 --得+）
       status='normal' 时三项取绝对值？—— 否：normal 保持原符号，只把 '-' 去掉视为异常并记 warning
 ```
 
+把 `Remark` 也算进判定，是因为数电红字发票的票面标题常常仍是「电子发票（普通发票）」，
+红字信息只写在备注里（如「被红冲蓝字数电发票号码：xxx」）。只看标题会漏判，而漏判的代价是合计里多进一笔正数。
+
 **人工改状态的连锁动作**（#5 接口必须做，不能只改状态列）：`status` 改了，三项金额**同步重定符号**（red → 负、normal → 正），并置 `status_source='manual'`。否则"冲红 3 张但合计没变"——这个 bug 只有对账时才会被发现。
+
+#### 5.5.1 上传时认出红票：同号票已在库就问一句
+
+| 情形 | 行为 |
+|---|---|
+| 判为红票，库里**没有**同号票 | 直接按红票入库（三项为负），`warnings` 里明确写「识别成红冲票，已按冲红入库」 |
+| 判为红票，库里有同号票且**仍为正常** | **不改**那张票，返回 `red_hints[]`；前端弹窗问「要不要标记为冲红」，确认后走 `PATCH /invoices/:id/status`（复用同一套符号翻转） |
+| 判为红票，同号票**已经是红票** | 不再问（已经是答案），按普通去重处理 |
+| 判为红票，同号票**已软删** | 不再问（它不在台账里），按普通去重处理 |
+
+为什么不自动改：改状态会翻转三项金额、直接改「合计」这个对账数字，而红票判定只是启发式。
+**服务的边界是"把判断和依据交给人"，不是"替人改账"**。代价是多一次点击；换来的是合计不会被一个
+猜出来的状态悄悄改掉。
 
 ---
 

@@ -8,7 +8,10 @@
  *     它按需拼 Node http 请求，被打包后会出现"开发能调、生产 502"。
  *   - 入参只用 `ImageBase64`，不传 `ImageUrl`：本地部署没有公网可达地址，
  *     桶是私有读，预签名链路过长且会把票据暴露给第三方抓取。
- *   - base64 后 ≤10MB（≈原始 7.5MB），像素单边 20–10000px，只收 PNG/JPG/JPEG/PDF。
+ *   - base64 后 ≤10MB（≈原始 7.5MB），像素单边 20–10000px。
+ *     格式：PNG / JPG / JPEG / PDF，以及 **OFD 的第一页**（官方 2026-10 文档明确支持
+ *     增值税电子发票与电子发票（铁路电子客票）等数电票的 OFD）。OFD 走同一个
+ *     `ImageBase64` 入参，不需要另调 OFD 接口；只认第一页，多页 OFD 会被截断。
  *   - 响应**没有红票标记**（`RedLetterInvoiceMark` 只在 `VatInvoiceVerify` 里），
  *     所以红票只能启发式判定 + 人工兜底，见 `domain/invoice-record.ts`。
  *
@@ -112,7 +115,7 @@ function looksLikeTimeout(err: OcrSdkError): boolean {
  * （`FailedOperation.ImageBlur` 这种词对用户毫无意义，还会被当成系统故障）。
  * 内部 code 只允许留在服务端日志与 `ocr_request_id` 里。
  */
-function translateOcrError(e: unknown): AppError {
+function translateOcrError(e: unknown, opts: { ofd?: boolean } = {}): AppError {
   const err = (e ?? {}) as OcrSdkError;
   const code = typeof err.code === 'string' ? err.code : '';
 
@@ -134,7 +137,12 @@ function translateOcrError(e: unknown): AppError {
   if (IMAGE_UNREADABLE.has(code)) {
     return new AppError(
       42208,
-      '这张票没认出来（图片模糊或版式不支持）。换一张清晰的，或用「手工录入」先把票号记下来。',
+      opts.ofd
+        /* OFD 这条单独给话：通用票据识别只认数电票 OFD 的**第一页**，
+           而且旧版式/加密签名的 OFD 会直接解码失败。说清"另存 PDF"这一条出路，
+           比让用户反复重传同一份文件强。 */
+        ? '这份 OFD 没识别出来。OFD 只支持数电票（增值税电子发票、铁路电子客票等）的第一页；换一份或先在电子税务局另存为 PDF 再传。'
+        : '这张票没认出来（图片模糊或版式不支持）。换一张清晰的，或用「手工录入」先把票号记下来。',
       422,
       { field: 'file' },
     );
@@ -161,6 +169,19 @@ export interface PreparedPayload {
 
 function isPdf(mime: string): boolean {
   return mime === 'application/pdf';
+}
+
+/**
+ * OFD 与 PDF 一样是**版式文档**，不是位图：sharp 压不动它（它只会解出第一页的位图，
+ * 反而丢掉文本层）。所以这条按"版式文档"处理——不做压缩，也不会因为超限去走图片分支。
+ */
+function isOfd(mime: string): boolean {
+  return mime === 'application/ofd';
+}
+
+/** 版式文档（PDF / OFD）：体积超了只能让用户自己处理，这里没有可靠的瘦身手段 */
+function isLayoutDoc(mime: string): boolean {
+  return isPdf(mime) || isOfd(mime);
 }
 
 /** sharp 的调用签名（它的默认导出是函数，命名空间不是） */
@@ -216,7 +237,7 @@ async function preparePayload(buf: Buffer, mime: string): Promise<PreparedPayloa
   const fits = (b: Buffer): boolean => Math.ceil(b.byteLength / 3) * 4 <= MAX_BASE64_BYTES;
   if (fits(buf)) return { base64: buf.toString('base64'), warning: null };
 
-  if (!isPdf(mime)) {
+  if (!isLayoutDoc(mime)) {
     const compressed = await compressImage(buf);
     if (compressed && fits(compressed.buf)) {
       return { base64: compressed.buf.toString('base64'), warning: compressed.notes[0] ?? null };
@@ -225,8 +246,8 @@ async function preparePayload(buf: Buffer, mime: string): Promise<PreparedPayloa
   const mb = (buf.byteLength / 1024 / 1024).toFixed(1);
   throw new AppError(
     41301,
-    isPdf(mime)
-      ? `这个 PDF 有 ${mb}MB，识别上限约 7.5MB，先压缩或拆页再传。`
+    isLayoutDoc(mime)
+      ? `这个文件有 ${mb}MB，识别上限约 7.5MB，先压缩或拆页再传。`
       : `这张图有 ${mb}MB，识别上限约 7.5MB，压缩后再传。`,
     413,
     { field: 'file' },
@@ -270,7 +291,7 @@ export async function recognizeInvoice(buf: Buffer, mime: string): Promise<Recog
     if (e instanceof AppError) throw e;
     // 内部 code 只进日志，不上响应
     console.error('[ocr] RecognizeGeneralInvoice 失败', (e as OcrSdkError)?.code, (e as OcrSdkError)?.requestId);
-    throw translateOcrError(e);
+    throw translateOcrError(e, { ofd: isOfd(mime) });
   }
 
   const mapped = mapRecognizeResult(res);

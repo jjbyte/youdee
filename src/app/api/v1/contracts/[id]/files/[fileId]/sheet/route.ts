@@ -1,4 +1,4 @@
-import { AppError, ok, requireUser, reqUuid } from '@/server/http';
+import { AppError, ok, requireContractAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { readContractFileBytes } from '@/server/services/contract-file-bytes';
 import { previewWorkbook } from '@/server/services/sheet-preview';
@@ -16,7 +16,7 @@ import { previewWorkbook } from '@/server/services/sheet-preview';
  * 与其解析失败给一句"格式错误"，不如直接说清楚怎么办。
  */
 export const GET = route(async (_req, params) => {
-  await requireUser();
+  await requireContractAccess();
   const contractId = reqUuid(params.id, 'id');
   const fileId = reqUuid(params.fileId, 'fileId');
   const { ref, buf } = await readContractFileBytes(contractId, fileId);

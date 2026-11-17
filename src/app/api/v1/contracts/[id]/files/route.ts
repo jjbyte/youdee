@@ -1,4 +1,4 @@
-import { AppError, ok, requireUser, reqUuid } from '@/server/http';
+import { AppError, ok, requireContractAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { addContractFile, CONTRACT_FILE_MAX_BYTES } from '@/server/services/contract.service';
 import { stageUploadStream } from '@/server/services/upload-stream.service';
@@ -27,7 +27,7 @@ import { isFileCategory } from '@/server/services/file-type';
  * 放 query 里容易被二次编码，最后在库里存成 `%E5%90%88%E5%90%8C`。
  */
 export const POST = route(async (req, params) => {
-  await requireUser();
+  await requireContractAccess();
   const id = reqUuid(params.id, 'id');
 
   const url = new URL(req.url);

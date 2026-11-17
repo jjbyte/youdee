@@ -1,4 +1,4 @@
-import { AppError, ok, requireUser, reqUuid } from '@/server/http';
+import { AppError, ok, requireInvoiceAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { stageInvoiceRawUpload } from '@/server/services/invoice-file.service';
 import { attachInvoiceFile } from '@/server/services/invoice-upload.service';
@@ -17,8 +17,9 @@ import { getInvoice } from '@/server/services/invoice.service';
  * 把票面数字记下来，扫描件到手后再补挂上来——台账里因此不会有"金额空、号码空"
  * 的半成品行（那会让合计出现一个没人负责的空洞）。
  *
- * 权限同编辑（登录即可，不要 admin）：补原件是行政活，卡在管理员身上会变成
- * "管理员不在就归档不了"。而它能造成的最坏后果是多一份附件，改不了任何金额。
+ * 权限随发票台账（仅管理员）。补原件这条曾经想过放开给成员——"它是行政活，
+ * 卡在管理员身上会变成归档不了"——但原件里有票面全部数字，放开等于开一个
+ * 只读不写却看得见全部财务数据的侧门，所以不放开。
  *
  * 体积上限 / 类型白名单与识别上传**同一个入口**（`stageInvoiceRawUpload`）：
  * 两条路进来的文件落在同一张表里，规则分叉就会出现"这边收 20MB、那边收 10MB"。
@@ -27,7 +28,7 @@ import { getInvoice } from '@/server/services/invoice.service';
  * 否则用户挂完看到"还是 0 份"，会再传一次。
  */
 export const POST = route(async (req, params) => {
-  await requireUser();
+  await requireInvoiceAccess();
   const invoiceId = reqUuid(params.id, 'id');
   // 断流当成 400 而不是 500：走到 pipeline 里就只剩"服务器开小差了"
   const body = req.body;

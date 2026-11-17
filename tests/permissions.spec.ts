@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { canArchive, canDeleteRecord, ROLE_CAPABILITIES } from '../src/domain/permissions';
+import {
+  canAccessContracts,
+  canAccessInvoices,
+  canArchive,
+  canDeleteRecord,
+  ROLE_CAPABILITIES,
+} from '../src/domain/permissions';
 import { canRestore, canVoid } from '../src/domain/quote-status';
 
 /**
@@ -26,6 +32,34 @@ describe('删除 vs 作废的权限分界', () => {
     const del = ROLE_CAPABILITIES.find((c) => c.label.includes('删除'));
     expect(archive?.member).toBe(true);
     expect(del?.member).toBe(false);
+  });
+});
+
+describe('合同 / 发票整块只对管理员开放（2026-11-17）', () => {
+  it('合同：成员连查看都不行', () => {
+    expect(canAccessContracts('admin')).toBe(true);
+    expect(canAccessContracts('member')).toBe(false);
+  });
+
+  it('发票：成员连查看都不行', () => {
+    expect(canAccessInvoices('admin')).toBe(true);
+    expect(canAccessInvoices('member')).toBe(false);
+  });
+
+  /**
+   * 这两条单独测，是因为它们的失效方式很安静：把 member 改成 true，
+   * 接口照常返回数据、界面照常能看，没有任何一处会报错——
+   * 直到某天发现成员一直在按自己那套口径核账。
+   */
+  it('能力表里这两行对成员都是关的', () => {
+    const contract = ROLE_CAPABILITIES.find((c) => c.label.startsWith('合同管理'));
+    const invoice = ROLE_CAPABILITIES.find((c) => c.label.startsWith('发票台账'));
+    expect(contract).toBeDefined();
+    expect(invoice).toBeDefined();
+    expect(contract?.member).toBe(false);
+    expect(invoice?.member).toBe(false);
+    expect(contract?.admin).toBe(true);
+    expect(invoice?.admin).toBe(true);
   });
 });
 

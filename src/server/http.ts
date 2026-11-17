@@ -9,7 +9,7 @@
  */
 import { NextResponse } from 'next/server';
 import { currentUser, type CurrentUser } from './auth/session';
-import { canCreatePrice, canOverridePrice, canManageCatalog, canManageUsers, canExportInternal, canArchive, canDeleteRecord } from '@/domain/permissions';
+import { canCreatePrice, canOverridePrice, canManageCatalog, canManageUsers, canExportInternal, canArchive, canDeleteRecord, canAccessContracts, canAccessInvoices } from '@/domain/permissions';
 
 export interface ApiError {
   code: number;
@@ -204,6 +204,32 @@ export async function requireAdmin(what = '该操作'): Promise<CurrentUser> {
   const u = await requireUser();
   if (!canManageCatalog(u.role) || !canManageUsers(u.role)) {
     throw new AppError(40301, `${what}需要管理员权限。`, 403);
+  }
+  return u;
+}
+
+/**
+ * 合同管理整块的入口（2026-11-17 客户要求：成员连看都不给）。
+ *
+ * 用**一个**函数罩住整个模块，而不是在每个 route 里自己判断 role：
+ * 后者的失效方式是"新加了一支路由忘了判"，而忘了判是**静默**的——
+ * 接口照常 200，只有出事时才发现少了一道门。这里新路由只要照抄这一行就不会漏。
+ *
+ * 文案点明"联系管理员"，是因为成员点进来通常不是想改数据，是想要某个数字。
+ */
+export async function requireContractAccess(): Promise<CurrentUser> {
+  const u = await requireUser();
+  if (!canAccessContracts(u.role)) {
+    throw new AppError(40301, '合同管理只对管理员开放，需要查合同请找管理员。', 403);
+  }
+  return u;
+}
+
+/** 发票台账整块的入口。同上：读也拦，不只是写 */
+export async function requireInvoiceAccess(): Promise<CurrentUser> {
+  const u = await requireUser();
+  if (!canAccessInvoices(u.role)) {
+    throw new AppError(40301, '发票台账只对管理员开放，需要查发票请找管理员。', 403);
   }
   return u;
 }

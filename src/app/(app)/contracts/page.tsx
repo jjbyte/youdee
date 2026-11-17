@@ -17,7 +17,8 @@ import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
 import { ConfirmModal, type ConfirmSpec } from '@/components/ui/confirm-modal';
 import { Toast } from '@/components/ui/overlay';
 import { useMe } from '@/lib/use-me';
-import { canDeleteRecord } from '@/domain/permissions';
+import { canAccessContracts, canDeleteRecord } from '@/domain/permissions';
+import { AdminGate } from '@/components/ui/admin-gate';
 import { IconContract, IconPaperclip, IconPlus } from '@/components/icons';
 import { ContractDrawer } from '@/components/contracts/contract-drawer';
 
@@ -48,7 +49,25 @@ const STATUS_TONE: Record<ContractStatus, BadgeTone> = {
  * 已删除只有管理员看得到，且删除是软删：附件常常是唯一副本，
  * 真删掉等于把凭据从台账里抹了。
  */
+/**
+ * 合同台账（仅管理员，2026-11-17 起读也拦）。
+ *
+ * 闸门包在**外层**：被拦的人不会挂载下面那个组件，也就不会发出任何请求——
+ * 页面里写 `if (!isAdmin) return null` 的话，effect 已经先跑了一轮，控制台会留一串 403。
+ */
 export default function ContractsPage() {
+  return (
+    <AdminGate
+      check={canAccessContracts}
+      area="合同管理"
+      hint="合同里有客户、金额和扫描件，只对管理员开放。需要查某份合同、或者要新建合同，找管理员就好。"
+    >
+      <ContractsPageInner />
+    </AdminGate>
+  );
+}
+
+function ContractsPageInner() {
   const [q, setQ] = useState('');
   const [contractNo, setContractNo] = useState('');
   const [title, setTitle] = useState('');

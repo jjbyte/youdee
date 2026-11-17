@@ -1,4 +1,4 @@
-import { AppError, body, ok, requireUser, reqUuid } from '@/server/http';
+import { AppError, body, ok, requireContractAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { linkContractInvoices, listContractInvoices } from '@/server/services/contract-invoice.service';
 
@@ -10,16 +10,17 @@ import { linkContractInvoices, listContractInvoices } from '@/server/services/co
  *   复合主键 + `ON CONFLICT DO NOTHING`，同一次关联点两下不会出现两条一样的记录，
  *   返回的 `linked` 是真正新插进去的行数（前端不用自己数）。
  *
- * 权限：登录即可。关联是可逆动作，误关联一条 DELETE 就回来，不值得卡管理员。
+ * 权限：随合同模块（仅管理员）。关联本身是可逆动作，但它读的是发票台账，
+ * 而发票台账对成员整块关闭——所以这里不能"登录即可"，否则就是一个绕过发票权限的洞。
  */
 export const GET = route(async (_req, params) => {
-  await requireUser();
+  await requireContractAccess();
   const id = reqUuid(params.id, 'id');
   return ok({ items: await listContractInvoices(id) });
 });
 
 export const POST = route(async (req, params) => {
-  const actor = await requireUser();
+  const actor = await requireContractAccess();
   const id = reqUuid(params.id, 'id');
   const b = await body<{ invoice_ids?: unknown }>(req);
   if (!Array.isArray(b.invoice_ids)) {

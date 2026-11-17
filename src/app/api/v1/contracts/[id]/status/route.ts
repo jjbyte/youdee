@@ -1,4 +1,4 @@
-import { AppError, body, ok, requireUser, reqUuid } from '@/server/http';
+import { AppError, body, ok, requireContractAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { setContractStatus } from '@/server/services/contract.service';
 import { isContractStatus } from '@/domain/contract';
@@ -12,10 +12,11 @@ import { isContractStatus } from '@/domain/contract';
  * 五态任意切换、不设状态机（业务方明确要求：他们就是会改主意），
  * 只在 `updated_at` 上留痕。非法值 400，**不静默回落**。
  *
- * 权限：登录即可。改状态是可逆的展示字段，不改金额、不改凭据。
+ * 权限：随合同模块（仅管理员）。曾经是"登录即可"——理由是改状态可逆、不动金额；
+ * 但 2026-11-17 客户把整个合同模块收成管理员专属，这里跟着收，不留独立口径。
  */
 export const PATCH = route(async (req, params) => {
-  await requireUser();
+  await requireContractAccess();
   const id = reqUuid(params.id, 'id');
   const b = await body<{ status?: unknown }>(req);
   if (!isContractStatus(b.status)) {

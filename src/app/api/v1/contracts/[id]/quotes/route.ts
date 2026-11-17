@@ -1,4 +1,4 @@
-import { AppError, body, ok, requireUser, reqUuid } from '@/server/http';
+import { AppError, body, ok, requireContractAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { linkQuote, listLinkedQuotes } from '@/server/services/contract.service';
 
@@ -6,7 +6,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** 合同关联的系统报价单列表 */
 export const GET = route(async (_req, params) => {
-  await requireUser();
+  await requireContractAccess();
   return ok(await listLinkedQuotes(reqUuid(params.id, 'id')));
 });
 
@@ -17,7 +17,7 @@ export const GET = route(async (_req, params) => {
  * 点两下弹个红条只会让人以为自己操作错了。
  */
 export const POST = route(async (req, params) => {
-  const actor = await requireUser();
+  const actor = await requireContractAccess();
   const id = reqUuid(params.id, 'id');
   const b = await body<Record<string, unknown>>(req);
   const quoteId = typeof b.quote_id === 'string' ? b.quote_id.trim() : '';

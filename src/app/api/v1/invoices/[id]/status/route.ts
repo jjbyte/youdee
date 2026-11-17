@@ -1,4 +1,4 @@
-import { AppError, body, ok, requireAdmin, reqUuid } from '@/server/http';
+import { AppError, body, ok, requireInvoiceAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { setInvoiceStatus } from '@/server/services/invoice.service';
 import { isInvoiceStatus } from '@/domain/invoice-record';
@@ -17,7 +17,7 @@ import { isInvoiceStatus } from '@/domain/invoice-record';
  * 非法值 400（不静默回落）：静默回落的后果是"我明明点了冲红，合计却没变"。
  */
 export const PATCH = route(async (req, params) => {
-  await requireAdmin('改发票状态');
+  await requireInvoiceAccess();
   const id = reqUuid(params.id, 'id');
   const b = await body<{ status?: unknown }>(req);
   if (!isInvoiceStatus(b.status)) {

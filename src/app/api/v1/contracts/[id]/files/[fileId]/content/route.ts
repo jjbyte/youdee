@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireUser, reqUuid } from '@/server/http';
+import { requireContractAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { readContractFileBytes } from '@/server/services/contract-file-bytes';
 
@@ -15,7 +15,7 @@ import { readContractFileBytes } from '@/server/services/contract-file-bytes';
  * 所以这里不做 Range、不流式，直接把内存里的 Buffer 吐出去。
  */
 export const GET = route(async (_req, params) => {
-  await requireUser();
+  await requireContractAccess();
   const contractId = reqUuid(params.id, 'id');
   const fileId = reqUuid(params.fileId, 'fileId');
   const { ref, buf } = await readContractFileBytes(contractId, fileId);

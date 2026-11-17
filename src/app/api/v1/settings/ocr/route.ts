@@ -1,4 +1,4 @@
-import { body, ok, requireAdmin, requireUser } from '@/server/http';
+import { body, ok, requireAdmin } from '@/server/http';
 import { route } from '@/server/wrap';
 import { getOcrSettings, saveOcrSettings } from '@/server/services/ocr-settings.service';
 import { invalidateOcrClient } from '@/server/services/invoice-ocr.service';
@@ -6,14 +6,17 @@ import { invalidateOcrClient } from '@/server/services/invoice-ocr.service';
 /**
  * 发票识别（腾讯云 OCR）设置。
  *
- * **GET 对 member 开放**：上传按钮要据此置灰（未配置时不让人传完 20 张才失败）。
- * 但密钥值永远不出去 —— 只给"配没配 + 末四位"，与 `getStorageSettings` 同一套做法。
+ * **GET 与 PATCH 都仅管理员**（2026-11-17 起）。
+ * 曾经 GET 对 member 开放，理由是"上传按钮要据此置灰，不然成员传完 20 张才发现没配"；
+ * 现在发票台账整块对成员关闭，成员根本走不到上传按钮，这条理由自动失效。
+ * 留着反而多一个出口：密钥末四位与"配没配"也是配置信息，不该给不需要它的人。
+ * 密钥值永远不出去 —— 只给"配没配 + 末四位"，与 `getStorageSettings` 同一套做法。
  *
  * **PATCH 仅管理员**：这里是云账号的 API 密钥，泄露等于替人付费识别。
  * `secret_key` 留空 = 不改（界面上必须写明这一条，否则人会以为密钥丢了）。
  */
 export const GET = route(async () => {
-  await requireUser();
+  await requireAdmin('查看发票识别设置');
   return ok(await getOcrSettings());
 });
 

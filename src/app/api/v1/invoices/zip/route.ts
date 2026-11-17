@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireUser, searchParams } from '@/server/http';
+import { requireInvoiceAccess, searchParams } from '@/server/http';
 import { route } from '@/server/wrap';
 import { today } from '@/server/db';
 import { parseInvoiceListQuery } from '@/server/services/invoice.service';
@@ -23,7 +23,7 @@ import { contentDisposition } from '@/server/services/export.service';
  * **不要 fetch→blob**：blob 会把整包读进浏览器内存，2GB 的包直接崩标签页。
  */
 export const GET = route(async (req) => {
-  const actor = await requireUser();
+  const actor = await requireInvoiceAccess();
   const sp = searchParams(req);
   const query = parseInvoiceListQuery(sp, { allowDeleted: actor.role === 'admin' });
   // 文件名要说清这一包是什么：勾选下载时写"勾选 3 份"，用户回头能对上自己点了什么

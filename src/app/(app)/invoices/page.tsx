@@ -2,8 +2,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage, type InvoiceQuery } from '@/lib/api';
 import type { InvoicePage } from '@/lib/types';
-import { canDeleteRecord } from '@/domain/permissions';
+import { canAccessInvoices, canDeleteRecord } from '@/domain/permissions';
 import { useMe } from '@/lib/use-me';
+import { AdminGate } from '@/components/ui/admin-gate';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
 import { Toast } from '@/components/ui/overlay';
@@ -35,7 +36,20 @@ const ZIP_MAX_FILES = 500;
  * 3. **下载与"勾选"解耦**：勾了就只下勾的，没勾就下当前查询结果的**全部**
  *    （不是当前页）。分页只是加载方式，不该决定下载范围。
  */
+/** 发票台账（仅管理员，2026-11-17 起读也拦）。闸门在外层：被拦的人不会发出任何请求 */
 export default function InvoicesPage() {
+  return (
+    <AdminGate
+      check={canAccessInvoices}
+      area="发票台账"
+      hint="发票台里有价税合计和开票信息，属财务口径，只对管理员开放。要对账数字找管理员要。"
+    >
+      <InvoicesPageInner />
+    </AdminGate>
+  );
+}
+
+function InvoicesPageInner() {
   const [filters, setFilters] = useState<InvoiceFilters>(EMPTY_INVOICE_FILTERS);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<InvoicePage | null>(null);

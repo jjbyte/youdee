@@ -1,4 +1,4 @@
-import { ok, requireUser, reqUuid } from '@/server/http';
+import { ok, requireContractAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { unlinkContractInvoice } from '@/server/services/contract-invoice.service';
 
@@ -9,7 +9,7 @@ import { unlinkContractInvoice } from '@/server/services/contract-invoice.servic
  * 这也是"关联 / 解除"敢对所有登录用户开放的理由：动作可逆，不会伤到台账。
  */
 export const DELETE = route(async (_req, params) => {
-  await requireUser();
+  await requireContractAccess();
   const contractId = reqUuid(params.id, 'id');
   const invoiceId = reqUuid(params.invoiceId, 'invoiceId');
   return ok(await unlinkContractInvoice(contractId, invoiceId));

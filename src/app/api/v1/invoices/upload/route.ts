@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { AppError, ok, requireUser } from '@/server/http';
+import { AppError, ok, requireInvoiceAccess } from '@/server/http';
 import { route } from '@/server/wrap';
 import { cleanupStaged, stageInvoiceRawUpload } from '@/server/services/invoice-file.service';
 import { requireOcrConfig } from '@/server/services/ocr-settings.service';
@@ -31,7 +31,7 @@ import { persistUpload } from '@/server/services/invoice-upload.service';
  * 先手工录入票面，再把扫描件补挂上去（补原件不做 OCR）。
  */
 export const POST = route(async (req) => {
-  const actor = await requireUser();
+  const actor = await requireInvoiceAccess();
 
   // ① 未配置识别就不收文件：未配置时 409 + 引导文案（与前端置灰用的是同一句话）
   await requireOcrConfig();

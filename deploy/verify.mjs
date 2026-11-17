@@ -533,6 +533,54 @@ async function main() {
   const mlogin = await call('POST', '/auth/login', { body: MEMBER, as: 'member' });
   record('成员登录', mlogin.json?.code === 0, mlogin.json?.data?.name ?? mlogin.json?.message ?? '');
 
+  /**
+   * 合同 / 发票整块只对管理员开放（2026-11-17）。
+   *
+   * 这两条必须测**读**，不只是测写：这轮改的就是"成员连看都不给"。
+   * 只测 PATCH/DELETE 的话，把列表接口漏掉一样是绿的，而漏掉的正是数据出口。
+   * 同时也测一遍管理员仍能读——权限收过头（比如判定函数写成恒 false）同样是事故。
+   */
+  const memberContracts = await call('GET', '/contracts?page=1', { as: 'member' });
+  record(
+    '成员看合同列表被拒（40301，不是空列表）',
+    memberContracts.status === 403 && memberContracts.json?.code === 40301,
+    `HTTP ${memberContracts.status} code=${memberContracts.json?.code} ${memberContracts.json?.message ?? ''}`,
+  );
+  const memberInvoices = await call('GET', '/invoices?page=1', { as: 'member' });
+  record(
+    '成员看发票列表被拒（40301，不是空列表）',
+    memberInvoices.status === 403 && memberInvoices.json?.code === 40301,
+    `HTTP ${memberInvoices.status} code=${memberInvoices.json?.code} ${memberInvoices.json?.message ?? ''}`,
+  );
+  const memberContractWrite = await call('POST', '/contracts', {
+    as: 'member',
+    body: { contract_no: 'SC-MEMBER-403', title: '自检不该建成的合同', category: 'other' },
+  });
+  record(
+    '成员新建合同被拒（40301）',
+    memberContractWrite.json?.code === 40301,
+    `${memberContractWrite.json?.code} ${memberContractWrite.json?.message ?? ''}`,
+  );
+  const adminContracts = await call('GET', '/contracts?page=1', { as: 'admin' });
+  record(
+    '管理员仍能读合同列表（收权没收到自己人）',
+    adminContracts.json?.code === 0 && Array.isArray(adminContracts.json?.data?.items),
+    `${adminContracts.json?.code} 条数=${adminContracts.json?.data?.items?.length ?? '无'}`,
+  );
+  const adminInvoices = await call('GET', '/invoices?page=1', { as: 'admin' });
+  record(
+    '管理员仍能读发票列表',
+    adminInvoices.json?.code === 0 && Array.isArray(adminInvoices.json?.data?.items),
+    `${adminInvoices.json?.code} 条数=${adminInvoices.json?.data?.items?.length ?? '无'}`,
+  );
+  // 识别设置跟着收：成员走不到上传按钮了，这个口的开放理由也就不存在了
+  const memberOcrSettings = await call('GET', '/settings/ocr', { as: 'member' });
+  record(
+    '成员读 OCR 设置被拒（40301）',
+    memberOcrSettings.json?.code === 40301,
+    `${memberOcrSettings.json?.code} ${memberOcrSettings.json?.message ?? ''}`,
+  );
+
   const memberPatch = await call('PATCH', `/items/${truss.id}`, { as: 'member', body: { name: truss.name } });
   record(
     '成员改档案被拒绝（40301）',

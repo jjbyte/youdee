@@ -1,4 +1,4 @@
-import { ok, requireAdmin, reqUuid } from '@/server/http';
+import { ok, requireInvoiceAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { restoreInvoice } from '@/server/services/invoice.service';
 
@@ -9,7 +9,7 @@ import { restoreInvoice } from '@/server/services/invoice.service';
  * 这也是"删除只打 deleted_at"的唯一理由。
  */
 export const POST = route(async (_req, params) => {
-  await requireAdmin('恢复发票');
+  await requireInvoiceAccess();
   return ok(await restoreInvoice(reqUuid(params.id, 'id')));
 });
 

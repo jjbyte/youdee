@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireUser, reqUuid } from '@/server/http';
+import { requireContractAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { getContractFileRef } from '@/server/services/contract.service';
 import { presignCosDownload } from '@/server/services/storage.service';
@@ -19,7 +19,7 @@ import { presignCosDownload } from '@/server/services/storage.service';
 const OFFICE_EXT = new Set(['doc', 'docx', 'xls', 'xlsx']);
 
 export const GET = route(async (req, params) => {
-  await requireUser();
+  await requireContractAccess();
   const contractId = reqUuid(params.id, 'id');
   const fileId = reqUuid(params.fileId, 'fileId');
   const ref = await getContractFileRef(contractId, fileId);

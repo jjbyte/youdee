@@ -1,4 +1,4 @@
-import { body, ok, requireUser, searchParams } from '@/server/http';
+import { body, ok, requireContractAccess, searchParams } from '@/server/http';
 import { dateParam, pageQuery } from '@/server/params';
 import { route } from '@/server/wrap';
 import { createContract, listContracts } from '@/server/services/contract.service';
@@ -7,20 +7,21 @@ import { isContractCategory, isContractStatus } from '@/domain/contract';
 /**
  * 合同台账。
  *
- * 读：任何登录用户。合同不是机密——查不到合同才真会出事。
- * 写：任何登录用户。录入是行政活，卡在管理员身上就会变成"管理员不在就录不进去"。
- * 删：管理员（软删，可恢复），见 [id]/route.ts。
+ * 权限：**整块仅管理员**（2026-11-17 客户要求，读也拦）。
+ * 一支路由一个人判：`requireContractAccess()`，成员拿到 403，界面侧连导航都不给。
+ * 这条口径改过的代价要写清楚：现在哪怕是"查一下这单签了没"也得管理员来，
+ * 所以列表接口必须支持模糊 + 分页（见下面的 q 与 page），别让管理员靠翻页找人。
  *
  * 查询维度照客户的 Excel 口径：合同编号 / 合同名称 / 公司（甲方）/ 客户（乙方）/
  * 签订日期区间 / 创建日期区间。`q` 是兜底：六个字段一起模糊。
  */
 export const GET = route(async (req) => {
-  const actor = await requireUser();
+  const actor = await requireContractAccess();
   const sp = searchParams(req);
   const hasFileRaw = sp.get('has_file');
   const hasFile = hasFileRaw === '1' || hasFileRaw === 'true' ? true : hasFileRaw === '0' || hasFileRaw === 'false' ? false : null;
 
-  // 「已删除」只给管理员看：成员看到一堆灰行却恢复不了，只会误以为合同丢了
+  // 能走到这里的只有管理员，所以 include_deleted 实际就是"要不要连软删的一起看"
   const wantDeleted = sp.get('include_deleted') === '1' || sp.get('include_deleted') === 'true';
   const txt = (k: string) => (sp.get(k) ?? '').trim() || null;
   // 分类只有三个合法值：认不出的按"不筛"处理，不报错——
@@ -53,7 +54,7 @@ export const GET = route(async (req) => {
 });
 
 export const POST = route(async (req) => {
-  const actor = await requireUser();
+  const actor = await requireContractAccess();
   const b = await body<Record<string, unknown>>(req);
   return ok(await createContract(b, actor), 201);
 });

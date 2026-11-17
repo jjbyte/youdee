@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { api, errorMessage, isUnauthorized } from '@/lib/api';
 import type { CurrentUser } from '@/lib/types';
+import { canAccessContracts, canAccessInvoices } from '@/domain/permissions';
 import {
   IconCollapse,
   IconContract,
@@ -29,9 +30,11 @@ function crumbs(pathname: string): string[] {
   // 嘉宾价不是独立模块，是人员库的一个预置筛选视图，面包屑挂在人员库下面
   if (pathname.startsWith('/guests')) return ['人员库', '嘉宾价'];
   if (pathname.startsWith('/vendors')) return ['供应商'];
-  // 合同管理是独立台账，不是报价单的附属：合同先于报价签，两边各自查各自的
+  // 合同管理是独立台账（路由不挂在 /quotes 下面），面包屑保持一节；
+  // 侧栏把它排在报价单之后只是阅读顺序，不代表层级——面包屑要是跟着写成
+  // 「报价单 / 合同管理」，人会以为退回报价单才能看到合同列表。
   if (pathname.startsWith('/contracts')) return ['合同管理'];
-  // 发票是财务台账，跟合同是"挂靠"关系而不是父子关系，所以平级
+  // 发票同理：跟合同是"挂靠"关系而不是父子关系，所以也平级
   if (pathname.startsWith('/invoices')) return ['发票台账'];
   if (pathname.startsWith('/quotes')) {
     if (pathname === '/quotes') return ['报价单'];
@@ -148,6 +151,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`);
 
+  // 导航条目按权限收，不是按"点了会报错"来兜底：成员页面上根本不该出现这两个入口。
+  // 判定走 domain/permissions.ts 的纯函数，和接口侧同一个来源，不在这里写 role === 'admin'。
+  const canManageContracts = user ? canAccessContracts(user.role) : false;
+  const canManageInvoices = user ? canAccessInvoices(user.role) : false;
+
   return (
     <div className="shell" data-collapsed={collapsed}>
       <nav className="sidebar" aria-label="主导航">
@@ -182,27 +190,35 @@ export function AppShell({ children }: { children: ReactNode }) {
           icon={<IconVendor size={20} />}
         />
         <NavLink
-          href="/contracts"
-          label="合同管理"
-          collapsed={collapsed}
-          active={isActive('/contracts')}
-          icon={<IconContract size={20} />}
-        />
-        <NavLink
           href="/quotes"
           label="报价单"
           collapsed={collapsed}
           active={isActive('/quotes')}
           icon={<IconQuote size={20} />}
         />
-        {/* 发票放在报价单之后：它是"钱回来以后"的凭据，日常动线在报价单之后 */}
-        <NavLink
-          href="/invoices"
-          label="发票"
-          collapsed={collapsed}
-          active={isActive('/invoices')}
-          icon={<IconInvoice size={20} />}
-        />
+        {/* 合同挂在报价单之后（2026-11-17 调整）：报价 → 合同 → 发票是钱走完一遍的顺序，
+            而"合同"在现实里就是从报价长出来的下一步，不是平行的一条线。
+            面包屑仍然平级（`/contracts` 不是 `/quotes/:id/contracts`），
+            这里改的只是侧栏的阅读顺序，不是层级。 */}
+        {canManageContracts ? (
+          <NavLink
+            href="/contracts"
+            label="合同管理"
+            collapsed={collapsed}
+            active={isActive('/contracts')}
+            icon={<IconContract size={20} />}
+          />
+        ) : null}
+        {/* 发票放在合同之后：它是"钱回来以后"的凭据 */}
+        {canManageInvoices ? (
+          <NavLink
+            href="/invoices"
+            label="发票"
+            collapsed={collapsed}
+            active={isActive('/invoices')}
+            icon={<IconInvoice size={20} />}
+          />
+        ) : null}
 
         <div className="nav-spacer" />
 

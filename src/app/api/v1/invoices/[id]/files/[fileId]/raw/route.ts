@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Readable } from 'node:stream';
-import { requireUser, reqUuid } from '@/server/http';
+import { requireInvoiceAccess, reqUuid } from '@/server/http';
 import { route } from '@/server/wrap';
 import { getInvoiceFileRef, openInvoiceFileStream } from '@/server/services/invoice-file.service';
 import { presignCosDownload } from '@/server/services/storage.service';
@@ -20,7 +20,7 @@ import { presignCosDownload } from '@/server/services/storage.service';
 const INLINE_EXT = new Set(['pdf', 'jpg', 'png']);
 
 export const GET = route(async (_req, params) => {
-  const actor = await requireUser();
+  const actor = await requireInvoiceAccess();
   const invoiceId = reqUuid(params.id, 'id');
   const fileId = reqUuid(params.fileId, 'fileId');
   const ref = await getInvoiceFileRef(invoiceId, fileId, { includeDeleted: actor.role === 'admin' });

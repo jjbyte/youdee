@@ -61,6 +61,23 @@ export function canManageCatalog(role: Role): boolean {
 }
 
 /**
+ * 合同管理：**查看与操作都仅 admin**（2026-11-17 客户要求）。
+ *
+ * 和「作废/恢复成员也能做」那条相反，这里连读都不给。
+ * 理由不是"合同更重要"，是合同的读者就那几个人：成员看得到却改不了，
+ * 唯一的作用是让他绕过流程去问管理员"这单签了没"，不如干脆不留入口。
+ * 判定函数名带 Access 而不是 Manage，就是为了让进来的人一眼看出**读也拦**。
+ */
+export function canAccessContracts(role: Role): boolean {
+  return role === 'admin';
+}
+
+/** 发票台账：查看与操作都仅 admin（同日决定）。台账里有价税与开票信息，属财务口径 */
+export function canAccessInvoices(role: Role): boolean {
+  return role === 'admin';
+}
+
+/**
  * 能力清单（给界面用的**展示**数据，不放判定逻辑）。
  *
  * 放在这个文件里是故意的：判定函数和这张表必须逐行对得上，
@@ -86,6 +103,8 @@ export const ROLE_CAPABILITIES: RoleCapability[] = [
   { label: '导出客户版', admin: true, member: true },
   { label: '导出内部版（含成本）', admin: true, member: false },
   { label: '供应商档案 / 分类字典', admin: true, member: false },
+  { label: '合同管理（全部功能，含查看）', admin: true, member: false },
+  { label: '发票台账（全部功能，含查看）', admin: true, member: false },
   { label: '设置项 / 账号管理', admin: true, member: false },
 ];
 

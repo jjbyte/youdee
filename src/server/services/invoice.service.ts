@@ -64,6 +64,16 @@ export interface InvoiceListQuery {
   issuedFrom: string | null;
   issuedTo: string | null;
   status: InvoiceStatus | null;
+  /**
+   * 票面是不是红字票。
+   *
+   * 它和 `status` 组合起来才是界面上那三选一：
+   *   redLetter=null + status='red'    → 已冲红
+   *   redLetter=false + status='normal' → 正常（筛「正常」时必须排除红字票）
+   *   redLetter=true                    → 红字票
+   * 不合并进 status 枚举，是因为金额符号只认 `is_red_letter` 一列（0.1.38 的教训）。
+   */
+  redLetter: boolean | null;
   hasFile: boolean | null;
   /** 是否已挂合同（true = 至少一份**未软删**的合同关联，false = 一份都没有） */
   hasContract: boolean | null;
@@ -140,6 +150,7 @@ export function invoiceWhere(
   if (query.issuedFrom) add((n) => `${a}.issued_on >= $${n}::date`, query.issuedFrom);
   if (query.issuedTo) add((n) => `${a}.issued_on <= $${n}::date`, query.issuedTo);
   if (query.status) add((n) => `${a}.status = $${n}`, query.status);
+  if (query.redLetter !== null) add((n) => `${a}.is_red_letter = $${n}`, query.redLetter);
   if (query.hasFile !== null) {
     parts.push(
       query.hasFile
@@ -200,6 +211,14 @@ export function parseInvoiceListQuery(sp: URLSearchParams, opts: { allowDeleted:
     );
   }
 
+  /*
+   * `red_letter` 不是 status 列的值，而是票面性质：翻译成 `is_red_letter = true`。
+   * 反过来筛「正常」时把红字票排除 —— 界面把红字票单列成一项，
+   * 三项（正常 / 已冲红 / 红字票）互斥，加起来才是全集；
+   * 不排除的话，状态栏写着「红字票」的行会出现在「正常」的筛选结果里。
+   */
+  const statusRaw = enumParam(sp, 'status', ['normal', 'red', 'red_letter'] as const);
+
   return {
     q: txt('q'),
     invoiceNo: txt('invoice_no'),
@@ -208,7 +227,8 @@ export function parseInvoiceListQuery(sp: URLSearchParams, opts: { allowDeleted:
     seller: txt('seller'),
     issuedFrom: dateParam(sp, 'issued_from'),
     issuedTo: dateParam(sp, 'issued_to'),
-    status: enumParam(sp, 'status', ['normal', 'red'] as const),
+    status: statusRaw === 'red_letter' ? null : statusRaw,
+    redLetter: statusRaw === 'red_letter' ? true : statusRaw === 'normal' ? false : null,
     hasFile: flag('has_file'),
     hasContract: flag('has_contract'),
     ids,
@@ -454,6 +474,13 @@ export async function patchInvoice(
   if ('total_amount' in v) set('total_amount', v.total_amount, '::numeric');
   if ('amount_check' in v && v.amount_check) set('amount_check', v.amount_check);
 
+  /*
+   * `status_source` 只写一次：两个分支都 set 的话，同一次请求里会生成
+   * `status_source = $n, status_source = $m`，PostgreSQL 直接报
+   * "multiple assignments to same column"（前端目前不会这么发，但接口不该靠这一点）。
+   */
+  let manualTouched = false;
+
   if ('status' in v) {
     const next = v.status;
     if (!isInvoiceStatus(next)) {
@@ -463,13 +490,33 @@ export async function patchInvoice(
       throw new AppError(40301, '只有管理员能改发票状态。', 403);
     }
     /*
+     * 红字票不能标「已冲红」。
+     *
+     * 「已冲红」说的是"这张蓝票被一张红字票冲掉了"；红字票自己就是那张冲减凭证，
+     * 再给它盖上这个标签，等于说"它被另一张票冲了"，对不上账，也抵不出 0。
+     * 前端在红字票上已经不给这个按钮，这里再挡一道（接口会被直接调）。
+     *
+     * 判的是**改完之后**是不是红字票，而不是库里现在是不是：
+     * 同一次请求里「取消红字票 + 标已冲红」是合法的（那张票改完就是普通蓝票），
+     * 用 existing 判会把这个正常操作也挡掉。
+     */
+    const redLetterAfter = 'is_red_letter' in v ? v.is_red_letter === true : existing.is_red_letter === true;
+    if (next === 'red' && redLetterAfter) {
+      throw new AppError(
+        40001,
+        '这张是红字票，不能再标「已冲红」。要撤的是被它冲的那张原票上的标记。',
+        400,
+        { field: 'status' },
+      );
+    }
+    /*
      * 只改标签，**不动金额**。
      *
      * 「已冲红」表达的是"这张蓝票已经被一张红字票冲掉了"，而抵账的负数由那张红字票
      * 自己带着。这里要是再翻一次符号，同一对票就会抵两次（合计变成 −2X）。
      */
     set('status', next);
-    set('status_source', 'manual');
+    manualTouched = true;
   }
 
   if ('is_red_letter' in v) {
@@ -478,7 +525,19 @@ export async function patchInvoice(
       throw new AppError(40301, '只有管理员能改「红字票」标记：它会翻转三项金额的符号，直接影响合计。', 403);
     }
     set('is_red_letter', next);
-    set('status_source', 'manual');
+    manualTouched = true;
+
+    /*
+     * 勾上红字票 → 它不可能同时是「已冲红」。
+     *
+     * 同一次请求里两个都传是自相矛盾：上面 `status` 分支已经 400；
+     * 只勾了红字票、库里原先标着「已冲红」的话，这个动作本身就是"撤掉那个标签"，
+     * 同一条 UPDATE 里改回 normal（不额外弹错——用户点的就是这一件事）。
+     */
+    if (next && !('status' in v) && existing.status === 'red') {
+      set('status', 'normal');
+    }
+
     if (!('amount' in v) && !('tax_amount' in v) && !('total_amount' in v)) {
       // 只改票面性质：金额同步重定符号（这是 §5.5 的连锁动作，不能只改这一列）
       const signed = signAmounts(
@@ -494,6 +553,8 @@ export async function patchInvoice(
       set('total_amount', signed.totalAmount, '::numeric');
     }
   }
+
+  if (manualTouched) set('status_source', 'manual');
 
   if (sets.length === 0) return getInvoice(id);
 
@@ -522,17 +583,29 @@ export async function patchInvoice(
  * 这里要是顺手翻符号，同一对票会被抵两次——0.1.38 及以前就是这样，
  * 只改状态就把合计打歪，而且只有对账时才发现。
  *
+ * 红字票不接受 `red`：它本身就是那张冲减凭证，再标「已冲红」等于说"它被另一张票冲了"。
  * 要改的是"这张票面是不是红字票"（那才决定符号），走 `patchInvoice` 的 `is_red_letter`。
  */
 export async function setInvoiceStatus(id: string, status: InvoiceStatus): Promise<InvoiceDetailDTO> {
-  const rows = await q<{ id: string }>(
+  const existing = await one<{ is_red_letter: boolean }>(
+    'SELECT is_red_letter FROM invoices WHERE id = $1 AND deleted_at IS NULL',
+    [id],
+  );
+  if (!existing) throw new AppError(40401, '这张发票不存在，可能已经被删掉了。', 404);
+  if (status === 'red' && existing.is_red_letter === true) {
+    throw new AppError(
+      40901,
+      '这张是红字票，不能再标「已冲红」——它本身就是那张冲减凭证。要撤的是被它冲的那张原票上的标记。',
+      409,
+      { field: 'status' },
+    );
+  }
+  await q(
     `UPDATE invoices
         SET status = $1, status_source = 'manual', updated_at = now()
-      WHERE id = $2 AND deleted_at IS NULL
-      RETURNING id`,
+      WHERE id = $2`,
     [status, id],
   );
-  if (!rows[0]) throw new AppError(40401, '这张发票不存在，可能已经被删掉了。', 404);
   return getInvoice(id);
 }
 

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api, errorMessage } from '@/lib/api';
 import type { InvoiceDetail } from '@/lib/types';
 import { cx, EM_DASH, formatDate, formatTimeRel } from '@/lib/format';
-import { INVOICE_AMOUNT_CHECK_TEXT, invoiceStatusLabel } from '@/lib/labels';
+import { INVOICE_AMOUNT_CHECK_TEXT, invoiceDisplayStatus } from '@/lib/labels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Drawer } from '@/components/ui/overlay';
@@ -166,6 +166,11 @@ export function InvoiceDrawer({
 
   const deleted = detail?.deletedAt != null;
   const checkText = detail ? (INVOICE_AMOUNT_CHECK_TEXT[detail.amountCheck] ?? '') : '';
+  /* 新建态还没落库，用表单里的红字票勾选算；有 detail 时两边一致（保存后一起回填） */
+  const displayStatus = invoiceDisplayStatus({
+    isRedLetter: form.isRedLetter,
+    status: detail?.status ?? 'normal',
+  });
 
   return (
     <Drawer
@@ -217,15 +222,11 @@ export function InvoiceDrawer({
       <div className="flex items-center gap-[var(--space-3)] flex-wrap">
         <span className="t-2xs t-3">状态</span>
         {/*
-          两个徽标回答两个不同的问题：
-            · 红字票 = 这张票面本身是红冲票，金额记负（在台账里是一张正常凭证）；
-            · 正常 / 已冲红 = 这张**蓝票**有没有被红字票冲掉。
-          把两者合成一个「冲红」，就会出现"这张票明明是红票，怎么状态写正常"的误读。
+          一个徽标，三选一：红字票 > 已冲红 > 正常（见 invoiceDisplayStatus）。
+          红字票是票面性质，但它盖过「正常」——票面是负数、状态却写正常，只会让人以为系统错了。
+          新建态还没落库，用表单里的勾选状态算。
         */}
-        {detail?.isRedLetter ? <Badge tone="warn">红字票</Badge> : null}
-        <Badge tone={detail?.status === 'red' ? 'danger' : 'neutral'}>
-          {detail ? invoiceStatusLabel(detail.status) : '正常'}
-        </Badge>
+        <Badge tone={displayStatus.tone}>{displayStatus.label}</Badge>
         {detail?.statusSource === 'manual' ? (
           <span className="t-2xs t-3">人工改过（重新识别不会覆盖）</span>
         ) : null}
@@ -234,14 +235,19 @@ export function InvoiceDrawer({
         ) : null}
         <span style={{ flex: 1 }} />
         {isAdmin && currentId && detail && !deleted ? (
-          <button
-            type="button"
-            className={cx('btn btn--link t-xs', detail.status === 'red' ? '' : 't-danger')}
-            onClick={() => askStatus(detail.status === 'red' ? 'normal' : 'red')}
-            title="只改标签，不动金额：抵账的负数由红字票那一行带着"
-          >
-            {detail.status === 'red' ? '改回正常（只改标签）' : '标记为已冲红（金额不变）'}
-          </button>
+          detail.isRedLetter ? (
+            /* 红字票本身是冲减凭证，再标「已冲红」等于说"这张票被另一张票冲了"，对不上账 */
+            <span className="t-2xs t-3">红字票不能再标「已冲红」——要标的是它冲的那张原票</span>
+          ) : (
+            <button
+              type="button"
+              className={cx('btn btn--link t-xs', detail.status === 'red' ? '' : 't-danger')}
+              onClick={() => askStatus(detail.status === 'red' ? 'normal' : 'red')}
+              title="只改标签，不动金额：抵账的负数由红字票那一行带着"
+            >
+              {detail.status === 'red' ? '改回正常（只改标签）' : '标记为已冲红（金额不变）'}
+            </button>
+          )
         ) : null}
         {!isAdmin ? <span className="t-2xs t-3">改状态找管理员</span> : null}
       </div>

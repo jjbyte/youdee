@@ -178,7 +178,8 @@ export function InvoiceEditFields({
         </label>
         <span className="t-2xs t-3">
           勾上后金额、税额、价税合计按负数记（合计算的是净额）。被它冲的那张原票再标「已冲红」——
-          两步都做，一对票在合计里正好抵成 0。
+          两步都做，一对票在合计里正好抵成 0。红字票自己就是冲减凭证，
+          <strong>不能再标「已冲红」</strong>。
         </span>
         {form.isRedLetter ? (
           <Field

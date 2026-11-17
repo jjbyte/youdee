@@ -230,6 +230,27 @@ export function invoiceStatusLabel(s: InvoiceStatus | null | undefined): string 
 }
 
 /**
+ * 「状态」那一格该显示什么 —— 红字票优先。
+ *
+ * 红字票**不是**第三种 status：金额符号由 `isRedLetter` 决定，再给 status 加一个值
+ * 就是同一件事的第二个真相源（0.1.38 合一过一次，一对票抵成 −2X）。
+ * 但界面必须让它盖过「正常」：票面金额是负的、旁边还写着"冲 XXXXX"，
+ * 状态栏却显示「正常」，看账的人只会以为系统算错了。所以展示层三选一。
+ *
+ * 互斥也在这里体现：红字票本身是冲减凭证，不能再被标成「已冲红」
+ * （那是原票才有的标记，服务端同样拒绝）。
+ */
+export function invoiceDisplayStatus(inv: {
+  isRedLetter: boolean;
+  status: InvoiceStatus;
+}): { label: string; tone: 'warn' | 'danger' | 'neutral' } {
+  if (inv.isRedLetter) return { label: '红字票', tone: 'warn' };
+  return inv.status === 'red'
+    ? { label: invoiceStatusLabel('red'), tone: 'danger' }
+    : { label: invoiceStatusLabel('normal'), tone: 'neutral' };
+}
+
+/**
  * 三项金额对不对得上。null 表示还没算（老数据）：这时不显示任何标记，
  * 而不是默认说它"没问题"。
  */

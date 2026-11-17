@@ -21,7 +21,8 @@ export interface InvoiceFilters {
   /** yyyy-mm-dd */
   issuedFrom: string;
   issuedTo: string;
-  status: '' | 'normal' | 'red';
+  /** 三选一，互斥：正常（不含红字票）/ 已冲红 / 红字票 */
+  status: '' | 'normal' | 'red' | 'red_letter';
   /** '' = 不限；linked = 已挂合同；unlinked = 还没挂 */
   contract: '' | 'linked' | 'unlinked';
   /** 仅管理员可见的开关：把软删的票也列出来（恢复入口在这里） */
@@ -153,9 +154,13 @@ export function InvoiceFiltersBar({
             onChange={(e) => onChange({ status: e.target.value as InvoiceFilters['status'] })}
           >
             <option value="">全部</option>
+            {/*
+              三项互斥，加起来是全集。红字票不再归进「正常」——
+              它的状态栏就写着「红字票」，却能在筛「正常」时出现，没人解释得清。
+            */}
             <option value="normal">正常</option>
-            {/* 筛的是「这张蓝票被冲掉了没有」，红字票自己是「正常」（见列表里的红字票徽标） */}
             <option value="red">已冲红</option>
+            <option value="red_letter">红字票</option>
           </Select>,
         )}
         {label(

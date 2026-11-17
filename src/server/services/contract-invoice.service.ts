@@ -31,6 +31,8 @@ export interface LinkedInvoiceDTO {
   buyer_name: string;
   total_amount: string | null;
   status: InvoiceStatus;
+  /** 票面是不是红字票：界面上的「状态」要显示「红字票」而不是「正常」 */
+  is_red_letter: boolean;
   /** 发票被软删：关联还在，但界面要标灰 */
   deleted: boolean;
 }
@@ -46,12 +48,13 @@ interface LinkedRow extends QueryResultRow {
   buyer_name: string;
   total_amount: string | null;
   status: string;
+  is_red_letter: boolean;
   deleted_at: Date | null;
 }
 
 const SELECT_LINKED = `
   SELECT i.id, i.invoice_no, i.invoice_code, i.invoice_type, i.invoice_type_label,
-         i.issued_on, i.seller_name, i.buyer_name, i.total_amount, i.status, i.deleted_at
+         i.issued_on, i.seller_name, i.buyer_name, i.total_amount, i.status, i.is_red_letter, i.deleted_at
     FROM contract_invoices ci
     JOIN invoices i ON i.id = ci.invoice_id`;
 
@@ -68,6 +71,7 @@ function toLinkedDTO(r: LinkedRow): LinkedInvoiceDTO {
     // numeric 经 db.ts 已是字符串，原样带出
     total_amount: r.total_amount,
     status: isInvoiceStatus(r.status) ? r.status : 'normal',
+    is_red_letter: r.is_red_letter === true,
     deleted: r.deleted_at !== null,
   };
 }

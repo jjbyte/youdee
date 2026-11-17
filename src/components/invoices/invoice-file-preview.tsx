@@ -1,11 +1,11 @@
 'use client';
-import { api } from '@/lib/api';
 import type { InvoiceFile } from '@/lib/types';
 import { fileSize } from '@/lib/format';
 import { previewKind, previewBlockedHint } from '@/lib/file-preview';
 import { Badge } from '@/components/ui/badge';
 import { Modal } from '@/components/ui/overlay';
 import { Note } from '@/components/ui/states';
+import { PdfPreview } from '@/components/ui/pdf-preview';
 import { IconDownload, IconFile } from '@/components/icons';
 
 /** 原件扩展名：先看服务端按字节判定的 ext，再看 mime，最后退回文件名 */
@@ -28,10 +28,12 @@ export function invoiceFileExt(f: { originalName: string; mime: string; ext?: st
  * 发票原件预览。
  *
  * 只处理 PDF 与图片两种——发票原件只有这两类，docx/xlsx 那套解析器在这里是负担不是能力。
+ * OFD 浏览器自身不认识，只能下载（列表里那一行会明说"只能下载"，不给假按钮）。
  *
- * PDF 直接塞 iframe 交给浏览器自带阅读器（能翻页、能搜索，全都免费）；
- * 地址走 `/raw`（服务端按库里的 mime 写 `inline`），**不用 `url`**：
- * 云存储的 url 的元数据可能是 attachment，点预览会变成下载（合同模块线上翻过这个车）。
+ * 地址走同源 `content` 路由，**不用 `file.url`**：云存储的 url / `/raw` 会 302 到预签名
+ * 地址，能不能内联取决于中间层有没有保留 disposition 参数；一旦丢掉，桶里的元数据
+ * （attachment）生效，点「预览」就变成下载一个文件。合同附件那条路已经踩过这个坑，
+ * 这里用同一套做法（服务端自己写 mime 与 inline）。
  */
 export function InvoiceFilePreview({
   invoiceId,
@@ -44,7 +46,7 @@ export function InvoiceFilePreview({
 }) {
   const ext = invoiceFileExt(file);
   const kind = previewKind(ext);
-  const src = api.invoiceFileUrl(invoiceId, file.id);
+  const src = `/api/v1/invoices/${invoiceId}/files/${file.id}/content`;
 
   return (
     <Modal
@@ -70,7 +72,7 @@ export function InvoiceFilePreview({
 
       <div className="h-[70vh] min-h-[280px] overflow-auto bg-[var(--surface)] rounded-[var(--radius-md)]">
         {kind === 'pdf' ? (
-          <iframe src={src} title={file.originalName || 'PDF 预览'} className="w-full h-full border-0" />
+          <PdfPreview url={src} fileName={file.originalName} />
         ) : kind === 'image' ? (
           <div className="p-[var(--space-3)] flex justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}

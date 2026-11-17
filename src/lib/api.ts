@@ -268,7 +268,13 @@ export type InvoiceQuery = {
   seller?: string;
   issuedFrom?: string;
   issuedTo?: string;
-  status?: 'normal' | 'red';
+  /**
+   * 三选一，互斥：
+   *   normal      = 未冲红的普通票（**不含红字票**，红字票有自己的那一项）
+   *   red         = 已被红字票冲掉的原票
+   *   red_letter  = 票面本身是红字票（金额为负）
+   */
+  status?: 'normal' | 'red' | 'red_letter';
   hasFile?: boolean;
   /**
    * 是否已挂合同：1 只看挂了的，0 只看还没挂的。
@@ -672,8 +678,6 @@ export const api = {
    */
   invoiceZipUrl: (params: InvoiceQuery & { ids?: string } = {}) =>
     `${API_BASE}/invoices/zip${qs(params)}`,
-  /** 原件：PDF/JPG/PNG 服务端按 inline 流式返回，所以能直接塞进 iframe / img */
-  invoiceFileUrl: (id: string, fileId: string) => `${API_BASE}/invoices/${id}/files/${fileId}/raw`,
 
   // ── 发票识别设置 ──
   /** 登录即可读（上传按钮要据此置灰），但**永不回 secretKey 原文** */

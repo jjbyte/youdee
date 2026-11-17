@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { extractOriginalFromFields, extractOriginalInvoiceNo } from '../src/domain/invoice-red-letter';
 import { contractExpiry } from '../src/lib/contract-expiry';
+import { invoiceDisplayStatus, invoiceStatusLabel } from '../src/lib/labels';
 
 describe('红字票的原发票号码', () => {
   it('数电写法：被红冲蓝字数电发票号码', () => {
@@ -129,5 +130,41 @@ describe('合同到期的人话', () => {
     expect(contractExpiry(null, '2026-03-19')).toBeNull();
     expect(contractExpiry('', '2026-03-19')).toBeNull();
     expect(contractExpiry('2026/03/19', '2026-03-19')).toBeNull();
+  });
+});
+
+/**
+ * 状态栏三选一（0.1.42 客户要求）。
+ *
+ * 红字票不再显示「正常」：票面是负数、旁边写着"冲 XXXXX"，状态栏却写正常，
+ * 客户会直接问"你们是不是算错了"。但它也不是第三种 `status`——
+ * 只是展示层让 `is_red_letter` 盖过 status，金额符号仍只认一列。
+ */
+describe('发票状态栏：正常 / 已冲红 / 红字票', () => {
+  it('红字票优先：即使 status 是 normal 也显示「红字票」', () => {
+    expect(invoiceDisplayStatus({ isRedLetter: true, status: 'normal' })).toEqual({
+      label: '红字票',
+      tone: 'warn',
+    });
+  });
+
+  it('普通蓝票按 status 走：正常 / 已冲红', () => {
+    expect(invoiceDisplayStatus({ isRedLetter: false, status: 'normal' })).toEqual({
+      label: '正常',
+      tone: 'neutral',
+    });
+    expect(invoiceDisplayStatus({ isRedLetter: false, status: 'red' })).toEqual({
+      label: '已冲红',
+      tone: 'danger',
+    });
+  });
+
+  it('互相排斥：红字票永远不会显示「已冲红」（即便库里脏成 red）', () => {
+    expect(invoiceDisplayStatus({ isRedLetter: true, status: 'red' }).label).toBe('红字票');
+  });
+
+  it('文案与领域层的状态码表同源（改一处不会漏另一处）', () => {
+    expect(invoiceStatusLabel('normal')).toBe('正常');
+    expect(invoiceStatusLabel('red')).toBe('已冲红');
   });
 });

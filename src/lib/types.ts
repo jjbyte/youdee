@@ -809,6 +809,11 @@ export interface InvoiceBrief {
   buyerName: string;
   totalAmount: string | null;
   status: InvoiceStatus;
+  /**
+   * 票面是红字票：界面「状态」显示「红字票」，盖过 status 的「正常」。
+   * 与发票台账那一列是同一个字段，合同抽屉不该有另一套说法。
+   */
+  isRedLetter: boolean;
   /** 发票已被软删：关联保留，界面标灰并提示可恢复 */
   deleted: boolean;
 }

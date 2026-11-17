@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { InvoiceListItem } from '@/lib/types';
 import { cx, EM_DASH, formatDate, formatDecimalString } from '@/lib/format';
-import { INVOICE_AMOUNT_CHECK_TEXT, invoiceStatusLabel } from '@/lib/labels';
+import { INVOICE_AMOUNT_CHECK_TEXT, invoiceDisplayStatus } from '@/lib/labels';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableWrap, Td, Th } from '@/components/ui/table';
 import { IconPaperclip } from '@/components/icons';
@@ -78,6 +78,7 @@ export function InvoiceTable({
             const picked = selected.has(r.id);
             const amountTone = redLetter ? 't-danger' : undefined;
             const check = INVOICE_AMOUNT_CHECK_TEXT[r.amountCheck] ?? '';
+            const display = invoiceDisplayStatus(r);
             return (
               <tr
                 key={r.id}
@@ -145,13 +146,12 @@ export function InvoiceTable({
 
                 <Td>
                   {/*
-                    两个徽标是两件事：左边说的是**票面性质**（红字票，金额为负），
-                    右边说的是**这张蓝票被冲掉了没有**。合成一个「冲红」，
-                    用户就分不清"这张是红字票"还是"这张被红字票冲了"。
+                    一个徽标，三选一：红字票 > 已冲红 > 正常（见 invoiceDisplayStatus）。
+                    红字票是票面性质，但它在台账里**必须**盖过「正常」——
+                    金额是负数、旁边写着"冲 XXXXX"，状态却写正常，看账的人会以为算错了。
                   */}
                   <div className="flex items-center gap-[var(--space-2)] flex-wrap">
-                    {redLetter ? <Badge tone="warn">红字票</Badge> : null}
-                    <Badge tone={r.status === 'red' ? 'danger' : 'neutral'}>{invoiceStatusLabel(r.status)}</Badge>
+                    <Badge tone={display.tone}>{display.label}</Badge>
                   </div>
                   {redLetter && r.originalInvoiceNo ? (
                     <span className="cell-sub num truncate max-w-[180px]" title={`冲的是原票 ${r.originalInvoiceNo}`}>

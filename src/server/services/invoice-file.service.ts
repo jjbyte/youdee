@@ -12,7 +12,7 @@
  * 于是 3 行 `invoice_files` 共用同一个 `storage_key`，回收靠引用计数（见 §6.4）。
  */
 import { createReadStream } from 'node:fs';
-import { stat, rm } from 'node:fs/promises';
+import { readFile, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
@@ -288,6 +288,42 @@ export async function openInvoiceFileStream(ref: InvoiceFileRef): Promise<Readab
   }
   const abs = path.join(/*turbopackIgnore: true*/ uploadRoot(), ref.storageKey);
   return createReadStream(abs);
+}
+
+/**
+ * 读一份原件的**完整字节**（同源 content 路由用）。
+ *
+ * 与 `openInvoiceFileStream` 的分工：那个给 ZIP 打包用（本地真流式、峰值与文件大小无关）；
+ * 这个给"在页面里看"用，需要一份**准确的 Content-Length**——库里记的 `size_bytes`
+ * 是上传那一刻的值，历史数据/中断上传可能对不上，长度写错会让浏览器截断响应或一直转圈。
+ * 发票原件上传硬上限 20MB，整份读进内存是可控的（合同附件那边同一条理由）。
+ *
+ * `includeDeleted` 只给管理员：软删的票在列表里看不见，但原件还能打开核对。
+ */
+export async function readInvoiceFileBytes(
+  invoiceId: string,
+  fileId: string,
+  opts: { includeDeleted?: boolean } = {},
+): Promise<{ ref: InvoiceFileRef; buf: Buffer }> {
+  const ref = await getInvoiceFileRef(invoiceId, fileId, opts);
+
+  let buf: Buffer;
+  if (ref.storage === 'cos') {
+    buf = await getCosObject(ref.storageKey);
+  } else {
+    const root = uploadRoot();
+    const abs = path.resolve(/*turbopackIgnore: true*/ root, ref.storageKey);
+    // 键来自库，理论上不会穿越；但"理论上"不该是唯一防线
+    if (abs !== root && !abs.startsWith(root + path.sep)) {
+      throw new AppError(40401, '这份原件的位置不合法。', 404);
+    }
+    try {
+      buf = await readFile(/*turbopackIgnore: true*/ abs);
+    } catch {
+      throw new AppError(40401, '原件文件已经不在了（可能被清理任务回收过），重新传一份吧。', 404);
+    }
+  }
+  return { ref, buf };
 }
 
 /**

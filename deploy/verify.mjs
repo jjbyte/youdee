@@ -1418,6 +1418,24 @@ async function main() {
     `${invRed.json?.data?.amount} / ${invRed.json?.data?.total_amount} status=${invRed.json?.data?.status} red=${invRed.json?.data?.is_red_letter}`,
   );
 
+  // 16.9b 红字票不能再标「已冲红」（0.1.42 客户要求）
+  //       红字票自己就是那张冲减凭证；再给它盖「已冲红」，等于说"它被另一张票冲了"，
+  //       一对票也就抵不出 0 了。界面在红字票上已经不给这个按钮，服务端同样要拒。
+  const invRedToRed = await call('PATCH', `/invoices/${invRedId}/status`, {
+    as: 'admin',
+    body: { status: 'red' },
+  });
+  const invRedAfterReject = await call('GET', `/invoices/${invRedId}`, { as: 'admin' });
+  record(
+    '红字票标「已冲红」被拒（409 / 40901），且状态与金额都不动',
+    invRedToRed.status === 409 &&
+      invRedToRed.json?.code === 40901 &&
+      invRedAfterReject.json?.data?.status === 'normal' &&
+      invRedAfterReject.json?.data?.is_red_letter === true &&
+      invRedAfterReject.json?.data?.total_amount === '-113.00',
+    `${invRedToRed.status} ${invRedToRed.json?.code}；之后 status=${invRedAfterReject.json?.data?.status} total=${invRedAfterReject.json?.data?.total_amount}`,
+  );
+
   // 16.10 标「已冲红」只改标签，**不动金额**
   //       抵账的负数由红字票自己带着；这里要是顺手翻符号，一对票会被抵两次。
   //       造一张蓝票来标，这样断言里"金额没变"才有意义。
@@ -1441,6 +1459,26 @@ async function main() {
       invToRed.json?.data?.status_source === 'manual',
     `${invToRed.json?.data?.status} ${invToRed.json?.data?.total_amount} source=${invToRed.json?.data?.status_source}`,
   );
+
+  // 16.10b 把「已冲红」的票勾成红字票：那个标签必须同时撤掉（0.1.42）
+  //        两者互斥。留在 red 上就会得到"红字票被标已冲红"的行——
+  //        状态栏和金额自相矛盾，而合计只能对一次。
+  const invFlip = await call('PATCH', `/invoices/${invBlueForStatusId}`, {
+    as: 'admin',
+    body: { is_red_letter: true },
+  });
+  record(
+    '勾上红字票时「已冲红」自动撤回，金额按票面性质翻成负数',
+    invFlip.json?.data?.is_red_letter === true &&
+      invFlip.json?.data?.status === 'normal' &&
+      invFlip.json?.data?.total_amount === '-113.00',
+    `red=${invFlip.json?.data?.is_red_letter} status=${invFlip.json?.data?.status} total=${invFlip.json?.data?.total_amount}`,
+  );
+  // 复原成蓝票 + 已冲红，后面 16.12/16.14 的合计与筛选仍按这张票的原样算
+  await call('PATCH', `/invoices/${invBlueForStatusId}`, {
+    as: 'admin',
+    body: { is_red_letter: false, status: 'red' },
+  });
 
   // 16.12 summary 与 items 必须是同一个口径
   //       两条 SQL 各写一遍就会出现"合计和行数对不上"，而这种不一致没人能复现，
@@ -1492,6 +1530,34 @@ async function main() {
     '开票日期区间含边界当天（且不含区间外）',
     (invDateIn.json?.data?.total ?? -1) === invAllCount && (invDateOut.json?.data?.total ?? -1) === 0,
     `当天区间 ${invDateIn.json?.data?.total ?? '?'} 条 / 截止昨天 ${invDateOut.json?.data?.total ?? '?'} 条`,
+  );
+
+  // 16.13b 状态筛选三选一，互斥且加起来是全集（0.1.42）
+  //        「正常」里混进红字票，是列表上最容易被指出来的矛盾：那一行的状态栏
+  //        明明写着「红字票」。所以 normal 必须排除 is_red_letter。
+  const invByNormal = await call(
+    'GET',
+    `/invoices?buyer=${encodeURIComponent(invBuyer)}&status=normal&limit=100`,
+    { as: 'admin' },
+  );
+  const invByRed = await call('GET', `/invoices?buyer=${encodeURIComponent(invBuyer)}&status=red&limit=100`, {
+    as: 'admin',
+  });
+  const invByRedLetter = await call(
+    'GET',
+    `/invoices?buyer=${encodeURIComponent(invBuyer)}&status=red_letter&limit=100`,
+    { as: 'admin' },
+  );
+  const invNormalHasRed = (invByNormal.json?.data?.items ?? []).some((r) => r.is_red_letter);
+  record(
+    '状态筛选互斥：正常不含红字票，红字票只给红字票，三项相加等于全量',
+    invNormalHasRed === false &&
+      (invByRedLetter.json?.data?.total ?? -1) === 1 &&
+      (invByRedLetter.json?.data?.items ?? []).every((r) => r.is_red_letter) &&
+      (invByRed.json?.data?.total ?? -1) === 1 &&
+      (invByNormal.json?.data?.total ?? -1) + (invByRed.json?.data?.total ?? -1) +
+        (invByRedLetter.json?.data?.total ?? -1) === invAllCount,
+    `normal=${invByNormal.json?.data?.total} red=${invByRed.json?.data?.total} red_letter=${invByRedLetter.json?.data?.total} 全量=${invAllCount}`,
   );
 
   // 16.11 权限：改状态与删除都只有管理员

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { api, errorMessage } from '@/lib/api';
 import type { InvoiceListItem } from '@/lib/types';
 import { EM_DASH, formatDate, formatDecimalString } from '@/lib/format';
-import { invoiceStatusLabel } from '@/lib/labels';
+import { invoiceDisplayStatus } from '@/lib/labels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/field';
@@ -146,6 +146,7 @@ export function InvoicePicker({
             {(rows ?? []).map((r) => {
               const isLinked = linked.has(r.id);
               const on = picked.has(r.id);
+              const st = invoiceDisplayStatus(r);
               return (
                 <li
                   key={r.id}
@@ -177,7 +178,7 @@ export function InvoicePicker({
                     </div>
                   </div>
                   <span className="num t-sm">{formatDecimalString(r.totalAmount, { symbol: true })}</span>
-                  <Badge tone={r.status === 'red' ? 'danger' : 'neutral'}>{invoiceStatusLabel(r.status)}</Badge>
+                  <Badge tone={st.tone}>{st.label}</Badge>
                   {isLinked ? <Badge tone="info">已挂</Badge> : null}
                   {r.deletedAt ? <Badge tone="warn">已删除</Badge> : null}
                 </li>

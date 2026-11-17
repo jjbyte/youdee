@@ -14,7 +14,7 @@ import { CONTRACT_CATEGORIES, CONTRACT_STATUSES, contractStatusLabel } from '@/d
 import { cx, fileSize, formatDate, formatDecimalString, formatMoney, formatTimeRel } from '@/lib/format';
 import { contractExpiry } from '@/lib/contract-expiry';
 import { canPreview } from '@/lib/file-preview';
-import { invoiceStatusLabel } from '@/lib/labels';
+import { invoiceDisplayStatus } from '@/lib/labels';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Field, Input, Select, Textarea } from '@/components/ui/field';
@@ -793,7 +793,9 @@ export function ContractDrawer({
           </Note>
         ) : (
           <ul className="flex flex-col gap-[var(--space-2)]">
-            {linkedInvoices.map((inv) => (
+            {linkedInvoices.map((inv) => {
+              const st = invoiceDisplayStatus(inv);
+              return (
               <li
                 key={inv.id}
                 className={cx(
@@ -815,7 +817,7 @@ export function ContractDrawer({
                   </div>
                 </div>
                 <span className="num t-sm">{formatDecimalString(inv.totalAmount, { symbol: true })}</span>
-                <Badge tone={inv.status === 'red' ? 'danger' : 'neutral'}>{invoiceStatusLabel(inv.status)}</Badge>
+                <Badge tone={st.tone}>{st.label}</Badge>
                 {isDeleted ? null : (
                   <button
                     type="button"
@@ -827,7 +829,8 @@ export function ContractDrawer({
                   </button>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </div>

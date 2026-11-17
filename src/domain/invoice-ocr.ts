@@ -148,8 +148,10 @@ export interface MappedInvoice {
   /**
    * 票面是红字票（红冲票）。
    *
-   * **不是 `status`**：红字票入账后的账面状态是「正常」（它本身就是一张正常凭证），
-   * 被它冲掉的那张蓝票才标「已冲红」。这里回答的是"金额该记正还是记负"。
+   * **不是 `status`**：入库时 status 记 `normal`，但界面上的「状态」显示成「红字票」
+   * （见 `lib/labels` 的 invoiceDisplayStatus）——否则票面是负数、状态写「正常」，
+   * 看账的人会以为系统算错了。被它冲掉的那张蓝票才标「已冲红」，两者互斥。
+   * 这一列回答的是"金额该记正还是记负"。
    */
   redLetter: boolean;
   /** 判定依据（amount_negative / title_red / heuristic_normal） */

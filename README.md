@@ -1,1208 +1,498 @@
 # 有底 · 活动物料与人员价格库 + 报价单
 
-> 一句话：把散在微信群和几个人记忆里的「哪家多少钱」，变成能查、能比、能出稿的底账。
+面向活动策划公司的内部系统。把「同一个物料、同一个岗位，各家供应商报多少钱」记成可查、可比、可出稿的底账，并按项目类型算清毛利、一键出客户版报价单。
 
-给活动策划公司用的内部工具。解决的核心问题只有一个：**同一个物料、同一个岗位，不同供应商报的价不一样，而这些价现在散在聊天记录和几个人的记忆里。**
+当前版本 **0.1.42** ｜ Next.js 16 + React 19 + TypeScript + PostgreSQL 18 ｜ 单机部署，3–10 人共用
 
 ---
 
 ## 目录
 
-- [一、系统介绍](#一系统介绍)
-  - [它解决什么问题](#它解决什么问题)
-  - [谁能用、能做什么](#谁能用能做什么)
-  - [六条「不出错」的设计](#六条不出错的设计)
-  - [合同到期提醒：靠一个可空的终止日期](#合同到期提醒靠一个可空的终止日期)
-  - [发票台账：识别、冲红与对账口径](#发票台账识别冲红与对账口径)
-  - [技术栈与规模](#技术栈与规模)
-  - [明确不做的事](#明确不做的事)
-- [二、文件结构](#二文件结构)
-  - [顶层目录](#顶层目录)
-  - [逐目录说明](#逐目录说明)
-  - [几个「改了会影响哪里」的定位表](#几个改了会影响哪里的定位表)
-  - [合同附件与对象存储](#合同附件与对象存储)
-- [三、部署方式](#三部署方式)
-  - [先选路径](#先选路径)
-  - [路径 A：本地跑起来（5 分钟）](#路径-a本地跑起来5-分钟)
-  - [路径 B：Docker Compose（生产推荐，手把手）](#路径-bdocker-compose生产推荐手把手)
-  - [路径 C：裸机 Node + PostgreSQL（不能装 Docker 时）](#路径-c裸机-node--postgresql不能装-docker-时)
-  - [部署后必做：跑自检](#部署后必做跑自检)
-  - [放到域名 / HTTPS 后面](#放到域名--https-后面)
-  - [日常运维：更新、备份、恢复、回滚](#日常运维更新备份恢复回滚)
-  - [常见故障对照](#常见故障对照)
-- [四、常用命令](#四常用命令)
-- [五、还缺客户提供的东西](#五还缺客户提供的东西)
-- [六、许可与使用范围](#六许可与使用范围)
-- [附：最近版本变更（0.1.30 → 0.1.42）](#附最近版本变更0130--0142)
+- [一、系统功能介绍](#一系统功能介绍)
+- [二、系统架构](#二系统架构)
+- [三、文件结构](#三文件结构)
+- [四、部署方式](#四部署方式)
 
 ---
 
-## 一、系统介绍
+## 一、系统功能介绍
 
-### 它解决什么问题
+### 1.1 解决什么问题
 
-活动公司的报价员每天在做一件很耗神的事：一个「桁架背景板 6m×3m」，A 家报 120 元/㎡、B 家报 95 元/㎡ 但只做不含税、C 家按「根」报 380 元，上个月还是另一个价。这些信息如果只在微信里，结果是：
-
-- 每次报价都要重新问一遍，问的人不同、答案不同；
-- 改过价之后，旧价没人记得，也没人能解释「上个月那张单为什么是 95」；
-- 谁更便宜靠印象，便宜多少说不出来，为什么不用那家也说不出来。
+活动公司的报价员每天要回答：一个「桁架背景板 6m×3m」，A 家 120 元/㎡、B 家 95 元/㎡ 但不含税、C 家按「根」报 380 元，到底用哪家。这些价格过去散在微信群和几个人记忆里，导致每次报价都要重问、改过价没人记得旧价、谁更便宜只能靠印象。
 
 系统把这件事拆成两半：
 
-1. **价格底账**：每个物料、每个岗位的价格，按「供应商 × 交易性质 × 含税口径 × 计价单位 × 生效期间」记下来，改价留痕、旧价不丢；
-2. **对外报价单**：按项目类型把毛利算清楚，比价时把「谁更便宜、便宜多少、为什么这家不能用」摆出来，一键出客户版 Excel / 打印稿。
+1. **价格底账**：每个物料 / 每个岗位的价格，按「供应商 × 交易性质 × 含税口径 × 计价单位 × 生效期间」记下来，改价留痕、旧价不丢；
+2. **对外报价单**：按项目类型算毛利，比价时摆出「谁更便宜、便宜多少、为什么这家不能用」，一键出客户版 Excel / 打印稿。
 
-### 谁能用、能做什么
+### 1.2 功能模块
 
-只有两级权限，够 3–10 人共用：
+登录后有 13 个页面，其中合同管理与发票台账整块只对管理员开放。
 
-| 角色 | 账号（种子） | 能做什么 |
+| 模块 | 路由 | 功能 |
 |---|---|---|
-| 管理员 | `admin` | 全部功能，含**合同管理**与**发票台账**（这两个模块整块只对管理员开放）、**改已有价格**、删主数据、导出内部版（带成本）|
-| 成员 | `xiaowang` | 查价比价、做报价单、**新建物料 / 人员 / 供应商**、录价（含引用刚建的主体）、作废与恢复、导出客户版；**不能**改已有档案与已有价格、不能删记录，**看不到**合同与发票（侧栏里没有这两个入口，直接输网址会被拦）|
-
-> 两个账号初始口令都是 `youdee2026`，**上线前必须改掉**（设置 → 账号）。
-
-成员能**建档**（物料 / 人员 / 供应商 / 报价），但**改不了已有档案**（2026-11-17 客户反馈「成员点新建直接报要管理员权限」之后放开的）。分界线不是「重要不重要」，是**做完之后别人手里的数字会不会跟着变**：建档是加法，建错了一条，作废就看不见了（作废成员本来就能做）；改档是改口径，把「桁架 3m」改名成「桁架」之后，历史报价单里那行还指着它，同一个东西从此在两个地方叫两个名字，而没有任何一条数据能说明是什么时候变的。删档仍然只有管理员——那是不可恢复的。
-
-登录后 13 个页面（成员能看到其中 11 个——合同管理与发票台账整块只对管理员开放）：
-
-| 页面 | 路由 | 干什么 |
-|---|---|---|
-| 总览 | `/` | 本周单量、毛利分布、临期价格、待办提醒（含**周期性合同一个月内到期**） |
-| 合同管理 **（管理员专属）** | `/contracts` | 合同台账（商业 / 租赁 / 雇佣三类，列表上方一排 chip 快速筛、带每类份数）+ 三类附件（合同 / 报价单 / 结算，可存本地或腾讯云 COS、单份不限大小、**可在线预览**）；按编号、名称、甲方、乙方、分类、签订日期、**终止日期 / 到期提醒**、创建日期查；**状态手工维护**（签订中 / 履约中 / 结算中 / 已结算 / 已终止）；**填了终止日期的算周期性合同**（年 / 季度），列表里直接写「还剩 N 天」，**到期近的自动排最前面、一个月内的日期标红**；可关联该合同对应的发票 |
-| 发票台账 **（管理员专属）** | `/invoices` | 按发票号码、购买方、销售方（后两者模糊）、开票日期区间、状态、是否已挂合同查；列表头给出**张数 / 金额和 / 税额和 / 待补金额张数**；批量上传 PDF·OFD·JPG·PNG 自动识别（红字票也录，只是会问要不要把原票标成已冲红）；批量下载查询结果为 ZIP；状态三选一：**正常 / 已冲红 / 红字票**（互斥）；原件可在线预览 |
-| 报价单列表 | `/quotes` | 全部状态（草稿 / 已发出 / 已作废），默认草稿优先 |
-| 报价单编辑 | `/quotes/:id/edit` | 明细逐行录入、毛利率反算、风险检查、出单 |
+| 总览 | `/` | 本周单量、毛利分布、临期价格、待办提醒（含周期性合同一个月内到期） |
+| 合同管理（管理员） | `/contracts` | 合同台账（商业 / 租赁 / 雇佣三类）；三类附件（合同 / 报价单 / 结算），可存本地或腾讯云 COS，支持在线预览；按编号、名称、甲乙方、分类、签订日期、终止日期、创建日期查；状态手工维护（签订中 / 履约中 / 结算中 / 已结算 / 已终止）；填了终止日期的算周期性合同，列表显示「还剩 N 天」，30 天内到期标红并排最前；可关联发票 |
+| 发票台账（管理员） | `/invoices` | 按号码、购买方、销售方、开票日期、状态、是否挂合同查；列表头给出张数 / 金额和 / 税额和 / 待补金额张数；批量上传 PDF·OFD·JPG·PNG 自动识别入库；批量下载查询结果为 ZIP；状态三选一：正常 / 已冲红 / 红字票（互斥）；原件可在线预览 |
+| 报价单列表 | `/quotes` | 全部状态（草稿 / 已发出 / 已作废），草稿优先 |
+| 报价单编辑 | `/quotes/:id/edit` | 逐行录明细、毛利率反算、风险检查、出单 |
 | 客户版预览 | `/quotes/:id/preview` | 打印 / PDF / 客户版 Excel 的纸面 |
 | 物料库 | `/materials` | 物料档案、搜索、归档 |
 | 物料比价 | `/materials/:id` | 该物料全部供应商报价、归一价排序、价格趋势 |
-| 人员库 | `/staff` `/staff/:id` | 同上，按「场 / 天 / 小时」计价 |
+| 人员库 | `/staff`、`/staff/:id` | 同上，按「场 / 天 / 小时」计价 |
 | 供应商库 | `/vendors` | 联系方式、开票信息、结算方式 |
 | 客户 / 项目 | `/guests` | 往来客户与历史项目 |
-| 设置 | `/settings` | 公司抬头、报价默认值（税口径 / 默认毛利率 / 预警线 / 有效期天数）、报价单模板（可上传 Excel 定制版式）、对象存储、**发票识别**（腾讯云 OCR 密钥，默认复用对象存储那一对）、账号管理 |
+| 设置 | `/settings` | 公司抬头、报价默认值（税口径 / 默认毛利率 / 预警线 / 有效期）、报价单模板（可上传 Excel）、对象存储、发票识别（腾讯云 OCR）、账号管理 |
 
-### 六条「不出错」的设计
+### 1.3 角色与权限
 
-这些点看起来像细节，但每一条背后都是一次会报错价的场景。
+只有两级权限。
 
-**1. 改价 = 新增一条 + 关闭旧价，永远不覆盖。**
-价格记录带生效期间，数据库层用 `EXCLUDE USING gist` 六维约束保证「同一主体 + 同一供应商 + 同一交易性质 + 同一含税口径 + 同一计价口径 + 重叠期间」不可能同时存在两条。想改就直接改，拿到的是人话提示，不是数据库错误码。
-
-**2. 含税价与不含税价不混排。**
-一张单声明一个口径（默认含税）。不同口径的供应商**照样显示在页面上**，但标灰并写明「该供应商只报了不含税价，与本单口径不同，不参与排序」——而不是悄悄算进最低价里。这两者混算，结论会反。
-
-**3. 按场和按天不混排。**
-讲师「按场 2800」和「按天 1500」都属人员服务，但一场含几天不在价格里，本来不可比。系统按计价口径分组，各组各算各的最低价。LED 屏的买断价与租赁价同理。
-
-**4. 跨单位比价靠折算系数，不靠猜。**
-喷绘按㎡报价、淘宝按张卖，要能比必须有人填「1㎡ = 几张」。填了才参与排序，没填就标「不可比」并写明原因。系统**不会**替你假设 1:1 —— 那会把「我不知道」静默变成「我断言相等」。
-
-**5. 毛利低于预警线只是提醒，不拦出单。**
-预警线按项目类型分（年会 18% / 发布会 22% / 展台 25% / 路演 15% / 框架客户 12%）。有些单是故意亏的（走量、拿案例、维护关系），系统只把话说清楚，发不发由人决定。**唯一能拦住出单的是三件事：客户名空、活动名空、有行没有成本。**
-
-**6. 报价单是全量快照。**
-发出去的单里存的是当时的名称、规格、单位、成本、对客价、供应商名，不是价格的引用。三个月后供应商涨价、主体改名、价格被归档，历史单上的数字一个字都不会变。
-
-### 合同到期提醒：靠一个可空的终止日期
-
-合同台账里多了一列**终止日期**（可空）。填了它就是**周期性合同**（年 / 季度），没填就是一次性的——系统不另设「合同周期」这个枚举，因为那个字段不影响任何计算，只会多一处会被填错的地方。有终止日期，就是周期性的。
-
-- **排序按「离到期还有多久」，不按签订时间**（2026-11-17 客户要求）：一个月内到期的排最前，其次是其它填了终止日期的（同样由近到远），没填终止日期的排最后。已终止的压到最后——它不需要续签，终止日只是历史信息，让它按"最早到期"顶在最前面只会把真正该续的那几份挤下去。
-- 列表里这一列写「`2026-11-27` 还剩 10 天」，远的写「还有约 7 个月」；**一个月内的日期本身标红**，已过期的写「已过期 N 天」——光标红「还剩 3 天」的话，扫一列日期根本看不出哪份急。**已过期的不许悄悄消失**。
-- 第二行有个「到期提醒」下拉：全部 / 已到期 / 一个月内。工作台那条提醒点「去续签」进来，带的就是这个筛选。
-- 工作台给**全部管理员**留一条待办：「N 份周期性合同一个月内到期」，列出最近 5 份（名称、客户、终止日、还剩几天），已经到期的单独计数。
-- 窗口 30 天，只在 `CONTRACT_EXPIRING_WINDOW_DAYS` 一处定义，工作台与列表筛选共用同一个数。**排除「已终止」**——都终止了就不需要续签提醒。
-- 终止日期早于签订日期会直接报错（`400`），而不是"存进去再说"。改一半（只改终止日期）也拦得住：服务端会拿库里那一半补判。
-
-### 发票台账：识别、冲红与对账口径
-
-报价单管住了「收多少钱」，发票台账管住「每一笔钱有没有票」。这块的要求和报价单相反：报价单是**算出来**的，发票是**抄进来**的，所以重点不在算得准，而在**抄错了能不能被发现**。
-
-批量传一批 PDF / OFD / JPG / PNG，调腾讯云 `RecognizeGeneralInvoice` 认出号码、购买方、销售方、三项金额、开票日期，直接入库。收的是增值税专票、普票、全电发票，以及**电子发票（铁路电子客票）**（销售方记为中国铁路集团有限公司，票价按含税金额计入）。识别的技术边界（收哪些票种、OFD 只认第一页、单张 base64 ≤10MB）写在下面「做不到的事」里。
-
-四条口径是这块的全部内容，每条都对应一种会算错账的方式：
-
-| 口径 | 决定 | 不做会怎样 |
+| 角色 | 种子账号 | 权限 |
 |---|---|---|
-| **判重按「发票代码 + 号码」，但代码为空时按号码放宽** | 唯一键 `UNIQUE (invoice_code, invoice_no)`；全电票没有代码，存空串；判重时号码相同即视为同一张，**只要任一侧代码为空就算重复** | 两个方向都会算错账。只按号码判重 → 纸质 8 位号码在不同代码下会重复，会把别家一张真票当成"已上传"**静默丢掉**；只看"代码+号码全等" → 同一张票第一次没认出代码（存空串）、第二次认出了，就会**记成两行，金额合计虚增且没有任何提示**（这是开发期真出过的 bug，不是假设） |
-| **三项金额都能为空，空不等于 0** | `amount` / `tax_amount` / `total_amount` 三列可空；没认出来就留空 | 写成 `0.00` 之后，"这张票税额没认出来"和"这张票税额确实是零"再也分不开，合计里凭空少一块还没人知道 |
-| **容差 1 分，超了就标黄但照样入库** | 三项互校：差 ≤0.01 记 `ok`，缺一项用第三项推导记 `derived`，差 >0.01 记 `mismatch` 并标黄 | 拒绝入库等于让用户为 OCR 的 1 分误差返工（传 20 张失败 6 张）；入库标黄人一眼能看到，代价只是一张票要人点进去看 |
-| **红字票记负数，但「红字票」与「已冲红」是两列** | `is_red_letter` 决定成三项金额的正负（票面性质）；`status`（正常 / 已冲红）只是一句账面标签，**改它一分钱不动**；红字票另记 `original_invoice_no` 指向它冲的原票 | 0.1.38 把两者合成一列，于是「红字票入账」和「原票标已冲红」各翻一次符号，一对票在合计里抵成 −2X（−2260 而不是 0）。拆开之后：红字票入库时 `status` 仍是 `normal`，但界面上的「状态」由 `is_red_letter` 派生、显示成 **「红字票」**（0.1.42），抵账的负号由它携带，合计仍是直接 `SUM` |
+| 管理员 admin | `admin` / `youdee2026` | 全部功能；合同管理、发票台账；改已有档案与价格；删除；导出内部版（带成本） |
+| 成员 member | `xiaowang` / `youdee2026` | 查价比价、做报价单、**新建**物料 / 人员 / 供应商 / 报价、录价、作废与恢复、导出客户版；不能改已有档案与价格、不能删除、看不到合同与发票 |
 
-界面在「金额合计」旁边永远带一句「含红字票 N 张」。这不是装饰：合计是个负数或者比印象里小，人得能立刻知道是红字票抵掉的，而不是以为漏录了。注意它数的是**票面是红字票**的张数，不是「已冲红」标签的张数——后者只是账面上被标了一句，与合计无关。
+> 两个初始口令上线前必须改掉（设置 → 账号）。
 
-**判重还留了一条已知的缝，写在这里而不是等它发生。** 库里的唯一键是「代码 + 号码」全等，而判重放宽是按号码算的，两套判据不完全重合：**两人同时**录入同一张票、且其中一次没认出代码时，两次预查都查不到对方，唯一键也放行，仍会落成两行。没有为此加锁——内部工具、录入是行政活，撞上的现实概率极低，加锁的代价（串行化写入或改动「同号不同代码是两张票」这条既有规则）大于收益。真撞上了不会静默：台账里会看到两行同号票，用「删除状态 → 已删除」把重复那条删掉即可。
+### 1.4 核心业务规则
 
-**红字票照录，问的只是「原票要不要标已冲红」。** 票面金额为负、或票面/备注里有「红字」「红冲」「冲红」字样，就判为红字票：三项金额记负数、入库后状态栏显示「红字票」（`status` 列仍是 `normal`，界面由 `is_red_letter` 派生），正常入库。同时读出它冲的是哪张原票：先看识别结果里的结构化字段（铁路电子客票的红字票就把它放在 `OriginalNumber` 里，票面一个字都没写），再回票面文字里按 `被红冲蓝字数电发票号码` → `被红冲蓝字发票号码` → `对应正数发票号码` → `原发票号码` 的顺序找，若那张原票在台账里还是「正常」，服务端**不会**替你改它——它带着依据弹一句「要不要把这张原票标成已冲红」，点了才写那个标签（金额不动）。原票号读不出来、或原票不在台账里，**红字票照样入账**，只是提示一句「请手工对一下原票」——那笔负数是真的发生了，不能因为找不到对手票就不记。
-
-因为批量上传的文件夹里正常票和红字票常常混在一起，这条提示是按**每一张红字票**分别问的，不会一次把几十张票的标签一起改掉。
-
-**列表与统计来自同一次查询。** `count(*) FILTER (...)` 与 `SUM(...) OVER ()` 跟 `items` 在同一条 SQL 里出，不是"先查一页、再查一次合计"。两条 SQL 是两次全表扫，而且两次之间有人插一张票，页面上就会出现「合计 12,300 / 共 20 张」但怎么加都对不上的那种账。
-
-只有一个例外要说明：把「删除状态」切到**已删除**时，顶部的张数与合计**会把已删除的票也算进去**——因为它跟列表是同一个口径（这正是上面那条设计的代价，也是它的价值：永远不会出现"列表 54 行、合计只算 51 行"）。那个视图是用来找回误删的票的，它的合计**不是对账数字**，界面上有提示。真要算账，永远在默认视图（不含已删除）里看。
-
-**批量下载是真流式。** 查询结果打包成 ZIP，`yazl` 的 store 模式（原件本来就是 PDF/JPG，压缩收益 <2% 却要吃满一个 CPU 核），逐条按需开流，内存恒定，与包多大无关。上限 500 份 / 2GB，超了报实际值让人先筛小范围；缺原件不整包失败，包尾附一份 `_缺失清单.txt`——整包失败会让 499 份好的也下不来。中文名按 UTF-8 写并按标准置 UTF-8 标志位，Win10 1903+ / 7-Zip / macOS 都正常。
-
-> 用 `adm-zip` 会让整包在堆里拼装：500 份 5MB = 2.5GB 堆，OOM 的表现是进程直接消失、日志里什么都没有。这是明确禁止的选型。
-
-### 技术栈与规模
-
-| 层 | 选型 | 版本 | 为什么 |
-|---|---|---|---|
-| 前端框架 | Next.js（App Router）| 16.4.5 | 前后端同仓库、同语言，一个进程部署，内部工具不需要拆服务 |
-| UI 运行时 | React | 19.3.1 | 与 Next 16 配套 |
-| 语言 | TypeScript | 5.9.3 | 金额、单位、口径这类逻辑必须靠类型兜住 |
-| 样式 | Tailwind CSS | 4.3.4 | 配合 `design-system/` 的 265 个 token，组件里禁止裸 hex |
-| 数据请求 | TanStack Query / Table | 5.105.3 / 8.21.3 | 列表页排序、筛选、缓存 |
-| 数据库 | PostgreSQL | 18（生产 `postgres:18-alpine`）| 需要 `EXCLUDE` 约束、生成列、`gin_trgm` 模糊搜索，这些 MySQL 给不了 |
-| 数据访问 | Prisma + `@prisma/adapter-pg` | 7.10.1 | 迁移有校验、类型由 schema 生成 |
-| 校验 | zod | 4.6.7 | 请求体与查询参数统一校验 |
-| 认证 | jose（JWT + HttpOnly Cookie）| 6.2.15 | access 15 分钟、refresh 7 天 |
-| 导出 | exceljs | 4.4.0 | 客户版 Excel 需要列宽、换行、打印区域 |
-| 图表 | recharts | 3.10.1 | 价格趋势、毛利分布 |
-| 图标 | lucide-react | 1.67.0 | 全项目统一一套 SVG 描边图标，**不用 emoji 当图标** |
-| 发票识别 | tencentcloud-sdk-nodejs-ocr | 4.1.344 | `RecognizeGeneralInvoice` 一次调用覆盖专票/普票/电子/全电，不用按票种分接口；客户账号本来就在腾讯云（对象存储已在用） |
-| 批量打包 | yazl | 3.3.1 | 只有 1 个传递依赖，逐条 lazy 流式、常量内存。**不用 `adm-zip`**（整包在堆里拼装，500 份就 OOM），也不用 `archiver`（9 个依赖，能力一个都用不上） |
-
-规模（当前版本 0.1.42）：**24 张表 / 13 个迁移 / 89 个接口路由 / 13 个页面 / 373 条单测 / 143 项部署自检 / 23 项部署脚本自检**。
-
-### 明确不做的事
-
-写在这儿是为了防止范围蔓延：
-
-- 项目成本核算、ERP、财务系统对接；
-- **发票真伪核验**（没接 `VatInvoiceVerifyNew`）。系统只能保证"这张图上是这些字"，不能保证"这张票是真的"——假票、废票仍然要靠人核；
-- **发票的自动红冲判定**。识别接口不返回红票标记，也不保证给负号，所以只做启发式 + 管理员手工改，界面上用「含冲红 N 张」把人引过去复核；
-- **OFD 格式发票**（数电票常见）。识别接口只收 PNG/JPG/PDF，上传框里写清「OFD 请先另存为 PDF」，不做静默失败；
-- **自动拆 PDF**。超过识别上限的大 PDF 直接报实际体积让人自己压缩或拆页，因为自动拆页会打乱页码、且要多引一个依赖；
-- 对外报价门户（客户自己登录看价）；
-- 多租户 SaaS（只有 admin / member 两级）；
-- 服务端 PDF 渲染（客户版走浏览器打印）；
-- 档期日历（人员比价页原设计的 30 天档期格没有数据源，界面上是一段说明而不是空方块）；
-- 自动备份（备份命令要自己配 cron）。
+| # | 规则 | 实现要点 |
+|---|---|---|
+| 1 | 改价 = 新增一条 + 关闭旧价，永不覆盖 | 价格带生效期间；数据库 `EXCLUDE USING gist` 六维约束防止重叠 |
+| 2 | 含税价与不含税价不混排 | 单据声明一个口径；异口径供应商照常显示但标灰，写明不参与排序 |
+| 3 | 按场与按天不混排 | 按计价口径分组，各组各算最低价 |
+| 4 | 跨单位比价靠折算系数 | 未填「1㎡ = 几张」就标「不可比」，不假设 1:1 |
+| 5 | 毛利低于预警线只提醒，不拦出单 | 预警线按项目类型分；只有「客户名空 / 活动名空 / 有行没成本」拦出单 |
+| 6 | 报价单是全量快照 | 存当时的名称、规格、单位、成本、对客价，历史单不随涨价变化 |
+| 7 | 合同有终止日期即为周期性合同 | 不另设周期枚举；30 天窗口单点定义 `CONTRACT_EXPIRING_WINDOW_DAYS`；列表按「已到期 / 30 天内」→「其它有终止日期」→「无终止日期」三段排序 |
+| 8 | 红字票与「已冲红」是两件事 | `is_red_letter` 决定三项金额符号；`status`（正常 / 已冲红）只是标签，改它不动金额；界面状态由 `is_red_letter` 派生为「红字票」，两者互斥 |
+| 9 | 发票判重按「代码 + 号码」，代码为空时按号码放宽 | 唯一键 `(invoice_code, invoice_no)`；任一侧代码为空即视为同一张 |
+| 10 | 发票三项金额可空，空不等于 0 | 未识别的留 NULL；三项互校容差 1 分，超出标黄但照样入库 |
 
 ---
 
-## 二、文件结构
+## 二、系统架构
 
-### 顶层目录
+### 2.1 技术栈
+
+| 层 | 选型 | 版本 | 用途 |
+|---|---|---|---|
+| 前端框架 | Next.js（App Router） | 16.4.5 | 页面与接口同仓库、同进程 |
+| UI | React + Tailwind CSS | 19.3.1 / 4.3.4 | 组件与设计 token（`design-system/`） |
+| 语言 | TypeScript | 5.9.3 | 金额、单位、口径靠类型兜住 |
+| 数据请求 | TanStack Query / Table | 5.105.3 / 8.21.3 | 列表缓存、排序、筛选 |
+| 数据库 | PostgreSQL | 18 | `EXCLUDE` 约束、生成列、`gin_trgm` 模糊搜索 |
+| 数据访问 | Prisma + `@prisma/adapter-pg` | 7.10.1 | 迁移管理、类型生成；查询走 `pg` 连接池 |
+| 校验 | zod | 4.6.7 | 请求体与查询参数 |
+| 认证 | jose（JWT + HttpOnly Cookie） | 6.2.15 | access 15 分钟、refresh 7 天 |
+| 导出 | exceljs | 4.4.0 | 客户版 / 内部版 Excel |
+| 图表 | recharts | 3.10.1 | 价格趋势、毛利分布 |
+| 发票识别 | tencentcloud-sdk-nodejs-ocr | 4.1.344 | `RecognizeGeneralInvoice` |
+| 批量打包 | yazl | 3.3.1 | ZIP 流式输出，内存恒定 |
+
+### 2.2 分层与请求链路
+
+```
+浏览器
+  │
+  ├─ 页面  src/app/(app)/**/page.tsx  ── React 组件  src/components/**
+  │
+  ▼  fetch /api/v1/...
+Route Handler  src/app/api/v1/**/route.ts
+  │   wrap.ts：统一鉴权、错误翻译、响应封装
+  ▼
+Service  src/server/services/**      业务编排、事务、SQL 执行
+  │      store/：prices / quotes / settings 的 SQL
+  ▼
+Domain  src/domain/**                纯函数：算价、比价、校验、状态机、口径判定
+  │
+  ▼
+pg 连接池（src/server/db.ts） → PostgreSQL 18
+                             → 本地磁盘 var/uploads 或 腾讯云 COS
+                             → 腾讯云 OCR（仅发票识别）
+```
+
+分层是单向的：`app/api → services → store → db`；`domain` 可被任意层调用，自身不依赖数据库、HTTP 或 SDK（因此可单测）。
+
+### 2.3 数据模型
+
+24 张表，按业务域分组：
+
+| 域 | 表 |
+|---|---|
+| 账号与配置 | `User` `AppSetting` `Counter` `MarginThreshold` |
+| 主数据 | `Unit` `Supplier` `Category` `Item` `ItemImage` `ItemLink` |
+| 价格 | `Price` `PriceTier` `PriceAttachment` `PriceChangeLog` |
+| 报价单 | `Quote` `QuoteItem` `QuoteTemplate` |
+| 合同 | `Contract` `ContractFile` `ContractQuote` `ContractInvoice` |
+| 发票 | `Invoice` `InvoiceFile` |
+| 通知 | `Notification` |
+
+- `Item` 用 `kind` 区分物料与人员，两者共用比价逻辑。
+- `Price` 的六维唯一性由 `EXCLUDE` 约束保证（主体 + 供应商 + 交易性质 + 含税口径 + 计价口径 + 生效期间）。
+- `ContractInvoice` 是合同与发票的多对多中间表，合同抽屉与发票抽屉读写同一张表。
+- 软删统一用 `deleted_at`；`Notification` 承载工作台待办。
+
+### 2.4 存储与外部依赖
+
+| 依赖 | 必需 | 说明 |
+|---|---|---|
+| PostgreSQL 18 | 是 | 生产用 `postgres:18-alpine`；本地开发用 embedded-postgres（端口 55432） |
+| 本地磁盘 `UPLOAD_DIR` | 是 | 默认 `var/uploads`，容器部署必须挂卷 |
+| 腾讯云 COS | 否 | 合同附件可选云存储，密钥在「设置 → 对象存储」填，按行记录实际存储位置 |
+| 腾讯云 OCR | 否 | 发票识别；密钥在「设置 → 发票识别」填，未配置时只能手工录入 |
+
+无 Redis、无消息队列、无第三方 SaaS 账号体系。
+
+### 2.5 关键工程约束
+
+- **金额**一律用定点小数（`numeric` + 字符串传输），不经过 JS 浮点。
+- **列表与统计同一条 SQL**：`count(*) FILTER (...)` 与 `SUM(...) OVER ()` 跟 `items` 一起出，避免两次查询之间数据变化导致合计对不上。
+- **写接口统一校验**：服务端 `domain` 层是唯一校验点，手工录入、编辑、OCR 入库三条路径共用。
+- **附件读取按行分流**：`contract_files.storage` 记录 `local` / `cos`，切换存储不迁移历史文件。
+- **构建产物不入库**：`node_modules`、`.next`、`.env`、上传附件都不进交付包。
+
+规模：**24 张表 / 13 个迁移 / 89 个接口路由 / 13 个业务页面 / 373 条单测 / 143 项部署自检**。
+
+---
+
+## 三、文件结构
 
 ```
 youdee/
-├── src/                      # 应用源码（页面 + 接口 + 领域逻辑 + 服务层）
+├── src/
+│   ├── app/
+│   │   ├── (app)/                  # 登录后业务页（共用侧边栏布局）
+│   │   │   ├── page.tsx            # 总览
+│   │   │   ├── contracts/          # 合同台账
+│   │   │   ├── invoices/           # 发票台账
+│   │   │   ├── quotes/             # 列表 / [id]/edit 编辑 / [id]/preview 客户版
+│   │   │   ├── materials/          # 物料库 / [id] 比价
+│   │   │   ├── staff/              # 人员库 / [id]
+│   │   │   ├── vendors/            # 供应商库
+│   │   │   ├── guests/             # 客户 / 项目
+│   │   │   └── settings/           # 设置
+│   │   ├── login/                  # 登录页
+│   │   ├── api/v1/                 # 89 个 route.ts，REST 接口
+│   │   ├── uploads/[...path]/      # 本地附件读取
+│   │   └── globals.css             # 全局样式与 .paper-* 纸面样式
+│   ├── components/
+│   │   ├── quote/                  # 明细表、单头、客户版纸面
+│   │   ├── invoices/               # 筛选、统计卡、列表、上传、抽屉、原件预览
+│   │   ├── contracts/              # 合同抽屉、附件、发票关联
+│   │   ├── compare/                # 比价表、价格趋势
+│   │   ├── staff/ vendors/ settings/
+│   │   └── ui/                     # Button / Input / Select / Drawer / Table / PdfPreview
+│   ├── domain/                     # 纯函数（17 个）：算价、比价、校验、发票映射、权限
+│   ├── server/
+│   │   ├── db.ts                   # pg 连接池单例
+│   │   ├── http.ts                 # 错误翻译、断言、响应
+│   │   ├── wrap.ts                 # 路由包装与统一异常处理
+│   │   ├── auth/                   # JWT、口令哈希、会话 Cookie
+│   │   ├── services/               # 业务服务（50 个）：quote / price / contract / invoice / export …
+│   │   └── store/                  # SQL：prices / quotes / settings
+│   └── lib/                        # 前端共用：api 客户端、类型、格式化、文案表
 ├── prisma/
-│   ├── schema.prisma         # 21 张表、关系、索引
-│   ├── migrations/           # 11 个手写迁移（EXCLUDE / 生成列 / 触发器只能用 SQL 写）
-│   └── seed.ts               # 种子数据（幂等：已有用户就跳过）
-├── design-system/            # 设计 token（265 个，CSS + JSON 两份）
-├── public/                   # 构建期静态资源（logo、favicon）
-├── scripts/db.mjs            # 本地数据库启停（仅开发机用，部署时不需要）
-├── tests/                    # 单元测试（22 个文件 / 369 条，纯函数）
-├── deploy/                   # 部署脚本 + 部署后自检
-├── Dockerfile                # 生产镜像
-├── docker-compose.yml        # app + postgres 18
-├── package.json              # 依赖版本逐个锁死（不用 ^ / latest）
+│   ├── schema.prisma               # 24 张表
+│   ├── migrations/                 # 13 个手写迁移（EXCLUDE / 生成列 / 触发器）
+│   └── seed.ts                     # 种子数据（幂等，已有用户即跳过）
+├── tests/                          # 22 个文件 / 373 条单测（纯函数，不连库）
+├── deploy/                         # 部署脚本、自检、systemd 单元、环境变量模板
+├── design-system/                  # 设计 token（CSS + JSON）
+├── docs/specs/                     # 发票模块规格书
+├── scripts/db.mjs                  # 本地数据库启停（embedded-postgres）
+├── public/                         # 构建期静态资源
+├── Dockerfile
+├── docker-compose.yml
 ├── next.config.ts
 ├── prisma.config.ts
-└── README.md                 # 本文件
+└── package.json                    # 依赖版本逐个锁定
 ```
 
-### 逐目录说明
+### 改动定位
 
-**`src/app/` —— 页面与接口（Next.js App Router）**
-
-```
-src/app/
-├── (app)/                    # 登录后的业务页，共用侧边栏布局（layout.tsx）
-│   ├── page.tsx              # 总览
-│   ├── contracts/            # 合同台账（附件分合同 / 报价单 / 结算三类，按六个维度查，状态手工维护）
-│   ├── invoices/             # 发票台账（筛选 + 统计 + 批量识别上传 + ZIP 下载）
-│   ├── quotes/               # 报价单列表 / [id]/edit 编辑 / [id]/preview 客户版
-│   ├── materials/            # 物料库 / [id] 比价与档案
-│   ├── staff/                # 人员库 / [id]
-│   ├── vendors/              # 供应商库
-│   ├── guests/               # 客户 / 项目台账
-│   └── settings/             # 公司抬头、报价默认值、对象存储、发票识别、账号
-├── login/                    # 登录页（唯一不需要登录的页面）
-├── api/v1/                   # 88 个 route.ts，REST 接口
-└── uploads/                  # 附件读取（实际文件落在 UPLOAD_DIR）
-```
-
-接口按资源分组，命名即行为：
-
-| 分组 | 代表端点 | 说明 |
+| 要改什么 | 改哪里 | 影响面 |
 |---|---|---|
-| 认证 | `/auth/login` `/auth/me` `/auth/password` | 登录、会话、改口令 |
-| 主数据 | `/items` `/suppliers` `/units` `/categories` | 物料与人员共用 `items`，靠 `kind` 分 |
-| 价格 | `/prices` `/prices/:id/history` `/price-lookup` | 录价、改价、历史、取价 |
-| 比价 | `/items/:id/compare` | 按口径分组、算归一价、标不可比 |
-| 报价单 | `/quotes` `/quotes/:id/items` `/quotes/:id/issue` | 建单、加行、出单 |
-| 合同 | `/contracts` `/contracts/:id/files` `/contracts/:id/files/:fileId/raw` `/contracts/:id/status` | 台账（含商业/租赁/雇佣分类）、三类附件（流式上传、单份不限大小）、下载签名跳转、关联系统报价单、状态 |
-| 发票 | `/invoices` `/invoices/upload` `/invoices/zip` `/invoices/:id/status` `/contracts/:id/invoices` | 列表（含统计）/ 识别上传 / 打包下载 / 冲红 / 与合同互挂 |
-| 导出 | `/quotes/:id/export.xlsx` | 客户版 / 内部版 Excel |
-| 设置 | `/settings/company` `/settings/quote` `/settings/storage` `/settings/ocr` `/users` | 抬头、默认值、对象存储、发票识别密钥、账号 |
-| 运维 | `/health` | 进程与数据库分别报状态 |
-
-**`src/domain/` —— 纯函数，不碰数据库、不碰 HTTP（16 个文件）**
-
-| 文件 | 职责 |
-|---|---|
-| `money.ts` | 金额四舍五入、分/元转换、格式化 |
-| `units.ts` | 单位折算（1㎡ = 几张），未填就返回不可比 |
-| `price-resolve.ts` | 取价：按主体 + 供应商 + 口径 + 日期命中唯一一条 |
-| `compare.ts` | 比价：分组、归一价、排序、不可比原因 |
-| `quote-calc.ts` | 报价行计算：数量 × 单价、毛利率反算、合计与优惠 |
-| `quote-status.ts` | 状态机 draft → issued → void |
-| `permissions.ts` | 谁能改旧价、谁能删主数据 |
-| `customer-sheet.ts` | **客户版版面的唯一来源**：列定义、行内容、合计。HTML 打印与 Excel 都读它 |
-| `template-layout.ts` | 报价单模板的 Excel 版式协议：占位符、列序、抬头排布、禁用词校验 |
-| `contract.ts` | 合同字段校验：必填、长度、真实日期、金额两位小数；**合同状态枚举**（五态，唯一写入路径在接口层） |
-| `invoice-record.ts` | 发票录入校验 + 号码/日期/金额规范化 + 容差判定 + 红票符号归一（`invoice-common.ts` / `invoice-money.ts` 是拆出来的枚举与定点金额工具，由此文件 `export *` 转出） |
-| `invoice-ocr.ts` | OCR 响应 → 我们的字段。**不含 SDK 引用**，用固定 fixture 单测；含 SubType 分组表（`VatInvoiceInfo` 与 `VatElectronicInfo` 是两套结构体，字段不能混取）与拒收清单 |
-| `invoice-info.ts` | 开票信息校验与格式化 |
-| `phone.ts` | 电话归一（全角转半角、只数数字、≥7 位） |
-
-**`src/server/` —— 服务端基础设施与业务服务**
-
-```
-src/server/
-├── db.ts                     # pg 连接池（单例）
-├── http.ts                   # 错误翻译（数据库错误 → 人话）、请求解析
-├── params.ts                 # 查询参数解析与校验
-├── wrap.ts                   # 路由包装：统一 try/catch 与响应格式
-├── quote-item-body.ts        # 报价行请求体转换
-├── auth/                     # JWT 签发校验、口令哈希、会话 Cookie
-├── services/                 # 业务服务层（50 个文件）：quote / price / item / compare / contract / invoice / invoice-ocr / invoice-zip / ocr-settings / export …
-└── store/                    # 数据访问（SQL）：prices / quotes / settings
-```
-
-分层是单向的：`app/api → services → store → db`，`domain` 谁都可用但自己不依赖任何东西。
-
-**`src/components/` —— 组件（68 个文件）**
-
-```
-src/components/
-├── quote/        # 明细表、单头、行备注、客户版纸面（paper-sheet.tsx）
-├── invoices/     # 筛选栏、统计卡、列表、批量上传、详情抽屉、原件预览、关联合同
-├── contracts/    # 合同详情 / 编辑抽屉（关联报价单 + 关联发票 + 三类附件上传）
-├── compare/      # 比价表格、不可比提示、价格趋势
-├── staff/        # 人员库表格与抽屉
-├── vendors/      # 供应商表格、开票信息表单
-├── settings/     # 设置页各分区（含发票识别密钥块）
-└── ui/           # Button / Input / Select / Field / Drawer / Table 等基础件
-```
-
-**其他**
-
-| 路径 | 说明 |
-|---|---|
-| `design-system/design-tokens.css` | 颜色、间距、字号、圆角全部来自这里；组件里写裸 hex 视为缺陷 |
-| `prisma/migrations/*` | 每个迁移一个目录，`migration.sql` 手写。`EXCLUDE`、生成列、触发器 Prisma 生成不出来 |
-| `prisma/seed.ts` | 17 单位 / 8 供应商 / 35 分类 / 25 主体 / 48 条价格；**幂等**，已有用户就整段跳过 |
-| `tests/` | 369 条单测。只测纯函数（`domain/` 的算价、校验、发票容差与 OCR 字段映射，加上 `server/services/` 里不碰 IO 的部分：文件类型判定、表格解析、版本读取、对象键拼装），不连库、不起服务，所以秒级跑完 |
-| `deploy/verify.mjs` | 部署后自检，143 项，走真实接口逐项比对具体数值 |
-| `deploy/test-deploy.sh` | 部署脚本**自身**的逻辑自检，23 项，不需要 root、不启停服务、不碰库 |
-| `deploy/diagnose.sh` | 只读排障：单元配置 / `/health` 全量 / 进程 cwd 与单元目录、脚本目录三方对照 / 各 `-old` 目录分别是哪一版 / 端口 / 最近日志 |
-
-### 几个「改了会影响哪里」的定位表
-
-| 你想改 | 只改这里 | 会同时影响 |
-|---|---|---|
-| 客户版列的顺序 / 表头文案 / 列宽 | `src/domain/customer-sheet.ts` 的 `sheetColumns()` | 打印页、PDF、客户版 Excel（三处同源） |
-| 客户版某个格子显示什么 | 同上 `sheetCellText()` + `export.service.ts` 的 switch | 同上 |
-| 纸面样式（字号、内边距、折行） | `src/app/globals.css` 的 `.paper-*` | 打印与屏幕预览 |
-| 金额怎么算（四舍五入、毛利反算） | `src/domain/money.ts` / `quote-calc.ts` | 报价单、比价、导出 |
-| 接口报错的提示文案 | `src/server/http.ts` | 全部接口 |
-| 主题色、间距 | `design-system/design-tokens.css` | 全站 |
-| 默认税口径、默认毛利率、预警线、有效期天数 | 数据库 `app_settings`（界面上是「设置 → 比价与计价规则」） | 建单、比价、预警 |
-| 客户版抬头印的供应商名称 | 设置 → 报价单模板（建单时选模板，值快照进单据） | 只影响之后新建的单，历史单不变 |
-| 客户版的列与抬头排布 | 设置 → 报价单模板 → 上传 Excel（版式快照进单据） | 只影响之后新建的单，历史单按建单时的版式打 |
-| 合同能填哪些字段 / 怎么校验 | `src/domain/contract.ts` | 新建与编辑两条路径（服务端唯一校验点） |
-| 合同附件的类型白名单 | `src/server/services/file-type.ts` 的 `FILE_CATEGORY`（按字节判定，不看扩展名）+ `upload-stream.service.ts` 的大文件头尾探测 | 合同附件的三个上传口 |
-| 合同附件存在哪儿（本地盘 / 腾讯云 COS） | 设置 → 对象存储（`app_settings.cos_storage`），按行记在 `contract_files.storage` 上 | 只影响**新上传**的附件，历史附件按行分流读取，切换不迁移、不 404 |
-| 合同附件单份最大体积 | 默认不限制；要收口就设环境变量 `MAX_CONTRACT_FILE_BYTES`（字节，0 = 不限） | 合同附件上传 |
-| 合同附件在线预览的体积上限 | 默认 32MB；环境变量 `PREVIEW_MAX_BYTES`（字节） | 合同附件预览 |
-| 发票能填哪些字段 / 怎么校验 | `src/domain/invoice-record.ts` | 手工录入、编辑、OCR 入库三条路径（服务端唯一校验点） |
-| 什么算「同一张票」（判重） | `src/domain/invoice-record.ts` 的 `isSameInvoice` | 手工录入 / 编辑 / 上传识别三条写入路径共用它，还有 40901 的提示文案。改之前先看上面那张口径表：放宽与收紧各有一种算错账的方式 |
-| 发票金额怎么判"对不对" | `src/domain/invoice-money.ts` 的容差函数（`TOLERANCE = 0.01`） | 入库时的 `amount_check`、界面上的标黄 |
-| OCR 哪个字段映射到哪一列 | `src/domain/invoice-ocr.ts` | 只有识别入库；手工录入不过这一层 |
-| 冲红怎么归一、改状态怎么翻符号 | `src/domain/invoice-money.ts` + `invoice.service.ts` 的 `setInvoiceStatus` | 列表负号、统计合计、对账口径 |
-| 发票能挂到合同上 / 怎么解除 | `src/server/services/contract-invoice.service.ts` | 发票抽屉的「关联合同」与合同抽屉的「关联发票」是同一个表 |
-| 合同状态能选哪几个 | `src/domain/contract.ts` 的 `CONTRACT_STATUSES` | 合同列表筛选、抽屉下拉；**写入只有 `PATCH /contracts/:id/status` 一条路** |
-| 发票 ZIP 的单包上限 | `src/server/services/invoice-zip.service.ts`（500 份 / 2GB） | 批量下载；改小不影响已下载的 |
-
-### 合同附件与对象存储
-
-- **大小**：单份不设应用层上限。上传走原始字节流（不是 multipart），服务端边收边写临时文件，
-  再按"小文件整份读、大文件头尾各读 1MB"判真实类型，最后落盘或直传 COS。几百 MB 的扫描件不会占内存。
-- **存储**：默认本地磁盘（`UPLOAD_DIR`）。在【设置 → 对象存储】填 SecretId / SecretKey / 存储桶 / 地域并启用后，
-  **新上传**的附件直接进 COS；历史附件仍在本地，读取按 `contract_files.storage` 逐行分流，不会因为切换而 404。
-- **对象键**：`<对象键前缀>/<合同 id>/<uuid>.<扩展名>`，前缀在【设置 → 对象存储】里配，默认 `contracts/`。
-  键里不放原始文件名（重名、乱码、超长路径都会到上传时才炸，那时文件已传一半），文件名单独存在库里。
-  前缀和子目录可能是同一个词，拼装时按路径段去重一次：0.1.34 及以前生成的 `contracts/contracts/<合同 id>/…`
-  不会再出现；桶里的老对象不用动，读取走库里记的 `storage_key`，照常可用。
-- **下载**：桶保持私有。前端拿到的地址是 `/api/v1/contracts/:id/files/:fileId/raw`，
-  服务端鉴权后 302 到 5 分钟有效的预签名地址；Office 文档强制下载，图片与 PDF 内联。
-- **在线预览**：抽屉里每份附件都有「预览」，不用先下载再找文件。分四种画法：
-
-  | 格式 | 怎么显示 | 走哪个接口 |
-  |---|---|---|
-  | PDF | 浏览器自带阅读器（iframe） | `.../content`（同源字节） |
-  | JPG / PNG / WEBP | `<img>` | `raw` |
-  | DOCX | `docx-preview` 解析成 HTML | `.../content`（同源字节） |
-  | XLSX | 服务端 `exceljs` 解析成 JSON，前端画 `<table>` | `.../sheet` |
-  | DOC / XLS | 解析不了，只能下载（界面会说明「另存为 .docx/.xlsx 再上传」） | — |
-
-  Word / Excel 的预览是**内容级**的：合并单元格、颜色、图片位置不会完全还原。
-  如果要求"和原件一模一样"，仍然只能下载。
-
-- **PDF 也不能走 `raw`**（0.1.34 修）：云存储上传时对象元数据写过
-  `Content-Disposition: attachment`，预览能不能内联，全看预签名地址上那个
-  `response-content-disposition=inline` 查询参数有没有被自定义域名 / CDN 保留下来。
-  参数一丢，浏览器就把 PDF 存盘而不是渲染 —— 本地存储不走这条链路，症状只在线上出现。
-  现在 PDF 与 DOCX 一样走同源 `.../content`，由服务端按库里的 mime 自己写
-  `Content-Type` 与 `inline`，不依赖任何存储侧配置（新上传的对象元数据也已改成 `inline`）。
-
-- **预览为什么不让前端直接 fetch `raw`**：`raw` 对云存储文件是 302 到预签名地址，
-  `fetch` 跟过去就成了跨域请求，而桶的 CORS 默认是空的 —— 现象是"点预览一直转圈"、
-  服务端一行日志都没有。所以预览单独走同源的 `.../content`，由服务端取字节再吐出来。
-- **预览体积上限**：默认 32MB，超过就明确提示下载（解析要整份读进内存，
-  再大就不是"看一眼"的场景）。要放宽就设环境变量 `PREVIEW_MAX_BYTES`（字节）。
-- **密钥**：只存在数据库里（`app_settings`），读接口不回传 SecretKey，界面只显示末四位；
-  因此编辑时**留空 = 不改**。要求更严就把库权限和备份加密当成同一件事来做。
+| 客户版列顺序 / 表头 / 格子内容 | `src/domain/customer-sheet.ts` | 打印页、PDF、客户版 Excel（三处同源） |
+| 纸面样式 | `src/app/globals.css` 的 `.paper-*` | 打印与屏幕预览 |
+| 金额计算、毛利反算 | `src/domain/money.ts`、`quote-calc.ts` | 报价单、比价、导出 |
+| 接口报错文案 | `src/server/http.ts` | 全部接口 |
+| 主题色、间距、字号 | `design-system/design-tokens.css` | 全站 |
+| 默认税口径 / 毛利率 / 预警线 | 数据库 `app_settings`（设置页） | 建单、比价、预警 |
+| 合同字段与校验 | `src/domain/contract.ts` | 新建与编辑两条路径 |
+| 发票字段 / 判重 / 容差 / 冲红 | `src/domain/invoice-record.ts`、`invoice-money.ts` | 手工录入、编辑、OCR 入库 |
+| OCR 字段映射 | `src/domain/invoice-ocr.ts` | 仅识别入库 |
+| 附件类型白名单 | `src/server/services/file-type.ts` | 合同附件三个上传口 |
 
 ---
 
-## 三、部署方式
+## 四、部署方式
 
-### 先选路径
+### 4.1 环境要求
 
-| 你的场景 | 走哪条 | 需要准备 |
-|---|---|---|
-| 只在自己电脑上看看 / 二次开发 | [路径 A](#路径-a本地跑起来5-分钟) | Node.js 20.19+（推荐 22） |
-| 上线到一台 Linux 服务器（推荐） | [路径 B](#路径-bdocker-compose生产推荐手把手) | 2 核 2G 的 Linux + 能装 Docker |
-| 服务器不能装 Docker | [路径 C](#路径-c裸机-node--postgresql不能装-docker-时) | Linux + Node 20.19+ + PostgreSQL 14+ |
+| 项 | 要求 |
+|---|---|
+| Node.js | `>= 20.19`，建议 22 LTS |
+| PostgreSQL | 生产 18（`postgres:18-alpine`），裸机 `>= 14` |
+| Docker | 仅 Compose 路径需要（引擎 + compose 插件） |
+| 内存 / 磁盘 | 1 GB 内存起；附件按实际用量，建议单独挂盘 |
 
-服务器最低要求：**2 核 / 2 GB 内存 / 10 GB 盘**。1 GB 的机器很容易在 `next build` 阶段被 OOM killer 杀掉，表现为「构建到一半进程消失」。系统要求任意 x86_64 Linux，脚本已在 Debian/Ubuntu 与 RHEL 系上验证。
+### 4.2 环境变量
 
----
+生产模板见 `deploy/env.example`，开发模板见根目录 `.env.example`。
 
-### 路径 A：本地跑起来（5 分钟）
+| 变量 | 必需 | 默认 | 说明 |
+|---|---|---|---|
+| `DATABASE_URL` | 是 | — | `postgresql://用户:口令@主机:5432/库?schema=public` |
+| `JWT_SECRET` | 是 | — | 32 字节以上随机串；用占位值上线等于任何人都能伪造登录态 |
+| `PORT` | 否 | 3000 | 监听端口 |
+| `UPLOAD_DIR` | 否 | `var/uploads` | 附件目录，容器部署必须挂卷 |
+| `MAX_UPLOAD_BYTES` | 否 | 5242880 | 图片等普通上传上限（5 MB） |
+| `MAX_CONTRACT_FILE_BYTES` | 否 | 0 | 合同附件单份上限，0 = 不限（流式上传） |
+| `PREVIEW_MAX_BYTES` | 否 | 33554432 | 在线预览体积上限（32 MB） |
+| `JWT_ACCESS_TTL_MIN` / `JWT_REFRESH_TTL_DAYS` | 否 | 15 / 7 | 登录态时长 |
+| `COOKIE_SECURE` | 否 | 自动 | 留空按请求协议判断；HTTPS 终结在代理且未传 `X-Forwarded-Proto` 时设 `1` |
+| `NODE_ENV` | 生产 | — | 运行时必须是 `production` |
 
-**这一步不需要 Docker**——本地数据库用的是 `embedded-postgres`，会在项目里起一个真 PostgreSQL 18 二进制。
+Docker Compose 额外使用：`PG_USER` `PG_PASSWORD` `PG_DB` `APP_PORT` `SEED_ON_BOOT` `NPM_REGISTRY`。
 
-#### 第 1 步：确认 Node 版本
+生成密钥：
 
 ```bash
-node -v
+openssl rand -base64 48 | tr -d '\n=+/' | cut -c1-64
 ```
 
-要 `v20.19.0` 以上，推荐 `v22.x`。低于 20.19 直接装新的：
+### 4.3 方式 A：本地开发
 
 ```bash
-# Debian / Ubuntu / WSL
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
+# 1. 依赖
+node -v                 # 需 >= 20.19
+npm ci
 
-# macOS
-brew install node@22
-
-# Windows：到 nodejs.org 下 LTS 安装包，或 winget install OpenJS.NodeJS.LTS
-```
-
-#### 第 2 步：装依赖
-
-```bash
-cd youdee
-npm install
-```
-
-500 多个包，国内网络可能几分钟。**不要**把 `package.json` 里的版本号改成 `^` 或 `latest`——版本是逐个锁死的，改了会出现「同一份代码两台机器两种行为」。
-
-#### 第 3 步：配置环境变量
-
-```bash
+# 2. 环境变量
 cp .env.example .env
-```
+# 把 JWT_SECRET 换成随机串；DATABASE_URL 默认指向本地 55432
 
-`.env.example` 里的默认值直接可用（连的是本地 55432）。只有一项建议现在就改：
-
-```bash
-# 生成一个随机密钥，粘到 .env 的 JWT_SECRET=
-node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
-```
-
-#### 第 4 步：起数据库（占一个终端）
-
-```bash
+# 3. 起数据库（占用一个终端，Ctrl+C 停止）
 npm run db:start
+
+# 4. 建表 + 灌种子（另开一个终端）
+npm run db:migrate
+npm run db:seed
+
+# 5. 起开发服务器
+npm run dev             # http://localhost:3000
 ```
 
-首次会自动下载 PostgreSQL 二进制（几百 MB），**这个终端要保持开着**——它是前台阻塞的。看到 `database is ready` 类字样即成功。另开一个终端继续。
+登录 `admin / youdee2026`（管理员）或 `xiaowang / youdee2026`（成员）。
 
-#### 第 5 步：建表 + 灌种子
+常用命令：
 
 ```bash
-npm run db:migrate     # 建 21 张表
-npm run db:seed        # 灌 17 单位 / 8 供应商 / 35 分类 / 25 主体 / 48 条价格
+npm run typecheck       # tsc --noEmit
+npm test                # vitest run
+npm run build           # 生产构建（构建前先停 dev server）
+npm run db:status       # 本地库连通性
+npm run db:migrate:dev  # 改完 schema 后生成并应用迁移
+npm run db:reset        # 清库重建（会丢数据）
 ```
 
-种子最后会打印各表条数，以及两个账号：
+### 4.4 方式 B：Docker Compose（生产推荐）
 
-```
-[seed] 管理员 admin / youdee2026    成员 xiaowang / youdee2026
-```
-
-#### 第 6 步：起开发服务器
-
-```bash
-npm run dev
-```
-
-打开 <http://localhost:3000>，用 `admin` / `youdee2026` 登录。
-
-#### 第 7 步（可选但推荐）：跑一遍自检
-
-```bash
-BASE_URL=http://localhost:3000 ADMIN_PASSWORD=youdee2026 MEMBER_PASSWORD=youdee2026 node deploy/verify.mjs
-```
-
-143 项全过说明整条链路是通的（登录 → 比价 → 取价 → 建单 → 出单 → 导出 → 权限 → 成员建档 / 改档仍被拒 → 约束 → 发票识别入库 → 红字票记负数 → 标已冲红不动金额 → 红字票不能标已冲红 → 状态筛选三项互斥 → ZIP 打包 → 合同挂票与五态 → 合同到期筛选、排序与工作台提醒）。它会自己清理产生的临时数据（发票只有软删，跑完在「已删除」视图里能看到本轮留下的几行，默认视图是干净的）。
-
----
-
-### 路径 B：Docker Compose（生产推荐，手把手）
-
-#### 第 1 步：准备服务器
-
-```bash
-ssh root@你的服务器IP
-cat /etc/os-release        # 确认发行版
-free -h                    # 确认内存 >= 2G
-df -h /                    # 确认盘 >= 10G
-```
-
-防火墙 / 安全组放行你要用的端口（默认 3000）。如果打算挂域名走 Nginx，就只对内网开放 3000。
-
-#### 第 2 步：在本地打包
-
-在**你的开发机**上、项目根目录执行：
+**① 本地打包**
 
 ```bash
 bash deploy/pack.sh
+# 产物：dist/youdee-<版本>-<日期>.tar.gz 与同名 .sha256
 ```
 
-产物在 `dist/`：
-
-```
-dist/youdee-0.1.21-20261106.tar.gz
-dist/youdee-0.1.21-20261106.tar.gz.sha256
-```
-
-包里是源码 + 部署脚本，**不含** `node_modules` / `.next` / `.env` / 上传的附件。
-`pack.sh` 出包前会跑三道门禁（lockfile 与 `package.json` 是否同步、`prisma validate`、包内换行符是否全为 LF），任何一道不过就拒绝出包——省得你等完一轮镜像构建才发现。
-
-#### 第 3 步：上传
+**② 上传并校验**
 
 ```bash
-scp dist/youdee-0.1.21-20261106.tar.gz root@你的服务器IP:/tmp/
+scp dist/youdee-*.tar.gz dist/youdee-*.sha256 root@<服务器>:/tmp/
+# 服务器上
+cd /tmp && sha256sum -c youdee-*.tar.gz.sha256
 ```
 
-服务器访问慢的话，先在本机传到中转（对象存储 / 内网跳板），再在服务器上 `wget`。
-
-#### 第 4 步：解包
-
-在**服务器**上：
+**③ 解包并配置**
 
 ```bash
 mkdir -p /opt/youdee
-tar -xzf /tmp/youdee-0.1.21-20261106.tar.gz -C /opt/youdee
+tar -xzf /tmp/youdee-*.tar.gz -C /opt/youdee
 cd /opt/youdee
 chmod +x deploy/*.sh
-ls deploy/            # 确认脚本在
-```
-
-#### 第 5 步：写 `.env`（三个值必须改）
-
-```bash
-cd /opt/youdee
 cp deploy/env.example .env
-openssl rand -base64 48 | tr -d '\n=+/' | cut -c1-64     # 生成 JWT_SECRET
-openssl rand -hex 16                                      # 生成 PG_PASSWORD
-vi .env
 ```
 
-要改的只有三行：
+`.env` 里至少要改三处：`JWT_SECRET`（随机串）、`PG_PASSWORD`（只用字母数字）、`APP_PORT`（对外端口）。
 
-```ini
-PG_PASSWORD=上一步生成的十六进制串
-JWT_SECRET=上一步生成的 64 位串
-APP_PORT=3000                  # 对外端口；容器内始终 3000
-```
-
-加锁：
+**④ 装 Docker（未装过才需要）**
 
 ```bash
-chmod 600 .env
+sudo sh deploy/bootstrap.sh
 ```
 
-三条硬性注意：
-
-- **`JWT_SECRET` 用模板占位值上线 = 任何人都能伪造登录态。**
-- **`PG_PASSWORD` 只用字母数字。** 它会被拼进 `DATABASE_URL`，含 `@ : / ? #` 会让连接串解析错位，报错是 `getaddrinfo ENOTFOUND`，看着像网络问题其实不是。
-- 国内机器拉包常超时，`.env` 里加一行 `NPM_REGISTRY=https://registry.npmmirror.com`（留空就是官方源）。
-
-#### 第 6 步：装 Docker（没装过才需要）
+**⑤ 构建并启动**
 
 ```bash
-sh deploy/bootstrap.sh
+docker compose up -d --build
+docker compose ps
+docker compose logs -f app
 ```
 
-装完**退出 SSH 重新登录**，否则 `docker` 命令仍报 permission denied（组权限要重开会话才生效）。验证：
+容器启动序列为：等库 → `prisma migrate deploy` → 种子（`SEED_ON_BOOT=1` 且空库时）→ `next start`。
+
+**⑥ 自检**
 
 ```bash
-docker --version
-docker compose version
+node deploy/verify.mjs
 ```
 
-#### 第 7 步：构建并启动
+也可用一键脚本（本地打包 → 上传 → 远端构建 → 等健康）：`bash deploy/deploy.sh root@1.2.3.4`。
+
+### 4.5 方式 C：裸机 Node + PostgreSQL（不能装 Docker 时）
+
+**① 装环境**
 
 ```bash
-cd /opt/youdee
-sh deploy/remote-up.sh
-```
-
-它会依次做：检查 `.env` → `docker compose build` → 起 db（等健康检查通过）→ 起 app → 轮询 `/api/v1/health` 直到 `db=ok`。
-
-首次构建 **3–6 分钟**（`npm ci` + `next build`）。看到类似输出即成功：
-
-```
-服务已就绪：http://服务器IP:3000
-```
-
-容器启动时会自动做三件事（`deploy/entrypoint.sh`）：
-
-1. 等数据库可连（`wait-db.mjs`）；
-2. `prisma migrate deploy` 应用迁移；
-3. 跑种子（`SEED_ON_BOOT=1`，脚本自己判「已有用户就跳过」，所以每次启动都跑是安全的）。
-
-设置 `SEED_ON_BOOT=0` 可关掉种子——但空库上首次部署会得到一个能登录、什么都没有的系统。
-
-#### 第 8 步：部署后自检（**不能跳过**）
-
-```bash
-docker compose exec app node deploy/verify.mjs
-```
-
-期望结尾：
-
-```
-合计 143 项，通过 143，失败 0
-```
-
-只看到「网页能打开」不算部署成功——这个系统最危险的缺陷全都不报错，只是数字不对（比价算出最低价、导出少一列、成员能改旧价）。
-
-#### 第 9 步：登录并改口令
-
-浏览器打开 `http://服务器IP:3000`，用 `admin` / `youdee2026` 登录，立刻到「设置 → 账号」改掉 `admin` 与 `xiaowang` 的口令。
-
-#### 第 10 步：确认数据落在卷里
-
-```bash
-docker volume ls | grep youdee      # 应看到 youdee_dbdata 与 youdee_uploads
-docker compose ps                   # app / db 都是 running (healthy)
-```
-
-`docker compose down -v` 会**删卷等于删库删附件**，不要随手敲。
-
----
-
-### 路径 C：裸机 Node + PostgreSQL（不能装 Docker 时）
-
-#### 第 1 步：装 Node 22
-
-```bash
-# RHEL / CentOS / openEuler
-curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo yum install -y nodejs
-
-# Debian / Ubuntu
+# Node 22（Debian / Ubuntu）
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
 
-node -v      # 要 v22.x
+# PostgreSQL
+sudo apt-get install -y postgresql
+sudo -u postgres psql -c "CREATE USER youdee WITH PASSWORD '你的口令';"
+sudo -u postgres psql -c "CREATE DATABASE youdee OWNER youdee;"
 ```
 
-Node 20.19+ 也能跑主链路，但 `vitest` 声明要 22，`npm ci` 会刷一串 `EBADENGINE`。**那是警告不是失败**，安装会继续，代价只是生产机上跑不了 `npm test`。
-
-#### 第 2 步：装 PostgreSQL 并建库
+**② 解包并写 `.env`**
 
 ```bash
-# Debian / Ubuntu
-sudo apt-get install -y postgresql postgresql-contrib
-
-# RHEL 系
-sudo yum install -y postgresql-server postgresql-contrib && sudo postgresql-setup --initdb
-```
-
-建库建用户（口令用纯字母数字）：
-
-```bash
-sudo -u postgres psql <<'SQL'
-CREATE USER youdee WITH PASSWORD '改成随机字母数字串';
-CREATE DATABASE youdee OWNER youdee ENCODING 'UTF8';
-SQL
-```
-
-检验能连上：
-
-```bash
-psql "postgresql://youdee:你的口令@127.0.0.1:5432/youdee" -c '\conninfo'
-```
-
-连不上先查 `pg_hba.conf`（默认可能只允许 local socket），把 `host all all 127.0.0.1/32 scram-sha-256` 打开后 `systemctl reload postgresql`。
-
-#### 第 3 步：解包并配置
-
-```bash
-sudo mkdir -p /opt/youdee && sudo chown $USER /opt/youdee
-tar -xzf youdee-0.1.21-20261106.tar.gz -C /opt/youdee
+sudo mkdir -p /opt/youdee
+sudo tar -xzf /tmp/youdee-*.tar.gz -C /opt/youdee
 cd /opt/youdee
-cp deploy/env.example .env
-vi .env
+sudo chmod +x deploy/*.sh
+sudo cp deploy/env.example .env
+sudo vi .env     # 改 DATABASE_URL（主机填 127.0.0.1）、JWT_SECRET、PORT
 ```
 
-裸机路径关键的是这一行（host 是 `127.0.0.1`，不是容器里的 `db`）：
-
-```ini
-DATABASE_URL=postgresql://youdee:你的口令@127.0.0.1:5432/youdee?schema=public
-JWT_SECRET=改成随机长串
-NODE_ENV=production
-PORT=3000
-```
+**③ 安装、迁移、构建**
 
 ```bash
-chmod 600 .env
+sudo sh deploy/manual-deploy.sh
 ```
 
-> `NODE_ENV=production` 会让 npm 走 `omit=dev` 跳过 devDependencies，而构建恰恰要用 `@tailwindcss/postcss` / `typescript`。`manual-deploy.sh` 已经在安装那一步显式还原成 `development` 并加 `--include=dev`，**不要为了装包手动把这行改成 development**——改了运行期就变成 dev 模式（错误信息外泄、性能差）。
+脚本会校验 Node 版本与当前目录是否就是线上目录，然后 `npm ci` → `prisma generate` → `migrate deploy` → `next build`。
 
-#### 第 4 步：构建并迁移
-
-```bash
-cd /opt/youdee
-sh deploy/manual-deploy.sh
-```
-
-它会：装依赖（`--include=dev`）→ 按文件校验 PostCSS 插件是否真的能解析 → 清 `.next` → 生成 Prisma 客户端 → `next build`（Turbopack 失败自动换 webpack）→ 应用迁移 → 灌种子。`DATABASE_URL` 没填好会停下并提示，不会带着错配置继续。
-
-#### 第 5 步：交给 systemd
+**④ 交给 systemd**
 
 ```bash
-sudo useradd -r -s /sbin/nologin youdee
+sudo useradd -r -s /sbin/nologin youdee || true
 sudo chown -R youdee:youdee /opt/youdee
-sudo cp deploy/youdee.service /etc/systemd/system/youdee.service
+sudo cp deploy/youdee.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now youdee
-sudo systemctl status youdee        # 看是否 active (running)
-journalctl -u youdee -f             # 跟日志
+sudo systemctl status youdee
 ```
 
-不想用 systemd，前台试跑看日志：
+**⑤ 自检**
 
 ```bash
-cd /opt/youdee && npx next start -H 0.0.0.0 -p 3000
+node deploy/verify.mjs
 ```
 
-> **建议（装了 systemd 之后再改一下）**：把 `.env` 里的 `UPLOAD_DIR` 写成发布目录之外的绝对路径，
-> 例如 `/opt/youdee-data/uploads`，并把文件搬过去：
->
-> ```bash
-> sudo mkdir -p /opt/youdee-data && sudo mv /opt/youdee/public/uploads /opt/youdee-data/uploads
-> sudo chown -R youdee:youdee /opt/youdee-data
-> # .env 改 UPLOAD_DIR=/opt/youdee-data/uploads，然后 systemctl restart youdee
-> ```
->
-> 这样附件与应用代码彻底分开：以后每次 `deploy/update.sh` 都不必搬附件目录，
-> 回滚也不会把更新期间新传的文件一起退回去。`youdee.service` 的 `ReadWritePaths`
-> 也建议同步加上这一行，让「应用能写哪里」在单元文件里一眼可查。
-> 前提是**搬家要在停机时做**，否则这期间传的附件会留在旧目录。
-
-#### 第 6 步：自检
+### 4.6 部署后自检
 
 ```bash
-cd /opt/youdee
-node deploy/verify.mjs                                    # 打本机 3000
-BASE_URL=http://你的IP:3000 node deploy/verify.mjs        # 打对外地址
+node deploy/verify.mjs                          # 默认 http://127.0.0.1:3000
+BASE_URL=https://your.domain node deploy/verify.mjs
 ```
 
-设了自定义口令的话带上环境变量：
+143 项，按业务链路走真实接口并逐项比对数值：登录、权限、比价、取价、建单、出单、导出、金额约束、发票识别与冲红、ZIP 打包、合同挂票与到期排序。
+
+> 会写入数据：建一张客户名为「自检样例」的报价单并发出。跑完可在「报价单」里作废，不要当业务数据。
+
+健康检查：`GET /api/v1/health`，返回 `status`、`db`、`version`、`build_id`、`cwd`、`uptime_s`。数据库不通时仍返回 200 且 `db=error`，用于区分「进程活着但库断了」和「进程崩了」。
+
+部署脚本自身的逻辑自检（不需要 root、不启停服务、不碰库）：
 
 ```bash
-ADMIN_PASSWORD=你的管理员口令 MEMBER_PASSWORD=你的成员口令 node deploy/verify.mjs
+bash deploy/test-deploy.sh      # 23 项
 ```
 
-> 之后每次发新版本，走 [日常运维 → 更新版本](#更新版本systemd-直装) 里的 `deploy/update.sh`，
-> 不要再手工解包覆盖；`manual-deploy.sh` 只用于首次部署。
+### 4.7 更新、备份、恢复
 
----
-
-### 部署后必做：跑自检
+**更新（systemd 直装）**
 
 ```bash
-# Docker
-docker compose exec app node deploy/verify.mjs
-
-# 裸机
-cd /opt/youdee && node deploy/verify.mjs
-```
-
-它走完整条链路并在每项上比对**具体数值**，不是「有响应就算过」：
-
-```
-[通过] 健康检查 — db=ok
-[通过] 管理员登录 — 管理员
-[通过] 会话 Cookie 能落到浏览器 — http 目标且未带 Secure，浏览器可写入
-[通过] 物料库已初始化 — material 共 15 条
-[通过] 比价命中 1 组 — custom_made / 非时间 / 可比 2/3
-[通过] 不可比的行没有被隐藏 — 共 3 行 = 可比 2 + 不可比 1
-[通过] 标出了最低价 — 本公司自有 归一价 80.5562
-[通过] 比价价 = 取价价（同一价同一个数）
-[通过] 成员改旧价被拒 — 返回 40302
-[通过] 区间重叠被拦 — 人话提示，不含数据库术语
-...
-合计 143 项，通过 143，失败 0
-```
-
-自检会自己收尾：临时账号固定为 `selfcheck_temp`（首次建、之后复用），自检单跑完自动删除，不会往你的列表里堆垃圾数据。
-
-有失败项时，脚本会打印实际值与期望值，照着本文第三节末尾的「常见故障对照」表处理。
-
----
-
-### 放到域名 / HTTPS 后面
-
-项目本身只提供 HTTP。要上域名就在前面加 Nginx 或 Caddy 做 TLS：
-
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;   # 必须，否则 Cookie 不带 Secure
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    client_max_body_size 512m;                    # 合同附件单份不限大小，这里只挡极端值；不配则 Nginx 默认 1m，传扫描件必 413
-}
-```
-
-如果代理不传 `X-Forwarded-Proto`，就在 `.env` 里显式写 `COOKIE_SECURE=1`。
-
-> **一个很坑的现象**：登录接口返回 200、账号密码都对，但紧接着就提示「登录已过期，请重新登录」。原因是 `Set-Cookie` 带了 `Secure`，而浏览器访问的是 `http://IP:3000`——带 `Secure` 的 Cookie 在 http 页面上会被浏览器**静默丢弃**。本版已改成按请求实际协议判断，只有代理终结 TLS 时才需要 `COOKIE_SECURE=1`。
-
----
-
-### 日常运维：更新、备份、恢复、回滚
-
-#### 更新版本（systemd 直装）
-
-**不要「解包覆盖 + 重启」**。线上目录正被 `next start` 读着，覆盖那几分钟页面会白屏；
-更隐蔽的是 `tar` 覆盖解包**不会删除**新版本里已删掉的文件，被移除的路由会残留、并被重新编译进产物。
-
-用 `deploy/update.sh`：它在旁边的干净目录里构建，**先在备用端口把新版本跑起来验一遍**，通了才动线上。
-
-```bash
-# ① 本地打包，产出 dist/youdee-<版本>-<日期>.tar.gz 与同名 .sha256
+# 本地
 bash deploy/pack.sh
+scp dist/youdee-*.tar.gz dist/youdee-*.sha256 root@<服务器>:/tmp/
 
-# ② 两个文件一起上传（.sha256 用来校验包在传输中没损坏）
-scp dist/youdee-0.1.37-*.tar.gz dist/youdee-0.1.37-*.tar.gz.sha256 root@服务器:/tmp/
-
-# ③ 服务器上执行
+# 服务器
 cd /opt/youdee
-sudo bash deploy/update.sh /tmp/youdee-0.1.37-<日期>.tar.gz
+sudo bash deploy/update.sh /tmp/youdee-<版本>-<日期>.tar.gz
 ```
 
-> **第一次用这套流程要引导一下**：`update.sh` 是 0.1.25 才加的，服务器上现有的
-> `/opt/youdee/deploy/` 里没有它（`manual-deploy.sh` 也要新版，它多了 `SKIP_MIGRATE` 开关）。
-> 先把这三个脚本传上去再执行：
->
-> ```bash
-> scp deploy/update.sh deploy/manual-deploy.sh deploy/diagnose.sh deploy/test-deploy.sh \
->     root@服务器:/opt/youdee/deploy/
-> ```
->
-> 之后就正常了——新版本的交付包里自带 `update.sh`，不需要再单独传。
->
-> ⚠️ **脚本修过就必须重传**：切换目录后 `/opt/youdee/deploy/update.sh` 来自**包内**那一份。
-> 如果只改了本地脚本、没重新打包，下次更新会退回到旧脚本，同一个坑再踩一遍。
+`update.sh` 的顺序：备份库 / 附件 / `.env` → 解到旁目录 → 装依赖并构建（线上照常跑）→ 在 `PORT+1` 预启动自检 → 停服务 → 迁移 → 切换目录 → 起服务 → 校验版本。任一步失败自动回滚，线上不中断。
 
-**「发布目录」只认 systemd 单元说的那个**（0.1.32 起）。脚本不再按「自己在哪个目录」推断线上在哪：
+**更新（Docker）**
 
 ```bash
-systemctl show -p WorkingDirectory youdee      # 这就是线上目录，唯一真相
+cd /opt/youdee
+tar -xzf /tmp/youdee-*.tar.gz
+docker compose up -d --build      # 容器启动时自动执行 migrate deploy
+docker compose ps
 ```
 
-两者不一致且没有显式指定 `APP_DIR` 时，脚本**第一步就停下**，并给出该用哪条命令。
-这不是谨慎过头——0.1.31 上线时脚本被从 `/opt/youdee-old/deploy/` 执行，于是它把那个
-没人运行的目录当成线上：备份、构建、换目录、核对、回滚，每一步都对着它做，一路报告
-「已切换」「回滚成功」，而 `/opt/youdee` 里的进程从没被碰过。第 6 步只能看到
-「应答正常但还是旧版本」，脚本据此写「旧进程没死、端口被占」——方向完全反了。
+`dbdata` 与 `uploads` 是命名卷，重建容器不丢数据；但**解包前确认 `.env` 还在**（包内不含 `.env`）。
 
-单元没写 `WorkingDirectory` 时，退回按脚本位置判断并打 warn。要在别处执行（或两个目录并存），
-显式指定：`APP_DIR=/opt/youdee sudo bash /path/to/update.sh <包>`。
-
-**改过部署脚本先跑一遍自检**（纯逻辑，不碰服务、不需要 root）：
+**备份**
 
 ```bash
-bash deploy/test-deploy.sh     # 23 项：发布目录判定 7 + 健康检查判定 7 + 备用目录构建 9
+# 数据库（自定义格式，便于单表还原）
+pg_dump -Fc "$DATABASE_URL" > /backup/youdee-$(date +%F).dump
+
+# 附件
+tar -czf /backup/uploads-$(date +%F).tar.gz -C /opt/youdee var/uploads
+
+# Docker 部署（卷名 = 项目名_uploads，项目名默认取目录名，可用 docker volume ls 确认）
+docker compose exec -T db pg_dump -Fc -U youdee youdee > /backup/youdee-$(date +%F).dump
+docker run --rm -v youdee_uploads:/data -v /backup:/backup alpine tar -czf /backup/uploads-$(date +%F).tar.gz -C /data .
 ```
 
-这些用例对应全部五次上线故障（`|| true` 位置错、pipefail 静默退出、版本号来源不明、
-发布目录判错、旁目录构建被自家守卫拦下）。改脚本前后各跑一次，比上线去试便宜得多。
+备份命令不会自动执行，需要配 cron。
 
-> **为什么 3/6 那次调用必须显式带 `APP_DIR`**（0.1.33 修）：`manual-deploy.sh` 自带
-> 「当前目录必须就是服务在跑的那个」守卫，而 `update.sh` 恰恰是**故意**在 `/opt/youdee-next`
-> 里构建。0.1.32 首次上线没传 `APP_DIR`，守卫判为「又在没人运行的目录里白忙」并 `exit 1`，
-> `update.sh` 把它报成「构建失败」——日志里一句编译错误都没有。现在失败文案会先看有没有
-> 产出 `.next/BUILD_ID`，分清「构建没走完」与「前置检查没过」。
-
-它按七步走，只有第 4 步开始才影响线上：
-
-| 步骤 | 动作 | 线上影响 |
-|---|---|---|
-| 0 | 核对发布目录是否就是单元 `WorkingDirectory`、校验包 `sha256` | 无（对不上**直接退出**） |
-| 1 | 备份：`pg_dump` + 附件 + `.env` → `/opt/youdee-backup/<时间>/` | 无 |
-| 2 | 解包到 `/opt/youdee-next`（干净目录，不残留旧文件） | 无 |
-| 3 | 在新目录 `npm ci --include=dev` + `prisma generate` + `next build` | **无**，旧版照常服务 |
-| 3.5 | **预启动自检**：以服务用户身份在 `:PORT+1` 起一份，健康检查对版本 | **无** |
-| 4 | `systemctl stop` → `prisma migrate deploy` → 灌种子 | 停机开始 |
-| 5 | `/opt/youdee` 改名为 `/opt/youdee-old`，新目录上位 | 停机中 |
-| 6 | `systemctl start` → 轮询健康检查核对版本号 / BUILD_ID / 进程 cwd | 恢复 |
-
-**第 3.5 步为什么必须有**：0.1.25 首跑时它还不存在，于是「新版本起不来」的代价是——
-线上停过一次、库迁移过、再整目录回滚，等于一次真实宕机；而脚本给出的线索只有一句
-「（最后一次：`||`）」，连是"连不上"还是"版本不符"都分不清。现在新版本先在
-`:PORT+1` 以 `User=` 身份起一份，健康检查通过才继续；不通就把日志打屏、删掉旁目录、
-退出——线上一次都没停过，库也没动过。
-
-用服务用户试跑而不是 root，是因为「构建成功、启动即退出」最常见的原因恰恰是权限：
-文件属主、`UPLOAD_DIR` 写权限、`HOME` 不可写、node 不在该用户的 `PATH` 里。
-root 试跑会一路通过，然后线上失败。
-
-**版本号是「跑的是不是新代码」的唯一硬证据**，所以它必须能说清自己从哪来。
-`/api/v1/health` 会一次给齐五样东西（0.1.30 起）：
+**恢复**
 
 ```bash
-curl -s http://127.0.0.1:3000/api/v1/health
-# {"code":0,"data":{
-#   "status":"ok","db":"ok",
-#   "version":"0.1.37",                     ← 磁盘 package.json 里的版本 = 部署的这份代码
-#   "version_source":"package.json",        ← 上面那个值读自哪里；不是 package.json 就不可信
-#   "build_id":"zR3kP9xQ2m",                ← 磁盘 .next/BUILD_ID = 这份产物是哪次构建的
-#   "npm_version":"0.1.37",                 ← 仅供排错：npm 注入的环境变量
-#   "cwd":"/opt/youdee","uptime_s":12}}
+pg_restore -c --if-exists -d "$DATABASE_URL" /backup/youdee-2026-01-01.dump
+tar -xzf /backup/uploads-2026-01-01.tar.gz -C /opt/youdee
+sudo systemctl restart youdee
 ```
 
-为什么要分成这么多字段而不是一个版本号：`npm_package_version` 是 npm 注入的**环境变量**，来源不可见；
-一旦它与磁盘上的代码不一致，日志里就只剩一个无处追查的数字。0.1.29 上线时就卡在这里——
-`/health` 反复报 `0.1.27`，而交付包和磁盘都是 `0.1.29`，三种可能（代码旧 / 变量旧 / 跑的不是这次构建）
-在当时的信息下完全无法区分。现在：
-
-- `version_source` 不是 `package.json` → `update.sh` 直接判失败，不再拿"数字看起来对"当通过；
-- `build_id` 与本次构建出来的不一致 → 说明跑的不是这次编出来的产物（版本号对了、产物没换）；
-  脚本在构建后记下 `BUILD_ID`，并核对它的修改时间不早于本次更新开始时间；
-- `cwd` 不是发布目录 → 服务跑的是另一个目录里的代码，问题在部署而不在代码；
-  这一项是 0.1.31 那次失败的最终答案：版本号说 0.1.30，`build_id` 说旧产物，两个都只是症状，
-  真正的原因是进程 cwd 是 `/opt/youdee`，而脚本在 `/opt/youdee-old` 上忙了一整轮；
-- `uptime_s` 顺带证明进程真的重启过——只改代码不重启，版本号会一直停在老的。
-
-`version` 读的是 `process.cwd()/package.json`，不是构建时写死的常量，所以**换目录就等于换版本**。
-
-> 别再试 `next.config.ts` 的 `env` 来传构建时间戳：Next 16 只把它写进
-> `.next/required-server-files.json` 的 `config.env`，**不会**在启动时回填 `process.env`，
-> 实测 `/health` 读出来是空串（只有客户端 bundle 会被内联）。改用 `.next/BUILD_ID` 更直接。
-
-**六条必须知道的约束**：
-
-- **发布目录必须就是单元的 `WorkingDirectory`**。同一台机器上常有 `/opt/youdee-old`、
-  `/opt/youdee-failed.<时间>` 这些完整目录，长得一模一样；在错的那个里执行脚本，
-  结果是"全部成功、线上没变"。脚本现在第一步就核对并拒绝，但你手工操作时同样要认准这一个：
-  `systemctl show -p WorkingDirectory youdee`。
-- **迁移只有 up，没有 down**。库备份是唯一的真回滚手段，所以脚本在 `pg_dump` 失败时会直接中止。
-  确实没有 `pg_dump` 时可用 `ALLOW_NO_DB_BACKUP=1` 强行继续，但那等于放弃回滚。
-- **`.env` 不在交付包里**（口令、`JWT_SECRET` 不该跟着包走）。脚本复用线上那份，不覆盖。
-  换 `JWT_SECRET` 等于让所有人重新登录。
-- **附件也不在包里**。`UPLOAD_DIR` 是相对路径（如 `public/uploads`）时，脚本会把它带进新目录：
-  构建期间先预热复制，停机后再补一次增量，避免为了几百兆附件干等。
-  更省心的长期做法是把 `UPLOAD_DIR` 改成发布目录之外的绝对路径（如 `/opt/youdee-data/uploads`），
-  之后更新就完全不用搬文件。
-- **`youdee.service` 里 `ReadWritePaths` 指向的目录必须存在**。`systemd` 建挂载命名空间时
-  路径不存在会直接以 `status=226/NAMESPACE` 拒绝启动，报错只有
-  `Failed to set up mount namespacing: No such file or directory`，完全指不到"少建了个空目录"。
-  脚本会读单元文件里的 `ReadWritePaths` 清单，逐条在新目录补齐（`-` 前缀的可选路径也补）——
-  空目录最容易被丢：`tar` 未必带上、`git` 不跟踪。**这一步只能靠"事前把目录建出来"**，
-  预启动自检直接跑 `next start`、绕过 systemd，永远测不到这一层（0.1.27 就是这样
-  预启动通过、切完目录才倒下的）。
-- **停机窗口**只有「迁移 + 换目录 + 启动」，通常几秒；装依赖和构建都在后台目录完成，不占停机时间。
-
-失败处理分三层，代价逐层升高：
-
-| 失败点 | 脚本行为 | 线上 |
-|---|---|---|
-| **发布目录 ≠ 单元 WorkingDirectory** | 第一步退出，打印两边路径和正确命令（0.1.32 起） | **没停过，库没动** |
-| 构建失败 / **预启动自检不通过** | 打印新版本自己的启动日志，删掉旁目录，退出 | **没停过，库没动** |
-| 迁移失败 | 旧目录换回并重启 | 停过一次 |
-| **换目录后磁盘版本不对** | 当场 `dump_truth` 并回滚（0.1.30 起；以前要等起完服务才发现） | 停过一次 |
-| 切换后健康检查不通过 | `dump_truth`（`/health` 全量、磁盘版本、BUILD_ID、端口监听者、单元配置与操作目录是否一致）+ `systemctl status` + `journalctl` 最后 40 行，回滚代码**并再验一次是否真的恢复**；没恢复就把"现在是一次真实宕机"和处理命令摊出来 | 停过一次 |
-
-每次判断是否达标，脚本都会把**不达标的具体原因**打出来，而不是只给个"未通过"：
-
-```
-[update]   不达标原因：version=0.1.27（期望 0.1.37）
-[update]   不达标原因：version_source=env（版本号不是读自磁盘，不可信）
-[update]   不达标原因：build_id=oldBuildId（期望 zR3kP9xQ2m，跑的不是这次构建的产物）
-[update]   不达标原因：cwd=/opt/youdee-old（期望 /opt/youdee，进程跑的不是这个目录）
-```
-
-换下来的新版本留在 `/opt/youdee-failed.<时间>`，别急着删，排错要看。
-
-#### 常用状态命令（systemd）
-
-```bash
-sudo systemctl status youdee                      # 状态
-sudo journalctl -u youdee -f                      # 实时日志
-sudo journalctl -u youdee -n 200 --no-pager       # 最近 200 行
-sudo systemctl restart youdee                     # 重启（改了 .env 之后要做）
-sudo systemctl stop youdee                        # 停止
-sudo systemctl daemon-reload                      # 改过 youdee.service 之后要做
-```
-
-Docker 路径对应的命令：
-
-```bash
-docker compose ps                  # 状态
-docker compose logs -f app         # 应用日志
-docker compose restart app         # 重启（不重建）
-docker compose down                # 停掉（数据在卷里，不丢）
-docker compose exec db psql -U youdee -d youdee     # 进库
-```
-
-#### 更新后服务起不来怎么查
-
-**先跑一条命令，把"现在跑的到底是什么"打全**（只读，不启停服务、不写文件）：
+**排障**
 
 ```bash
 cd /opt/youdee && sudo bash deploy/diagnose.sh
 ```
 
-它会依次打印：单元真实配置（`WorkingDirectory` / `ExecStart` / `ReadWritePaths`）、服务状态、
-`/health` 原样返回、磁盘上的 `package.json` 版本与 `.next/BUILD_ID` 及时间、端口监听者、
-**进程 cwd / 单元目录 / 脚本所在目录的三方对照**、各候选目录各自是哪一版、`/opt` 下残留的
-`-old` / `-failed` / `-next` 目录、日志尾部。**整段发出来就能定位**——
-省掉"来回问一句、再敲一条命令"的循环，这正是 0.1.27~0.1.31 那几轮最耗时间的地方。
+只读输出：systemd 单元真实配置、`/health` 原样返回、磁盘版本与进程 `cwd` 是否一致、端口监听者、最近日志。
 
-`diagnose.sh` 本身也以单元目录为准来读磁盘上那份代码：脚本在 `/opt/youdee-old` 里跑时，
-它会告诉你"脚本在这，但线上在 `/opt/youdee`，下面按后者看"。
-
-> **「应答正常但版本是旧的」不等于「旧进程没死」**。先看 `cwd`：
->
-> ```bash
-> curl -s http://127.0.0.1:3000/api/v1/health | node -e '...j.data.cwd'
-> systemctl show -p WorkingDirectory youdee
-> ```
->
-> 两者不一致，说明这次更新改的是另一个目录，跟"进程没重启""端口被占"毫无关系。
-> 0.1.31 上线失败就是这个：版本号、BUILD_ID 全在说"旧"，根因却是脚本在
-> `/opt/youdee-old` 上完成了一整套切换和回滚，而 `/opt/youdee` 一动不动。
-
-再往下是手工路径，用来分清是「连不上」还是「在跑但状态不对」，两者的排查方向完全不同：
-
-```bash
-curl -s http://127.0.0.1:3000/api/v1/health   # 连不上 = 进程没在听；有 JSON = 进程在跑
-sudo ss -lntp | grep 3000                     # 谁占着端口
-sudo systemctl status youdee --no-pager -l    # Active 行给出退出码与状态（如 226/NAMESPACE）
-sudo journalctl -u youdee -n 200 --no-pager
-```
-
-最省事的是**直接在失败目录里前台跑一次**，报错原样打出来，不必对着日志猜：
-
-```bash
-cd /opt/youdee-failed.<时间>
-sudo -u youdee env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 npx --no-install next start -p 3100
-```
-
-按退出码对号：
-
-| 现象 | 病因 | 处理 |
-|---|---|---|
-| **`/health` 应答正常，但版本仍是旧的** | 脚本操作的目录 ≠ 单元 `WorkingDirectory`（在 `-old` / `-failed` 目录里执行了） | 比对 `curl` 的 `cwd` 与 `systemctl show -p WorkingDirectory youdee`；一致才说明更新真生效了。新版脚本第一步就会拦下这种情况 |
-| `226/NAMESPACE`，日志有 `Failed to set up mount namespacing` | 单元里 `ReadWritePaths` 指向的目录不存在 | `mkdir -p .next/cache public/uploads`（新版 `update.sh` 已自动补建） |
-| `EADDRINUSE` | 旧进程没死或被手工启动的实例占着端口 | `ss -lntp \| grep 3000` 找到 PID 后停掉 |
-| `EACCES` / `permission denied` | 目录属主不对（root 解包、`User=` 是 youdee） | `chown -R youdee:youdee /opt/youdee` |
-| `Cannot find module 'next'` / `'@tailwindcss/postcss'` | 依赖装残了 | 删掉该目录的 `node_modules` 与 `.next` 重装 |
-| 进程反复重启，日志有 `Killed process ... out of memory` | 内存不足 | 加 swap 或升级内存，`next build` 与运行不要同时压 |
-
-**备份**（建议配 cron，每天一次）：
-
-```bash
-# Docker：数据库 + 附件
-docker compose exec -T db pg_dump -U youdee youdee | gzip > backup-$(date +%F).sql.gz
-docker run --rm -v youdee_uploads:/u -v "$PWD":/b alpine tar czf /b/uploads-$(date +%F).tar.gz -C /u .
-
-# 裸机 / systemd（-Fc 是自定义格式，配合 pg_restore 才能单表或整库还原）
-pg_dump "postgresql://youdee:口令@127.0.0.1:5432/youdee" -Fc -f /var/backups/youdee-$(date +%F).dump
-tar czf /var/backups/uploads-$(date +%F).tar.gz -C /opt/youdee public/uploads   # 路径以 .env 的 UPLOAD_DIR 为准
-```
-
-> `update.sh` 每次更新前都会自己做一遍同样的备份，存在 `/opt/youdee-backup/<时间>/`。
-> 但这不能替代定时备份：更新备份只覆盖「更新前那一刻」，日常误删、磁盘故障它管不了。
-
-**恢复**：
-
-```bash
-gunzip -c backup-2026-11-05.sql.gz | docker compose exec -T db psql -U youdee -d youdee
-# 裸机 / systemd（.dump 是 -Fc 格式，用 pg_restore；-c 先删再建，--if-exists 抑制不存在时的报错）
-pg_restore -d "postgresql://youdee:口令@127.0.0.1:5432/youdee" -c --if-exists /var/backups/youdee-2026-11-05.dump
-```
-
-**回滚**分两层，别混着做：
-
-```bash
-# 代码层：把上一个发布目录换回来（update.sh 在校验不通过时会自动做这一步）
-sudo systemctl stop youdee
-sudo mv /opt/youdee /opt/youdee-broken
-sudo mv /opt/youdee-old /opt/youdee
-sudo systemctl start youdee
-```
-
-数据库层：**迁移是前进式的，没有 down 脚本**。若新版迁移改过表结构、导致旧代码读不了新结构，
-用迁移前的备份恢复——注意这会丢掉迁移之后写入的数据，先想清楚值不值得：
-
-```bash
-pg_restore -d "postgresql://youdee:口令@127.0.0.1:5432/youdee" -c --if-exists /opt/youdee-backup/<时间>/db.dump
-```
-
----
-
-### 常见故障对照
+### 4.8 常见故障
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 容器起来又退出，日志停在「等待数据库就绪」 | 库没起来或密码错 | `docker compose logs db`；核对 `.env` 的 `PG_PASSWORD` 与卷里旧密码是否一致（改过口令但没删卷会认证失败） |
-| `getaddrinfo ENOTFOUND` | `PG_PASSWORD` 含 `@ : / ? #`，连接串解析错位 | 换成纯字母数字口令，`docker compose down -v` 后重建 |
-| `npm ci` 报 `lock file's X does not satisfy Y` | `package-lock.json` 与 `package.json` 不同步 | `npm ci --dry-run` 定位 → 删掉确实没人用的依赖 → 重新生成锁文件。**不要把 `npm ci` 改成 `npm install` 糊过去** |
-| `npm ci` 报 `EACCES` / 缓存路径不存在 | 仓库里的 `.npmrc` 写死了 Windows 缓存路径 | 该文件已被 `.dockerignore` 排除；裸机路径下删掉 `.npmrc` 里的 `cache=` |
-| 构建卡在 `npm ci`，大量 `ETIMEDOUT` | 官方 registry 在国内慢 | `.env` 加 `NPM_REGISTRY=https://registry.npmmirror.com` 后重 build |
-| 构建被 Killed | 内存不足 | 加 swap 或换 2G 机器；`NODE_OPTIONS=--max-old-space-size=1536` |
-| 构建报 `Cannot find module '@tailwindcss/postcss'` | devDependencies 没装（`NODE_ENV=production` 导致 `omit=dev`），或 `.next` 里有失败残留 | 裸机：`rm -rf node_modules .next && NODE_ENV=development npm ci --include=dev`；Docker：确认构建参数没设 `NODE_ENV=production` |
-| 页面能开，登录报 500 | 迁移没跑或库连不上 | `docker compose logs app` 看首个报错；确认 `prisma migrate deploy` 有输出 |
-| 登录后立刻提示「登录已过期」 | Cookie 带 `Secure` 但访问的是 http | 让代理传 `X-Forwarded-Proto`，或显式 `COOKIE_SECURE=1` |
-| 上传图片后刷新 404 | `var/uploads` 没挂卷，或目录属主不对 | 确认 compose 有 `uploads` 卷；容器内属主应为 `app`(10001) |
-| 端口被占 | 3000 有别的服务 | `.env` 改 `APP_PORT=8080` 后 `docker compose up -d` |
-| 中文乱码 | 库编码不是 UTF8 | 建库时 `ENCODING 'UTF8'`；本项目迁移含中文默认值与注释 |
-| `prisma migrate deploy` 报 P3025 | 配置里设了 `shadowDatabaseUrl` 且与主库相同 | `prisma.config.ts` 已移除该字段，不要加回去 |
-| 纯离线服务器 `docker build` 失败 | 没有外网装依赖 | 在能联网的**同架构 Linux** 上 `docker compose build` → `docker save` → 拷过去 `docker load` → `docker compose up -d`（跳过 `--build`） |
-| 上传发票点不动 / 按钮是灰的 | 没配 OCR 密钥，或对象存储那对密钥也没填 | 【设置 → 发票识别】填 SecretId / SecretKey（留空 = 复用对象存储那对），点「测试连接」 |
-| 传发票报「识别服务没开通或已欠费」（50202） | 账号没开通「文字识别 OCR」，或免费额度用完 | 腾讯云控制台开通并确认计费正常 |
-| 传发票报「这张票没认出来」（42208） | 图片模糊 / 倾斜 / 盖章遮挡；或不是发票（纸质火车票、机票行程单、定额发票不收）；OFD 只认第一页，旧版式/加密签名的 OFD 会解码失败 | 重拍一张清晰的，或「手工录入」先把票号记下；OFD 先另存为 PDF 再传 |
-| 传大 PDF 报「识别上限约 7.5MB」（41301） | base64 后超 10MB 上限；没有可靠的 Node 端 PDF 瘦身库，所以不自动压 | 报错里带实际体积，先压缩或拆页再传 |
-| 上传成功了但金额合计比印象里小 | 里面有红字票，已经按负数抵掉了 | 看「金额合计」旁边那句「含红字票 N 张」，这是口径提示不是异常 |
-| 同一张蓝票明明是正数，为什么合计里不是 0 | 它旁边那张红字票已经记成负数了，合计自然抵成 0；如果原票被标成「已冲红」还继续抵一次，就会变成 −2X（0.1.38 的错，0.1.39 已修） | 「已冲红」只是标签，不动金额。核对时看两行的 `amount/tax/total` 符号就够了 |
-| 红字票的状态为什么显示「红字票」而不是「正常」 | 0.1.42 起它不是第三种 `status`，而是由 `is_red_letter` 派生的展示（`lib/labels.ts` 的 `invoiceDisplayStatus`）；金额符号仍然只认这一列 | 票面是负数、状态却写「正常」时客户会直接认为算错了。红字票**不能**再标「已冲红」，勾选红字票会自动撤掉那个标签 |
-| 点发票原件的「预览」变成了下载文件 | 0.1.41 及以前预览走 `.../raw`，云文件会 302 到预签名地址；桶里对象元数据是 `attachment`，中间层一旦丢掉 `response-content-disposition` 参数就存盘而不是渲染 | 0.1.42 起预览走同源 `.../content`（服务端自己写 `inline`），与合同附件同一套；下载仍走 `raw` |
-| 上传红字票后没弹「要不要把原票标成已冲红」 | ① 票面上读不出原票号（备注里没有「被红冲蓝字数电发票号码」这类字样）；② 原票不在台账里（还没录 / 已删）；③ 原票早就标过了 | 三种情况红字票都照常入账，答案在结果提示的 `warnings` 里；手工在发票抽屉里给原票点「标记为已冲红」即可 |
-| 工作台没有「合同要到期」这条待办 | 三条都可能：合同没填**终止日期**（= 不是周期性合同）、终止日期在 30 天以外、或合同状态是「已终止」 | 到合同列表把「到期提醒」切到「一个月内」看同一批；已过期的不筛选也会显示「已过期 N 天」 |
-| 批量下载 ZIP 报「一次最多 500 份 / 2GB」 | 命中结果太多 | 按日期或状态筛小一点分批下；半截失败不会给出残缺包（宁可报错也不让人以为下齐了） |
-| ZIP 里的中文文件名乱码 | 解压工具太老（Win7 自带资源管理器会忽略 UTF-8 标志位按 GBK 解） | 用 7-Zip / WinRAR / Win10 1903+ / macOS 解压，我们按标准写 UTF-8 不退回 GBK（退回会让 Mac/Linux 全乱） |
-| 从「已结算」想改回「签订中」改不动 | 合同状态只有 `PATCH /contracts/:id/status` 一条写入路径，抽屉里那个下拉故意不随表单一起提交 | 用列表或抽屉里的**状态下拉**单独改，保存即生效；五个状态之间任意切换，没有状态机拦截 |
-| 录票时提示「这张票已经记过了」，但那明明是我删掉的 | 唯一键 `(invoice_code, invoice_no)` 包含已软删的行——删票只打 `deleted_at`，不腾号 | 把筛选栏的「删除状态」切到**已删除**找到那张 → 恢复 → 直接改，不必重录。**不做硬删**：扫描件常是唯一副本，硬删会连带物理文件回收 |
-| 客户版预览页的「详细 / 精简」「分组」「显示单价」几个开关点了没反应 | 设置里上传过报价单模板后，列集合就由模板决定，这几个开关按设计失效（`src/domain/customer-sheet.ts:296`，0.1.21 引入多模板后如此） | **已知，本版未改**（属模板功能的历史行为，不是发票模块带来的）。要改列请改模板本身；开关失效这件事应该把控件置灰并说明，已记入待办 |
-
-更长的排障过程（含 PostCSS 解析失败的三步判定、锁文件不同步的定位方法）见本文第三节的「常见故障对照」。
+| 密码正确、登录接口 200，随即提示登录已过期 | 页面是 http，却发了带 `Secure` 的 Cookie，浏览器静默丢弃 | 去掉 `COOKIE_SECURE`，或让代理传 `X-Forwarded-Proto` |
+| `npm ci` 卡住或 `ETIMEDOUT` / `ECONNRESET` | 国内机器访问官方 registry 超时 | Compose 里设 `NPM_REGISTRY=https://registry.npmmirror.com` 后重建 |
+| 重建容器后上传的附件全没了 | `uploads` 卷未挂载 | 检查 `docker-compose.yml` 的 volumes |
+| 点发票原件「预览」变成下载文件 | 走的是 `raw`（302 到预签名地址），对象元数据为 `attachment` | 0.1.42 起预览走同源 `/content`；确认版本已更新 |
+| 成员点新建报「需要管理员权限」 | 0.1.41 以前的权限口径 | 升级到 0.1.41+，成员可新建档案，改档 / 删档仍限管理员 |
+| `/health` 里 `version` 与磁盘 `package.json` 不一致 | 进程跑的不是当前目录的产物 | 用 `deploy/diagnose.sh` 核对 `cwd` 与单元 `WorkingDirectory` |
 
 ---
 
-## 四、常用命令
+## 附：许可与使用范围
 
-```bash
-# 开发
-npm run dev            # 开发服务器
-npm run build          # 生产构建
-npm run start          # 生产启动（需先 build）
-npm run typecheck      # 类型检查
-npm test               # 单元测试（369 条，纯函数，秒级跑完）
-
-# 数据库（本地开发）
-npm run db:start       # 起本地 embedded-postgres（前台阻塞）
-npm run db:stop        # 停
-npm run db:status      # 连通性
-npm run db:migrate     # 应用迁移
-npm run db:seed        # 灌种子（幂等）
-npm run db:reset       # 清库重建（会丢数据）
-
-# 部署
-bash deploy/pack.sh            # 出交付包到 dist/（含 .sha256）
-bash deploy/deploy.sh root@IP  # 本机 → 远端一键（需 ssh 可达）
-sh deploy/remote-up.sh         # 远端：构建并启动（Docker）
-sh deploy/manual-deploy.sh     # 远端：首次部署，构建并启动（裸机 / systemd）
-sudo bash deploy/update.sh <包>  # 远端：更新版本，带备份、迁移与自动回滚（systemd）
-node deploy/verify.mjs         # 部署后自检（143 项）
-bash deploy/test-deploy.sh     # 部署脚本自身的逻辑自检（23 项，不碰服务、不需 root）
-sudo bash deploy/diagnose.sh   # 线上出问题先跑这个：只读，打印目录/版本/端口/日志对照
-```
-
-改动部署脚本或排查线上故障时，`test-deploy.sh`（改完就跑）与 `diagnose.sh`（先看现场）
-比直接改一行上线试要便宜得多——两者的用法分别在第三节「日常运维」的两段里。
-
----
-
-## 五、还缺客户提供的东西
-
-**单位折算表**。下面这些物料的真实折算关系只有客户知道，系统不能凭空填：
-
-| 物料 | 比价基准 | 供应商常按 | 需要确认 |
-|---|---|---|---|
-| 喷绘布 | ㎡ | 张 | 1㎡ = 几张 |
-| KT 板 | ㎡ | 张 | 1 张 = 几㎡（常规 1.2×2.4m） |
-| 桁架 | m | 根 | 1 根 = 几米 |
-| LED 屏 | ㎡ 或 天 | 块 / 套 | 1 块 = 几㎡ |
-| 地毯 | ㎡ | 卷 | 1 卷 = 几㎡ |
-| 易拉宝 | 个 | 套 | 是否含画面 |
-
-不填不会崩：这些物料照样能录价、能出单、能看到各家原价，只是**不标「最低」**，比价页会写明「未填折算系数，不可比」。填了才会出现「某某家便宜 6.25%」这类结论。
-
-**腾讯云 OCR 的开通与密钥**。发票识别要用同一个账号下的「文字识别 OCR」服务：
-
-1. 到腾讯云控制台开通 **文字识别 OCR**（按次计费，通用票据识别有免费额度，够日常上传量）；
-2. 密钥默认**复用【设置 → 对象存储】那一对** SecretId / SecretKey，不用重复填；要单独用另一对子账号密钥，就在【设置 → 发票识别】里覆盖；
-3. 填完点「测试连接」，返回耗时即通。
-
-**没配密钥时上传按钮是灰的**，并直接指到设置页——不会让人传完 20 张才发现一张都识别不了。这个状态下**手工录入照常能用**，只是没有原件；等配好密钥之后，可以用 `POST /api/v1/invoices/:id/files` 把扫描件补挂到已录入的那张票上。
-
----
-
-## 六、许可与使用范围
-
-内部工具，按「自用」授权。没有多租户隔离、没有对外注册，不适合直接改成 SaaS 对外服务。
-
----
-
-## 附：最近版本变更（0.1.30 → 0.1.42）
-
-0.1.30–0.1.35 是 2026-11-12 前后的提交，0.1.36 是发票模块，0.1.37 是权限与导航调整，0.1.38 是发票识别的票种与红冲流程，0.1.39 是合同终止日期与红字票口径修正，0.1.40 是用真红字票样张验出的补丁，0.1.41 是合同到期排序与成员建档，0.1.42 是红字票状态口径与发票原件预览。每条的「为什么」在这里只写一句，展开的排查过程见相应章节。
-
-| 版本 | 改了什么 | 对使用者的影响 |
-|---|---|---|
-| **0.1.42** | ① **红字票的状态就写「红字票」**：不再出现「红字票 + 正常」两个徽标叠在一起；勾上红字票后不能再标「已冲红」——界面不给按钮、接口回 409，已经标着的会在勾选时自动撤掉。状态筛选拆成三项（正常 / 已冲红 / 红字票），互斥、加起来是全集。② **发票原件「预览」真的预览**：原来走 `raw`，云文件会 302 到预签名地址，桶里元数据是 `attachment` 就变成下载；现在和合同附件一样走同源 `.../content`，服务端自己写 `inline`，PDF 交给浏览器阅读器、图片直接显示 | ① 票面是负数、状态栏却写「正常」，看账的人只会以为系统算错了；也不会再出现「红字票被标已冲红」这种自相矛盾的行。② 点「预览」不再变成下载文件。**无需迁移**，纯展示与接口校验 |
-| **0.1.41** | ① 合同列表改成**按到期远近排**：一个月内到期的排最前（由近到远），其次是其它有终止日期的，没终止日期的排最后；已终止的压到最后。一个月内的**终止日期本身标红**（原来只标红「还剩 N 天」那句）。② **成员能建档了**：新建物料 / 人员 / 供应商对成员开放，录价抽屉里也能就地新建供应商（原来那句「让管理员先建一下」是个死胡同）；改档、删档、分类字典仍然只有管理员 | ① 合同台账不再靠人翻日期找哪份要续签——列表第一屏就是该处理的。② 0.1.37 之后成员在录入侧被「建档」卡死：发现新供应商 → 建不了 → 只能记在微信里，月底再补，而补的时候价格往往已经忘了。**无需迁移**，纯权限与排序 |
-| **0.1.40** | 拿真红字票样张（一张红字铁路电子客票 OFD）验出来两处读不到原票号：① **铁路客票确实有红字版式**，0.1.39 按「铁路没有红字票」写死 `original_invoice_no=null`；② 原票号在这张票上只出现在**结构化字段 `OriginalNumber`** 里，而旧代码把字段的**值**当成票面文字去找「原发票号码」这类标签——值里没有标签，于是永远返回 null。现在结构化字段按「键名白名单 + 8/20 位形态 + 不等于本票号码」直接取值，铁路分支也走同一套读取；读不到时的提示收敛成一句（两个分支共用） | 红字铁路票能从票面上认出它冲的是哪张票，那张原票可以被标成「已冲红」，一对票在合计里抵成 0。**无需迁移**，只影响红字票的原票号识别（蓝票行为不变：字段里就算带了 `OriginalNumber` 也不采信） |
-| **0.1.39** | ① 合同新增**终止日期**：填了就是周期性合同（年 / 季度），列表里直接写「还剩 N 天」，工作台给全部管理员留一条「一个月内到期」的待办并可点进已筛选的列表（窗口 30 天，已过期的不消失，已终止的不提醒）。② **红字票口径修正**：把「票面是红字票」（`is_red_letter`，决定金额符号）和「账面已冲红」（`status`，一句标签）拆成两列——红字票自己状态是「正常」、按负数入账，只为它冲的那张原票提供一句「要不要标成已冲红」的提示；上传时从票面读原票号（`被红冲蓝字数电发票号码 / 对应正数发票号码 / 原发票号码`），读不出或原票不在台账里也照记，只提示手工对一下 | 合同快到期这件事不再靠人记。发票这边 0.1.38 会把一对票抵成 −2X（红字票翻一次、原票标已冲红又翻一次），0.1.39 修正后一对票正好抵成 0，且「标已冲红」从此不动金额。**必须跑迁移**：加两列并按「金额为负的红票」回填，**回填不改任何金额**，存量合计不变；新列对老数据没有破坏性影响 |
-| **0.1.38** | 发票识别扩了三处：新增 **OFD 格式**（数电票的原始下发格式，识别第一页）、新增**电子发票（铁路电子客票）**（销售方默认中国铁路集团有限公司，票价按含税金额入账并反推不含税）、**红冲票上传时会问一句**（同号票已在库则弹窗确认是否标记冲红，不再静默跳过）。顺带修了筛选条两个下拉框比其他输入框高一截的错位，去掉页头「进项票」的片面说法 | 数电票可以直接传 OFD，不用先转 PDF；铁路票能入台账了（销售方可手改）；红票不再「传了没反应」。**无需迁移**，不影响已有数据。OFD 只认第一页，多页 OFD 仍建议传 PDF |
-| **0.1.37** | **合同管理**与**发票台账**改成**管理员专属**：接口层整块收口（成员拿到 403，读也拦），侧栏对成员隐藏这两个入口，直接输 URL 会看到「只对管理员开放」的说明页；侧栏顺序调整为 **报价单 → 合同管理 → 发票**（原来合同排在报价单之前） | 普通成员从此看不到合同与发票的任何数据，也不再能新建/修改。需要数字找管理员。管理员操作完全不变。**无需迁移**，也不影响已有数据 |
-| **0.1.36** | 新增**发票台账**：批量识别上传（腾讯云 `RecognizeGeneralInvoice`）、按号码/购买方/销售方/日期/状态/是否挂合同查、列表头统计张数与金额税额、ZIP 批量下载、正常/冲红状态；合同可关联发票；合同新增**手工维护的五态状态**（签订中 / 履约中 / 结算中 / 已结算 / 已终止）；设置页新增**发票识别**密钥块 | 进项发票从"散在微信里"变成能查能对账的台账。**升级前必须跑迁移**（新建 3 张表 + 给存量合同回填状态），迁移会把已有合同一律置为「履约中」，之后手工改。没配腾讯云密钥时上传按钮是灰的，但手工录入照常可用 |
-| **0.1.35** | COS 对象键按**路径段**去重；合同附件的子目录只传合同 id | 桶里不再出现 `contracts/contracts/<合同 id>/…`。只影响新上传，老对象照常可读 |
-| **0.1.34** | PDF 预览改走同源 `.../content`，由服务端自己写 `inline`；新上传的对象元数据从 `attachment` 改为 `inline` | 线上点「预览」不再变成下载；PDF 与存储后端解耦，换 CDN / 自定义域名都不受影响 |
-| **0.1.33** | `update.sh` 3/6 调 `manual-deploy.sh` 时显式传 `APP_DIR`；失败文案区分「构建没走完」与「前置检查没过」 | 更新不再停在 3/6 却报「构建失败」而日志里没有编译错误 |
-| **0.1.32** | 发布目录以 systemd 单元的 `WorkingDirectory` 为准；`check_out` 比对进程 `cwd`；新增 `deploy/test-deploy.sh` | 在错误目录执行脚本会在第一步就停下，不再「全部成功、线上没变」 |
-| **0.1.31** | 合同附件在线预览：PDF / 图片 / DOCX / XLSX 各自渲染；新增同源 `.../content` 与 `.../sheet` | 附件不用先下载再找文件；DOC / XLS 老格式仍只能下载 |
-| **0.1.30** | `/health` 报 `version / version_source / build_id / npm_version / cwd`；新增只读的 `deploy/diagnose.sh` | 上线后能一眼看出「跑的是哪份代码、哪次构建、在哪个目录」 |
-
-升级到某一版之前，先看对应条目；0.1.30 起不再有数据库迁移之外的手工步骤，
-`update.sh` 会自己备份、构建、预启动自检、切换与回滚。
+内部工具，仅授权客户部署使用。上线前必须修改默认账号口令、替换 `JWT_SECRET`、配置 HTTPS。

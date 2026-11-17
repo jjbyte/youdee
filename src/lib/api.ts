@@ -539,6 +539,8 @@ export const api = {
       status?: ContractStatus;
       signedFrom?: string;
       signedTo?: string;
+      /** true = 只看「已到期 + 一个月内到期」的周期性合同（工作台那条提醒点进来用） */
+      expiring?: boolean;
       createdFrom?: string;
       createdTo?: string;
       hasFile?: boolean;
@@ -629,7 +631,10 @@ export const api = {
   /** 部分更新：不传 = 不动，null / 空串 = 清空 */
   updateInvoice: (id: string, body: Record<string, unknown>) =>
     request<InvoiceDetail>(`/invoices/${id}`, { method: 'PATCH', body }),
-  /** 改状态：仅 admin。服务端会同步把三项金额重定符号（冲红记负数） */
+  /**
+   * 改「账面状态」：仅 admin。**只改这一句标签，三项金额一分不动**——
+   * 红字票的负数由 `isRedLetter` 决定，改状态不会翻符号（见 invoice.service 的注释）。
+   */
   setInvoiceStatus: (id: string, status: 'normal' | 'red') =>
     request<InvoiceDetail>(`/invoices/${id}/status`, { method: 'PATCH', body: { status } }),
   /** 软删：仅 admin。原件一字节不动，restoreInvoice 即可恢复 */

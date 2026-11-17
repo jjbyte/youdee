@@ -1,6 +1,6 @@
 # 发票管理模块 · 技术契约（Phase 1）
 
-> 版本：0.1.35 基线 │ 状态：待评审 │ 归属：首席架构师
+> 版本：0.1.35 基线，0.1.39 修订（§2.2 / §2.6 / §5.5 / §5.5.1 / ADR-003：红字票与「已冲红」拆成两列）│ 状态：待评审 │ 归属：首席架构师
 > 本文是**契约**，不是设计随笔。前后端各自实现时，字段名、状态码、错误码、默认值以本文为准；
 > 要改先回到这里改，不允许在实现里"顺手调一下"。
 >
@@ -13,13 +13,14 @@
 
 ---
 
-## 0. 不可让渡的五条（做错任一条，这个模块就不该上线）
+## 0. 不可让渡的六条（做错任一条，这个模块就不该上线）
 
 1. **金额零浮点**：三个金额列 `numeric(14,2)`，DTO 一律字符串（`db.ts` 已把 numeric OID 1700 映射成 string）。禁止 `Number()` 参与求和与差值判断。
 2. **发票号码唯一性不能只看号码**：纸质票的 8 位号码**在不同发票代码下会重复**，唯一键必须是 `(invoice_code, invoice_no)`，`invoice_code` 用**空串**而非 NULL 兜全电票。否则不同供应商的两张真票会被当成同一张跳过。
 3. **上传必须流式落盘**：沿用 `stageUploadStream`，禁止 `req.formData()` / `arrayBuffer()`。OCR 环节才把 ≤7.5MB 的字节读进内存（10MB 是 **base64 后**的上限）。
 4. **ZIP 必须流式**：禁止 `adm-zip`（整包在堆里拼）。500 份 5MB 扫描件 = 2.5GB 堆，进程直接消失。
 5. **红票不能"自动判完就算"**：`RecognizeGeneralInvoice` **不返回红票标记**（见 §5.3 核实结论），系统只能做启发式判定 + 人工兜底，且必须记录判定来源（`status_source`）。
+6. **「票面是红字票」与「账面已冲红」必须各存一列**：前者（`is_red_letter`）决定金额符号，后者（`status`）只是一句标签、不改金额。合成一列会让一对票被翻两次符号，合计抵成 −2X（0.1.38 的原错，见 §5.5）。
 
 ---
 
@@ -55,10 +56,14 @@ model Invoice {
   invoiceNo       String    @map("invoice_no") @db.VarChar(32)
   /// 发票代码：纸质票 10/12 位；全电票与多数电子票为空 → 存空串，不存 NULL（唯一索引不认 NULL 相等）
   invoiceCode     String    @default("") @map("invoice_code") @db.VarChar(20)
-  /// normal 正常 / red 冲红。与 deleted_at 正交：冲红是业务状态，删除是可见性
+  /// normal 正常 / red 已冲红。**只是一句标签，不改金额**；与 deleted_at 正交
   status          String    @default("normal") @db.VarChar(10)
   /// 状态怎么来的：ocr 自动判定 / manual 人工改过。人工改过的不再被重传覆盖
   statusSource    String    @default("ocr") @map("status_source") @db.VarChar(10)
+  /// **票面性质**：这张票本身是不是红字票（决定三项金额的正负）。与 status 是两件事
+  isRedLetter     Boolean   @default(false) @map("is_red_letter")
+  /// 红字票冲的是哪张原票的号码（蓝票为空）。只用于提示与追溯，不参与计算
+  originalInvoiceNo String? @map("original_invoice_no") @db.VarChar(32)
   /// 票种：OCR 的 SubType 原值（VatSpecialInvoice / VatElectronicInvoiceFull / …）
   invoiceType     String    @default("Unknown") @map("invoice_type") @db.VarChar(40)
   /// 票种中文（SubTypeDescription 原值），列表直接显示，避免前端维护映射表
@@ -69,11 +74,11 @@ model Invoice {
   buyerTaxNo      String?   @map("buyer_tax_no") @db.VarChar(30)
   sellerName      String    @default("") @map("seller_name") @db.VarChar(200)
   sellerTaxNo     String?   @map("seller_tax_no") @db.VarChar(30)
-  /// 不含税金额（元）。冲红为负
+  /// 不含税金额（元）。红字票为负
   amount          Decimal?  @db.Decimal(14, 2)
-  /// 税额（元）。冲红为负
+  /// 税额（元）。红字票为负
   taxAmount       Decimal?  @map("tax_amount") @db.Decimal(14, 2)
-  /// 价税合计（元）。冲红为负
+  /// 价税合计（元）。红字票为负
   totalAmount     Decimal?  @map("total_amount") @db.Decimal(14, 2)
   /// ok / derived（由另两项推算）/ mismatch（|amount+tax-total| > 0.01）
   amountCheck     String    @default("ok") @map("amount_check") @db.VarChar(10)
@@ -94,6 +99,7 @@ model Invoice {
 
   @@unique([invoiceCode, invoiceNo])
   @@index([invoiceNo])
+  @@index([originalInvoiceNo])
   @@index([issuedOn(sort: Desc)])
   @@index([status])
   @@index([deletedAt])
@@ -192,6 +198,29 @@ ALTER TABLE invoices ADD CONSTRAINT invoices_amount_check_valid
   CHECK (amount_check IN ('ok','derived','mismatch'));
 ```
 
+**0.1.39 追加**（`20261117100000_contract_end_on_and_red_letter/migration.sql`）：把「票面是不是红字票」从 `status` 里拆出来，另加合同终止日期。
+
+```sql
+-- 1) 合同终止日期：有值 = 周期性合同（年 / 季度）
+ALTER TABLE contracts ADD COLUMN IF NOT EXISTS end_on date;
+CREATE INDEX IF NOT EXISTS contracts_end_on_idx ON contracts (end_on);
+
+-- 2) 红字票单独一列（决定金额符号），status 退回纯标签（只表示「已冲红」）
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS is_red_letter boolean NOT NULL DEFAULT false;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS original_invoice_no varchar(32);
+CREATE INDEX IF NOT EXISTS invoices_original_no_idx ON invoices (original_invoice_no);
+
+-- 3) 存量回填：0.1.38 把红字票记成 status='red' 且三项金额为负。
+--    只把它们搬成 is_red_letter=true + status='normal'，**金额一个都不动** → 合计不变。
+--    金额非负的 red 行留在原地（那是人手工标的「已冲红」）。
+UPDATE invoices
+   SET is_red_letter = true, status = 'normal'
+ WHERE status = 'red'
+   AND (amount < 0 OR tax_amount < 0 OR total_amount < 0);
+```
+
+> 这条回填的顺序是关键：先加列、再搬语义、**最后才允许任何代码按新语义算合计**。反过来做（先改代码再回填）会出现"一群票既是 red 又不是红字票"，那一段时间的合计没人能解释。
+
 > `COMMENT ON COLUMN` 逐列写中文说明，与 `20261112110000_contract_category_storage` 一致（那次的注释后来救了排查）。
 
 ---
@@ -200,9 +229,11 @@ ALTER TABLE invoices ADD CONSTRAINT invoices_amount_check_valid
 
 | 字段 | 含义 | 来源（OCR） | 符号约定 |
 |---|---|---|---|
-| `amount` | 不含税金额（金额合计） | `PretaxAmount` / `SubTotal` | 冲红为负 |
-| `tax_amount` | 税额合计 | `Tax` / `SubTax` | 冲红为负 |
-| `total_amount` | 价税合计 | `Total` | 冲红为负 |
+| `amount` | 不含税金额（金额合计） | `PretaxAmount` / `SubTotal` | 红字票为负 |
+| `tax_amount` | 税额合计 | `Tax` / `SubTax` | 红字票为负 |
+| `total_amount` | 价税合计 | `Total` | 红字票为负 |
+
+> 「红字票为负」而不是「冲红为负」：符号只看 `is_red_letter`（票面）。把原票标成「已冲红」是账面上的一句话，**不动金额**。否则一张 +1130 的蓝票被标成已冲红（翻成 −1130），再加上它那张 −1130 的红字票，一对票在合计里抵成 −2260。
 
 - 精度：`numeric(14,2)`，单位「元」，最多两位小数。库层会**静默四舍五入**，所以领域层先按两位小数规范化（`domain/money.ts` 的 scale=2 定点，禁 `toFixed`）。
 - 统计口径：`SUM(total_amount)` / `SUM(tax_amount)` / `SUM(amount)`，**只加非空**，同时返回 `missing_amount_count`（三列有任一为空的行数）。界面文案：`合计 ¥12,300.00（其中 2 张金额待补）`。
@@ -237,10 +268,10 @@ TOLERANCE = 0.01 元（1 分）
 | # | Method | Path | 认证 | 请求 | 成功响应 | 主要错误码 |
 |---|---|---|---|---|---|---|
 | 1 | GET | `/api/v1/invoices` | 登录 | query：`q` `invoice_no` `invoice_code` `buyer` `seller` `issued_from` `issued_to` `status=normal\|red` `has_file=0\|1` `contract_id` `include_deleted=0\|1` `page` `limit` | `{ items, total, page, limit, hasMore, summary }` | 40001 40101 |
-| 2 | POST | `/api/v1/invoices` | 登录 | body：`invoice_no`* `invoice_code` `issued_on` `buyer_name`* `seller_name`* `buyer_tax_no` `seller_tax_no` `amount` `tax_amount` `total_amount` `status` `remark`（手工录入，无原件） | 201 `InvoiceDetail` | 40001 40901（票号已存在） |
+| 2 | POST | `/api/v1/invoices` | 登录 | body：`invoice_no`* `invoice_code` `issued_on` `buyer_name`* `seller_name`* `buyer_tax_no` `seller_tax_no` `amount` `tax_amount` `total_amount` `is_red_letter` `original_invoice_no` `remark`（手工录入，无原件） | 201 `InvoiceDetail` | 40001 40901（票号已存在） |
 | 3 | GET | `/api/v1/invoices/:id` | 登录 | — | `InvoiceDetail`（含 `files`、`contracts`） | 40401 |
-| 4 | PATCH | `/api/v1/invoices/:id` | 登录 | body：任意可编辑字段（部分更新；不传=不动，`null`/空串=清空） | `InvoiceDetail` | 40001 40401 40901 |
-| 5 | PATCH | `/api/v1/invoices/:id/status` | **admin** | body：`{ status: 'normal'\|'red' }` | `InvoiceDetail` | 40301 40401 |
+| 4 | PATCH | `/api/v1/invoices/:id` | 登录 | body：任意可编辑字段（部分更新；不传=不动，`null`/空串=清空）。改 `is_red_letter` 仅 admin（会重定符号） | `InvoiceDetail` | 40001 40401 40901 |
+| 5 | PATCH | `/api/v1/invoices/:id/status` | **admin** | body：`{ status: 'normal'\|'red' }`。**只改标签，三项金额一分不动** | `InvoiceDetail` | 40301 40401 |
 | 6 | DELETE | `/api/v1/invoices/:id` | **admin** | — | `{ deleted: true, file_count }` | 40301 40401 |
 | 7 | POST | `/api/v1/invoices/:id/restore` | **admin** | — | `InvoiceDetail` | 40301 40401 |
 | 8 | POST | `/api/v1/invoices/upload` | 登录 | **原始字节流**；header `Content-Type: application/octet-stream`、`X-File-Name: <encodeURIComponent>` | 201 `UploadResult` | 40001 41301 41501 42208 50202 50203 50204 |
@@ -265,7 +296,10 @@ TOLERANCE = 0.01 元（1 分）
 ```ts
 interface InvoiceListItem {
   id: string; invoice_no: string; invoice_code: string;
-  status: 'normal' | 'red'; status_source: 'ocr' | 'manual';
+  status: 'normal' | 'red';              // 账面状态：red = 已冲红（仅是标签，不改金额）
+  status_source: 'ocr' | 'manual';
+  is_red_letter: boolean;                // 票面性质：true = 红字票，三项金额为负
+  original_invoice_no: string | null;    // 红字票冲的是哪张原票；蓝票为 null
   invoice_type: string; invoice_type_label: string;
   issued_on: string | null;              // yyyy-mm-dd，db.ts 的 date 解析器原样返回，不做时区转换
   buyer_name: string; buyer_tax_no: string | null;
@@ -296,10 +330,13 @@ interface UploadResult {
     invoice_no: string; total_amount: string | null;
     page: number; saved: boolean; reason?: string;
   }>;
-  red_hints: Array<{                       // 识别成红票 + 同号票已在库（在用、仍为正常）→ 等人确认
-    invoice_id: string; invoice_no: string;
-    total_amount: string | null;           // 库里那张的价税合计，用来确认是同一张
+  red_hints: Array<{                       // 这次上传的是红字票、且库里那张原票还能标 → 等人确认
+    invoice_id: string;                    // **原票**（被冲的那张）的 id，不是本次这张
+    invoice_no: string;                    // 原票号码
+    total_amount: string | null;           // 原票的价税合计，用来确认是同一张
     current_status: 'normal' | 'red';
+    red_invoice_no: string;                // 本次入账的红字票号码（弹窗里两边都摆出来）
+    red_total_amount: string | null;       // 红字票的价税合计（负数）
     basis: string;                         // 判定依据的人话（金额为负 / 票面有「红字」）
   }>;
   warnings: string[];                     // 例：'金额三项差 0.02 元，已标黄'
@@ -422,36 +459,63 @@ RECEIVE ──▶ SNIFF ──▶ STAGE ──▶ OCR ──▶ NORMALIZE ──
 
 > 失败即丢弃的代价：用户可能想留着这张图。接受这个代价，因为原件还能从微信/邮箱再拿一次，而库里多一行空数据没人会去清。
 
-### 5.5 冲红判定与归一（`status` / 符号）
+### 5.5 红字票判定与归一（`is_red_letter` / 符号）
+
+**先把两件事分开**，这是 0.1.39 修正 0.1.38 的地方：
+
+| 问题 | 存哪 | 决定什么 |
+|---|---|---|
+| 这张票**票面上**是不是红字票 | `is_red_letter` | 三项金额的正负 |
+| 这张蓝票**账面上**被冲掉了没有 | `status`（normal / 已冲红） | 只是一句标签，**一分钱不动** |
+
+0.1.38 把两者合成 `status`，于是"红字票入账"与"原票标已冲红"各翻一次符号 → 一对票在合计里抵成 −2X。
 
 已核实：`RecognizeGeneralInvoice` 返回的 `VatInvoiceInfo` / `VatElectronicInfo` **没有红票标记字段**（`RedLetterInvoiceMark` 只存在于 `VatInvoiceOCR` 返回的 `VatInvoice` 结构体）。所以：
 
 ```
-判定顺序（domain/invoice-record.ts，纯函数，可单测）
-1. Total / PretaxAmount / Tax 任一为负                  → status='red'
-2. Title / SubTypeDescription / **Remark** 含「红字」「红冲」「冲红」 → status='red'
-3. 其它                                                 → status='normal'
-归一：status='red' 时把三项取负（若原本已是负数则取绝对值再取负，避免 --得+）
-      status='normal' 时三项取绝对值？—— 否：normal 保持原符号，只把 '-' 去掉视为异常并记 warning
+判定票面性质（domain/invoice-money.ts 的 detectRedLetter，纯函数，可单测）
+1. Total / PretaxAmount / Tax 任一为负 → is_red_letter = true（reason: 金额为负）
+2. Title / SubTypeDescription / **Remark** 含「红字」「红冲」「冲红」 → is_red_letter = true
+3. 其它 → false
+归一（signAmounts(amounts, redLetter)）：
+   redLetter=true  三项按绝对值取负（避免 −− 得 +）
+   redLetter=false 保持原符号；若出现负数，不静默改成正数，记 warning「填的是负数、但没标成红字票」
 ```
 
 把 `Remark` 也算进判定，是因为数电红字发票的票面标题常常仍是「电子发票（普通发票）」，
 红字信息只写在备注里（如「被红冲蓝字数电发票号码：xxx」）。只看标题会漏判，而漏判的代价是合计里多进一笔正数。
 
-**人工改状态的连锁动作**（#5 接口必须做，不能只改状态列）：`status` 改了，三项金额**同步重定符号**（red → 负、normal → 正），并置 `status_source='manual'`。否则"冲红 3 张但合计没变"——这个 bug 只有对账时才会被发现。
+**改状态（`PATCH /invoices/:id/status`）只做一件事**：写 `status` + `status_source='manual'`。它不再读三项金额、也不再翻符号。想让一张票变负数，改的是 `is_red_letter`（仅管理员，同一个 PATCH 的 `is_red_letter` 字段），那条分支才重定符号。
 
-#### 5.5.1 上传时认出红票：同号票已在库就问一句
+> 编辑接口的 `redLetterFallback`：PATCH 只改备注、没提 `is_red_letter` 时，符号按库里现有的 `is_red_letter` 定。否则「改个备注」会顺手把一张红字票的三项翻成正数。
+
+#### 5.5.1 上传时认出红字票：它照记，问的是**原票**
+
+红字票是**正常凭证**：它自己 `status='normal'`，三项为负，正常入库。要问人的只有一件事——系统里那张被冲的原票，要不要标成「已冲红」。
+
+顺序上有个坑：**红字票必须在判重之前处理**。红字票有自己的新号码，永远走不到「同号命中」那条分支（0.1.38 就是把提示挂在那里，所以整条链路一次都没响过）。
+
+原票号码从哪读（`domain/invoice-red-letter.ts`）：按标签特异性排序，第一个认出来的赢——
+
+```
+被红冲蓝字数电发票号码 > 被红冲蓝字发票号码 > 对应正数发票号码 > 原发票号码
+```
+
+- 标签后面跟的号码可能带空格、`:`、`：`、`=`、`#`，先剥掉分隔符再取。
+- 纸质票的「代码-号码」只取右段（号码才是唯一键里能对上的那截）。
+- **没有上述标签就不抓裸的 20 位数字**：票据上到处都是号码，猜错会把别人的账标成已冲红。
 
 | 情形 | 行为 |
 |---|---|
-| 判为红票，库里**没有**同号票 | 直接按红票入库（三项为负），`warnings` 里明确写「识别成红冲票，已按冲红入库」 |
-| 判为红票，库里有同号票且**仍为正常** | **不改**那张票，返回 `red_hints[]`；前端弹窗问「要不要标记为冲红」，确认后走 `PATCH /invoices/:id/status`（复用同一套符号翻转） |
-| 判为红票，同号票**已经是红票** | 不再问（已经是答案），按普通去重处理 |
-| 判为红票，同号票**已软删** | 不再问（它不在台账里），按普通去重处理 |
+| 红字票，读出了原票号，原票在库里且**仍是正常** | 红字票照记，返回 `red_hints[]`；前端弹窗问「要不要把这张原票标成已冲红」。确认后走 `PATCH /invoices/:id/status`（**只改标签**） |
+| 红字票，原票**已经标过** `red` | 不再问（已经有答案了） |
+| 红字票，原票号在库里**找不到** / **已软删** | 照记红字票，`warnings` 里写「原票 X 不在台账里，请手工对一下」。**不能因为找不到原票就不记这张红字票**——那笔负数是真的发生了 |
+| 红字票，**没读出**原票号 | 照记，`warnings` 里写「认不出冲的是哪张，记完请手工对一下原票」 |
+| 蓝票 | 与 0.1.38 一致：靠 `(invoice_code, invoice_no)` 判重，重复的那张跳过并提示 |
 
-为什么不自动改：改状态会翻转三项金额、直接改「合计」这个对账数字，而红票判定只是启发式。
-**服务的边界是"把判断和依据交给人"，不是"替人改账"**。代价是多一次点击；换来的是合计不会被一个
-猜出来的状态悄悄改掉。
+为什么不自动标：标「已冲红」本身不动金额，风险比 0.1.38 小得多，但它仍然是在替人做账面判断——批量上传的文件夹里正常票和红字票混在一起，一次确认会连带改掉几十张票的标签。**服务的边界是"把判断和依据交给人"**。
+
+代价是多一次点击；换来的是"谁在什么时候把哪张票标成已冲红"始终有人认账（`status_source='manual'`）。
 
 ---
 
@@ -725,13 +789,16 @@ SELECT i.id, i.invoice_no, …,
 - **后果**：常量内存、CPU 近零；包体比压缩大约 2%–5%；不设 `Content-Length`（浏览器显示未知大小）。放弃 `archiver`（依赖多、能力过剩）与 `adm-zip`（会 OOM）。
 - **关联**：§6；复用 `export.service.ts` 的 `contentDisposition`。
 
-### ADR-003 冲红统一归一为负数 + 人工可改
+### ADR-003 红字票记负数，但「红字票」与「已冲红」各存一列
 
-- **状态**：已接受（业务方确认"入库统一为负数，统计直接求和"）
+- **状态**：已接受（0.1.39 修订；业务方确认"红字票本身状态是正常，只把原票标冲红"）
 - **背景**：红票与蓝票并存，合计必须能直接 `SUM`；而 OCR 不给红票标记、也不保证给负号。
-- **决定**：入库时按启发式判定并把三项取负；`status_source` 记来源；admin 可改，改时同步重定符号。
-- **后果**：统计只有一条口径（直接求和），列表显示负号；代价是**首次入库可能判错**，必须靠人看「含冲红 N 张」这句提示去复核。若以后接真伪核验，`RedLetterInvoiceMark` 可以替换启发式，`status_source` 会变成 `verify`，契约不用改。
-- **关联**：§5.5；§7（仅 admin 可改）。
+- **决定**：
+  1. `is_red_letter` 记**票面性质**，由它决定三项金额的正负；`status_source` 记来源（ocr / manual）。
+  2. `status`（normal / 已冲红）只是**账面标签**，改它不动金额。
+  3. 红字票的 `original_invoice_no` 记它冲的是哪张票；上传时据此提示把原票标成已冲红。
+- **后果**：统计只有一条口径（直接求和），一对票（+1130 / −1130）在合计里抵成 0；管理员改 `is_red_letter` 才重定符号。代价是**首次入库可能判错**，要靠人看统计条「含红字票 N 张」去复核。0.1.38 把两者合成一列，一对票被翻两次符号抵成 −2X——这条 ADR 就是为了不再犯第二次。若以后接真伪核验，`RedLetterInvoiceMark` 可以替换启发式，`status_source` 会变成 `verify`，契约不用改。
+- **关联**：§2.2、§5.5、§5.5.1；§7（仅 admin 可改 `is_red_letter` 与 `status`）。
 
 ---
 
@@ -757,4 +824,9 @@ SELECT i.id, i.invoice_no, …,
 [人话] 同一次关联点两下，不会出现两条一样的记录
 [决定] contract_invoices 复合主键 + ON CONFLICT DO NOTHING，返回 linked 布尔值
 [代价] 低：前端不需要防抖，也不需要先查后写
+
+[术语] 红字票 / 已冲红（两件事，不是一件）
+[人话] 红字票是"用来冲账的那张票"（金额为负，状态是正常）；已冲红是"原来那张蓝票被冲掉了"（一句标签，金额不变）
+[决定] 票面性质存 is_red_letter（决定符号），账面标签存 status（不改金额）；红字票另记 original_invoice_no
+[代价] 中：界面要摆两个徽标，用户得看懂"红字票 正常 / 已冲红"这一行；换来一对票在合计里正好抵成 0
 ```

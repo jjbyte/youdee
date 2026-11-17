@@ -21,7 +21,8 @@ import { IconError, IconLoading, IconPlus, IconRefresh, IconSuccess } from '@/co
  *   - 票号已存在 → 服务端不新建、不重复计费，界面显示「已存在，跳过」；
  *   - 识别失败/超时 → 服务端丢弃临时文件、不落库（不留半成品行），界面标红并可单条重传；
  *   - 未配置识别 → 上传按钮直接置灰并指路设置页，不让人传完 20 张才发现没配；
- *   - 认出红冲票而同号票已在库 → **不替人改状态**，弹一句问清楚（见下方 RedHintModal）。
+ *   - 认出红字票、而它冲的原票就在台账里 → 红字票照常入账（负数），另弹一句问要不要
+ *     把原票标成「已冲红」（见下方的红字票弹窗）。
  *
  * 进度逐条显示，不做"总进度条"：批量上传失败是常态（模糊票/超限 PDF），
  * 一条总进度条只会告诉你"到 80% 了"，不会告诉你哪 3 张需要重传。
@@ -39,7 +40,7 @@ interface UploadRow {
   message: string;
   /** 逐条补充说明：金额标黄的提醒、同一文件里其它票的去向 */
   notes: string[];
-  /** 这一行识别出红冲票、且同号票已在库 → 记下那张票的 id，等人在弹窗里确认 */
+  /** 这一行识别出红字票、且它冲的原票在库 → 记下**原票**的 id，等人在弹窗里确认 */
   awaitingRed?: string;
 }
 
@@ -60,9 +61,9 @@ export function InvoiceUploadButton({
   const [open, setOpen] = useState(false);
   const [running, setRunning] = useState(false);
   /**
-   * 待确认的红冲票（跨多个文件累积）。
+   * 待确认的「原票要不要标已冲红」（跨多个文件累积）。
    *
-   * 放 state 而不是立刻弹 action sheet：一次批量里可能有 2–3 张红票，
+   * 放 state 而不是立刻弹 action sheet：一次批量里可能既有正常票又有 2–3 张红字票，
    * 一张一个弹窗会变成"关不完的对话框"，所以排成队列逐条问。
    */
   const [redHints, setRedHints] = useState<InvoiceUploadRedHint[]>([]);
@@ -138,13 +139,12 @@ export function InvoiceUploadButton({
       if (r.duplicated) {
         patchRow(key, {
           status: 'dup',
-          message: hints.length > 0
-            ? '识别为红冲票，系统里已有这张——等你确认要不要标冲红'
-            : r.attachedFile ? '票号已存在，原件已补挂到那张票上' : '票号已存在，这张没新建',
-          notes: hints.length > 0
-            ? ['没确认之前那张票不会变，合计也没动。']
-            : ['判定用的是「发票代码 + 号码」，所以同号不同代码的两张真票不会被吞。'],
-          awaitingRed: hints.length > 0 ? hints[0]!.invoiceId : undefined,
+          message: r.attachedFile ? '票号已存在，原件已补挂到那张票上' : '票号已存在，这张没新建',
+          notes: [
+            '判定用的是「发票代码 + 号码」，所以同号不同代码的两张真票不会被吞。',
+            ...(hints.length > 0 ? ['这张冲的原票还在台账里，待会儿问你要不要把它标成「已冲红」。'] : []),
+          ],
+          awaitingRed: hints[0]?.invoiceId,
         });
         return;
       }
@@ -156,7 +156,14 @@ export function InvoiceUploadButton({
             : `第 ${e.page} 页的 ${e.invoiceNo} 没入库${e.reason ? `：${e.reason}` : ''}`,
         );
       }
-      patchRow(key, { status: 'ok', message: '已识别入库', notes });
+      if (hints.length > 0) {
+        notes.push(`这是红字票，冲的是原票 ${hints[0]!.invoiceNo}——待会儿问你要不要把它标成「已冲红」。`);
+      }
+      patchRow(key, {
+        status: 'ok',
+        message: r.item?.isRedLetter ? '已入库（红字票，金额记负）' : '已识别入库',
+        notes,
+      });
     } catch (e) {
       patchRow(key, { status: 'fail', message: errorMessage(e), notes: [] });
     }
@@ -196,7 +203,7 @@ export function InvoiceUploadButton({
 
   /* ── 红冲确认 ────────────────────────────────────────────── */
 
-  /** 保持原样：只把那一行的标注改掉，库里的票一个字段都不动 */
+  /** 保持原样：只把那一行的标注改掉，库里那张原票一个字段都不动 */
   function skipRed() {
     const h = redHints[0];
     if (!h) return;
@@ -204,15 +211,16 @@ export function InvoiceUploadButton({
     setRedError(null);
     setRows((prev) =>
       prev.map((r) => (r.awaitingRed === h.invoiceId
-        ? { ...r, awaitingRed: undefined, message: '保持原样：那张票没改', notes: ['之后也能在发票抽屉里手动改成冲红。'] }
+        ? { ...r, awaitingRed: undefined, message: '原票没动，仍是「正常」', notes: ['之后也能在发票抽屉里手动标「已冲红」。'] }
         : r)),
     );
   }
 
   /**
-   * 标记为冲红：调的是抽屉里同一个接口（PATCH /invoices/:id/status）。
-   * 不在这里自己拼一次 UPDATE —— 那个接口负责「状态与三项金额的符号同步翻转」，
-   * 另写一份迟早会漏掉符号，变成"状态是冲红、金额还是正数"。
+   * 把原票标成「已冲红」：调的是抽屉里同一个接口（PATCH /invoices/:id/status）。
+   *
+   * 那个接口**只改标签、不动金额**——抵账的负数由刚入库的红字票自己带着，
+   * 这里要是再翻一次符号，同一对票会被抵两次。所以不在这里自己拼 UPDATE。
    */
   async function confirmRed() {
     const h = redHints[0];
@@ -224,7 +232,7 @@ export function InvoiceUploadButton({
       setRedHints((q) => q.slice(1));
       setRows((prev) =>
         prev.map((r) => (r.awaitingRed === h.invoiceId
-          ? { ...r, awaitingRed: undefined, message: '已标记为冲红，三项金额已转成负数', notes: [] }
+          ? { ...r, awaitingRed: undefined, message: `原票 ${h.invoiceNo} 已标为「已冲红」（金额未改）` }
           : r)),
       );
       onUploaded();
@@ -363,7 +371,7 @@ export function InvoiceUploadButton({
       </Modal>
 
       {/*
-        红冲确认。**单独一个 Modal，同时把批量弹窗先收起来**（`open && redHints.length === 0`）：
+        红字票 → 原票确认。**单独一个 Modal，同时把批量弹窗先收起来**（`open && !redOpen`）：
         两层 scrim 会压在同一层级，谁在上面取决于 DOM 顺序，那种"有时能点有时点不动"的毛病最难查。
         收起批量弹窗还顺带解决了一件事——确认完之后结果列表会自己回来。
 
@@ -372,15 +380,15 @@ export function InvoiceUploadButton({
       <Modal
         open={redOpen}
         onClose={skipRed}
-        title="识别到红冲票，要标记吗？"
-        width="min(560px, 94vw)"
+        title="红字票冲的原票，要标成「已冲红」吗？"
+        width="min(580px, 94vw)"
         footer={
           <>
             <Button variant="ghost" disabled={redBusy} onClick={skipRed}>
               保持原样
             </Button>
             <Button variant="danger" loading={redBusy} onClick={() => void confirmRed()}>
-              标记为冲红
+              标为已冲红
             </Button>
           </>
         }
@@ -388,7 +396,13 @@ export function InvoiceUploadButton({
         {redHints[0] ? (
           <div className="flex flex-col gap-[var(--space-3)]">
             <p className="t-sm">
-              系统里已经有一张号码相同的票：
+              红字票 <span className="num">{redHints[0].redInvoiceNo}</span>
+              {redHints[0].redTotalAmount
+                ? <>（价税合计 <span className="num">{formatDecimalString(redHints[0].redTotalAmount, { symbol: true })}</span>）</>
+                : null}
+              已经入库。它冲的是系统里这张原票：
+            </p>
+            <p className="t-md">
               <span className="num">{redHints[0].invoiceNo}</span>
               {redHints[0].totalAmount
                 ? <>，价税合计 <span className="num">{formatDecimalString(redHints[0].totalAmount, { symbol: true })}</span></>
@@ -396,13 +410,14 @@ export function InvoiceUploadButton({
               ，当前是「正常」。
             </p>
             <p className="t-sm">
-              这次上传的文件里，这张被判定为红冲票（{redHints[0].basis}）。
-              把它标记为「冲红」后，三项金额会一起变成负数，合计随之变小。
+              标记后只是把这张原票的标签改成「已冲红」，<strong>金额一分不动</strong>——
+              抵账的负数由那张红字票带着，所以合计不会因此变化。
             </p>
             <Note tone="warn">
-              红票只能靠启发式判定（金额负号、票面上的「红字」字样），识别接口不返回红票标记。
-              判错会让合计虚高，所以这一步留给你确认：选「保持原样」什么都不改，
-              之后也能在发票抽屉里手动改。
+              红字票的判定和「冲的是哪一张」都是从票面文字里读出来的（{redHints[0].basis}；
+              原票号码来自「被红冲蓝字数电发票号码 / 对应正数发票号码」）。识别接口不返回红票标记，
+              读错就会把一张无辜的票标脏，所以这一步留给你确认：选「保持原样」什么都不改，
+              之后也能在发票抽屉里手动标。
             </Note>
             {redHints.length > 1 ? (
               <p className="t-2xs t-3">还有 {redHints.length - 1} 张待确认，处理完这张会接着问。</p>

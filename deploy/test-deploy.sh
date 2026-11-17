@@ -47,7 +47,10 @@ for fn in is_abs unit_dir_of resolve_root check_out dir_verdict; do
 done
 
 # ── 假 systemctl ────────────────────────────────────────────────────────
-FAKE="$(mktemp -d)"
+# `mktemp -d` 在 Git Bash 下会返回 `C:\Users\…\Temp/tmp.xxx` 这种盘符形式，
+# 直接塞进 PATH 会被盘符里的冒号截断 → 假命令找不到 → 「单元目录」那条用例假失败。
+# 先 cd 进去再 pwd 取 POSIX 形式（/c/Users/…），PATH 才能正确解析。
+FAKE="$(cd "$(mktemp -d)" && pwd)"
 trap 'rm -rf "$FAKE" 2>/dev/null || true' EXIT
 cat >"$FAKE/systemctl" <<'EOS'
 #!/bin/sh

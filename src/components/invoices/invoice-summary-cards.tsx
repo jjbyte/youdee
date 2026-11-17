@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
  *
  * 三条口径必须同时可见，否则合计会看起来像算错了：
  *   1. 金额只加**非空**的（缺金额的单独给张数）——写成 0 会让合计悄悄少算；
- *   2. 冲红记负数，直接参与求和，"含冲红 N 张"是让这个负数有解释；
+ *   2. 红字票记负数，直接参与求和，"含红字票 N 张"是让这个负数有解释；
  *   3. 命中的是**当前筛选条件**，不是全库。
  *
  * 金额一律按字符串渲染（formatDecimalString，不过 Number）——
@@ -35,6 +35,7 @@ export function InvoiceSummaryCards({
   const count = (v: number | null | undefined) =>
     summary && typeof v === 'number' ? `${v} 张` : '—';
 
+  /** 命中范围内的红字票张数（票面性质，不是「已冲红」标签——后者一张都不影响合计） */
   const redCount = summary?.redCount ?? 0;
   const missing = summary?.missingAmountCount ?? 0;
 
@@ -52,10 +53,10 @@ export function InvoiceSummaryCards({
           hint={missing > 0 ? '这几张票有金额没认出来，没算进合计' : undefined}
         />
         <Stat
-          label="含冲红"
+          label="含红字票"
           value={summary ? count(redCount) : '—'}
           tone={redCount > 0 ? 'danger' : undefined}
-          hint={redCount > 0 ? '冲红票按负数计入合计' : '这批里没有冲红票'}
+          hint={redCount > 0 ? '红字票按负数计入合计' : '这批里没有红字票'}
         />
       </div>
       {includeDeleted ? (
@@ -68,7 +69,8 @@ export function InvoiceSummaryCards({
         </p>
       ) : null}
       <p className="t-2xs t-3 mt-[var(--space-3)]">
-        合计 = 当前筛选范围内「金额非空」的那些票直接相加；冲红票记负数，已经在合计里抵掉。
+        合计 = 当前筛选范围内「金额非空」的那些票直接相加；红字票记负数，已经在合计里抵掉，
+        所以「原票 + 它的红字票」两张一起看是 0。「已冲红」只是标签，不改金额也不改合计。
         金额待补的票不进合计，所以张数和金额可能看起来对不上——那是有票还没认全。
       </p>
     </div>

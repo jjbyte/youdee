@@ -11,8 +11,9 @@
  *      绝不出现 `Number()` 参与求和或差值比较。
  *   2) `null` = 没识别出来，`0.00` = 确实是零。两者不可互换 ——
  *      用 0 冒充会让"金额合计"少算却不报警，而合计正是对账凭据。
- *   3) `status` 与符号绑定：red → 三项负数，normal → 正数。
- *      改状态不重定符号，就会出现"冲红 3 张但合计没变"，而这种 bug 只有对账时才会被发现。
+ *   3) 符号只跟着**票面性质**走（红字票 → 三项负数），不跟 `status` 走。
+ *      `status` 只是「这张蓝票被冲掉了没有」的标签，改它不动金额——
+ *      两件事合成一列时，一对「原票 + 红字票」会被翻两次符号，合计凭空变成 −2X。
  *
  * ── 本文件只保留录入 / 编辑的字段校验 ─────────────────────────
  * 枚举与基础清洗在 `invoice-common.ts`，金额口径在 `invoice-money.ts`。
@@ -40,6 +41,10 @@ export interface ParsedInvoice {
   invoice_no: string;
   invoice_code: string;
   status: InvoiceStatus;
+  /** 票面是不是红字票：决定三项金额的正负（与 status 无关） */
+  is_red_letter: boolean;
+  /** 红字票冲的原票号码；蓝票留空 */
+  original_invoice_no: string | null;
   invoice_type: string;
   invoice_type_label: string;
   issued_on: string | null;
@@ -92,10 +97,9 @@ function tri(v: unknown): string | null | undefined {
  */
 export function parseInvoiceInput(
   raw: Raw,
-  opts: { partial?: boolean; statusFallback?: InvoiceStatus } = {},
+  opts: { partial?: boolean; redLetterFallback?: boolean } = {},
 ): ParseInvoiceResult {
   const partial = opts.partial === true;
-  const statusFallback = opts.statusFallback ?? 'normal';
   const issues: FieldIssue[] = [];
   const notes: string[] = [];
   const picked: Record<string, unknown> = {};
@@ -176,9 +180,38 @@ export function parseInvoiceInput(
       issues.push({ field: 'status', message: '发票状态不能为空。' });
     } else if (t !== undefined) {
       if (!isInvoiceStatus(t)) {
-        issues.push({ field: 'status', message: '发票状态只能是「正常」或「冲红」。' });
+        issues.push({ field: 'status', message: '发票状态只能是「正常」或「已冲红」。' });
       } else {
         picked.status = t;
+      }
+    }
+  }
+
+  /*
+   * 红字票：布尔三态。
+   * 只在显式提交了才动它——PATCH 时漏传这一格不该把"这是红字票"悄悄改成"不是"，
+   * 那会连带把三项金额的符号纠正成正数，而用户在界面上只改了备注。
+   */
+  if (has(raw, 'is_red_letter')) {
+    const v = raw.is_red_letter;
+    if (v === true || v === false) picked.is_red_letter = v;
+    else if (v === 'true' || v === 1 || v === '1') picked.is_red_letter = true;
+    else if (v === 'false' || v === 0 || v === '0') picked.is_red_letter = false;
+    else issues.push({ field: 'is_red_letter', message: '「红字票」只能是无或者有。' });
+  }
+
+  if (has(raw, 'original_invoice_no')) {
+    const t = tri(raw.original_invoice_no);
+    if (t === null) picked.original_invoice_no = null;
+    else if (t !== undefined) {
+      const no = normalizeInvoiceNo(t);
+      if (no === null) {
+        issues.push({
+          field: 'original_invoice_no',
+          message: '原发票号码只能是 6–32 位数字或大写字母（全电 20 位、纸质 8 位）。',
+        });
+      } else {
+        picked.original_invoice_no = no;
       }
     }
   }
@@ -212,22 +245,24 @@ export function parseInvoiceInput(
       const neg = t.trim().startsWith('-');
       parsed[slots[k]] = neg ? `-${money}` : money;
     }
-    // 符号按"这次提交的 status → 库里现在的 status → normal"的顺序定。
-    // 漏掉中间那一档的后果：编辑一张红票的备注时顺手改了金额，三项会被翻成正数，
-    // 而 status 还是 red —— 于是合计里出现一张"状态是冲红、金额是正"的票。
-    const status = isInvoiceStatus(picked.status) ? picked.status : statusFallback;
+    // 符号按"这次提交的红字票标记 → 库里现在是不是红字票 → 否"的顺序定。
+    // 漏掉中间那一档的后果：编辑一张红字票的备注时顺手改了金额，三项会被翻成正数，
+    // 而 is_red_letter 还是 true —— 于是合计里出现一张"是红字票、金额是正"的票。
+    const redLetter = typeof picked.is_red_letter === 'boolean'
+      ? picked.is_red_letter
+      : opts.redLetterFallback === true;
     const reconciled = reconcileAmounts(parsed);
-    const signed = signAmounts(reconciled.amounts, status);
+    const signed = signAmounts(reconciled.amounts, redLetter);
     picked.amount = cleared.has('amount') ? null : signed.amount;
     picked.tax_amount = cleared.has('tax_amount') ? null : signed.taxAmount;
     picked.total_amount = cleared.has('total_amount') ? null : signed.totalAmount;
     picked.amount_check = reconciled.check;
     if (reconciled.warning) notes.push(reconciled.warning);
     const hadNegativeInput = Object.values(parsed).some((v) => (toCents(v) ?? 0n) < 0n);
-    if (hadNegativeInput && status !== 'red') {
-      // 填了负数却是「正常」票：符号会被取正。这句话必须说出来，
+    if (hadNegativeInput && !redLetter) {
+      // 填了负数却没标红字票：符号会被取正。这句话必须说出来，
       // 否则用户会以为"我填了负数它不认"，而账上多了一笔正数
-      notes.push('金额填的是负数，但状态是「正常」，已按正数入库。要记冲红请把状态改成「冲红」（仅管理员）。');
+      notes.push('金额填的是负数，但没标成红字票，已按正数入库。红字发票请把「红字票」勾上。');
     }
   }
 

@@ -7,10 +7,13 @@
  */
 import { q, today } from '../db';
 import { staleDaysThreshold } from '../store/settings.store';
+import { canAccessContracts } from '@/domain/permissions';
+import type { CurrentUser } from '../auth/session';
 import { listQuotes } from './quote.service';
+import { listExpiringContracts } from './contract.service';
 import { unreadCount } from './notifications.service';
 
-export async function dashboardSummary(userId: string) {
+export async function dashboardSummary(user: Pick<CurrentUser, 'id' | 'role'>) {
   const todayStr = today();
   const stale = await staleDaysThreshold();
 
@@ -108,7 +111,14 @@ export async function dashboardSummary(userId: string) {
     manual_cost_line_ratio: ratioOf(ratioRow[0]),
     has_overdue_price: Number(overdueRow[0]?.n ?? 0) > 0,
     recent_quotes: recent.items,
-    unread_notification_count: await unreadCount(userId),
+    unread_notification_count: await unreadCount(user.id),
+    /*
+     * 周期性合同到期：**只给管理员**。
+     * 合同台账本身对成员是 403（canAccessContracts），把到期清单塞进工作台
+     * 等于把"哪家客户在续签"泄给了不该看的人，而且他点进去还是一片 403。
+     * 缺字段（undefined）比空对象更诚实：前端据此决定这一条根本不画。
+     */
+    expiring_contracts: canAccessContracts(user.role) ? await listExpiringContracts(5) : undefined,
     recent_price_changes: recentPriceChanges.map((r) => ({
       price_id: r.price_id,
       item_name: r.item_name,

@@ -18,7 +18,7 @@
  */
 import {
   applyDetectedSign,
-  detectInvoiceStatus,
+  detectRedLetter,
   normalizeInvoiceCode,
   normalizeInvoiceNo,
   normalizeTaxNo,
@@ -28,8 +28,8 @@ import {
   reconcileAmounts,
   toCents,
   type AmountCheck,
-  type InvoiceStatus,
 } from './invoice-record';
+import { ORIGINAL_INVOICE_KEYS, extractOriginalInvoiceNo } from './invoice-red-letter';
 import { fmtAmount } from './money';
 
 /* ── SubType 分组表（务必按组取字段，不能混取）────────────────── */
@@ -145,8 +145,17 @@ export interface MappedInvoice {
   taxAmount: string | null;
   totalAmount: string | null;
   amountCheck: AmountCheck;
-  status: InvoiceStatus;
+  /**
+   * 票面是红字票（红冲票）。
+   *
+   * **不是 `status`**：红字票入账后的账面状态是「正常」（它本身就是一张正常凭证），
+   * 被它冲掉的那张蓝票才标「已冲红」。这里回答的是"金额该记正还是记负"。
+   */
+  redLetter: boolean;
+  /** 判定依据（amount_negative / title_red / heuristic_normal） */
   statusReason: string;
+  /** 红字票冲的原票号码（票面「被红冲蓝字数电发票号码」等字样读出来的） */
+  originalInvoiceNo: string | null;
   /** SubType 原值，如 VatElectronicInvoiceFull */
   invoiceType: string;
   /** SubTypeDescription 原值（中文），列表直接显示 */
@@ -219,6 +228,27 @@ function pickInfo(
 }
 
 /* ── 单张映射 ─────────────────────────────────────────────── */
+
+
+/**
+ * 红字票冲的是哪一张。
+ *
+ * 查找顺序是**先结构化字段、再备注、最后整段兜底**：
+ *   - 腾讯云对红字票没有稳定字段（各票种各叫一个名），`ORIGINAL_INVOICE_KEYS` 只是先试一遍；
+ *   - 真正的信息一般写在 `Remark`：「被红冲蓝字数电发票号码：xxxx」；
+ *   - 兜底把那一段信息里所有字符串拼起来再找一遍：字段名猜错时不至于永远返回 null。
+ *
+ * 认错一个号码的代价是"提示用户把另一张无辜的票标成已冲红"，所以这里
+ * **只认显式标签 + 号码**（见 invoice-red-letter），不在没有标签的文本里乱抓 20 位数字。
+ */
+function readOriginalInvoiceNo(info: Record<string, unknown>, redLetter: boolean): string | null {
+  if (!redLetter) return null;
+  const structured = ORIGINAL_INVOICE_KEYS.map((k) => (typeof info[k] === 'string' ? (info[k] as string) : null));
+  const remark = typeof info.Remark === 'string' ? info.Remark : null;
+  const allStrings = Object.values(info).filter((v): v is string => typeof v === 'string');
+  const hit = extractOriginalInvoiceNo([...structured, remark, ...allStrings]);
+  return hit.invoiceNo;
+}
 
 /* ── 铁路电子客票（Type 16 的另一套字段）──────────────────────── */
 
@@ -296,7 +326,7 @@ function mapRailInvoice(args: {
     warnings.push('票价小于税额，不含税金额先空着，请核对');
   }
 
-  const detected = detectInvoiceStatus({
+  const detected = detectRedLetter({
     title: pickStr(info, 'TypeOfVoucher'),
     typeLabel: label,
     remark: pickStr(info, 'Remark'),
@@ -304,7 +334,7 @@ function mapRailInvoice(args: {
   });
 
   const reconciled = reconcileAmounts({ amount, taxAmount, totalAmount });
-  const signed = applyDetectedSign(reconciled.amounts, detected.status);
+  const signed = applyDetectedSign(reconciled.amounts, detected.redLetter);
   if (reconciled.warning) warnings.push(reconciled.warning);
   if (signed.warning) warnings.push(signed.warning);
 
@@ -322,8 +352,10 @@ function mapRailInvoice(args: {
       taxAmount: signed.amounts.taxAmount,
       totalAmount: signed.amounts.totalAmount,
       amountCheck: reconciled.check,
-      status: detected.status,
+      redLetter: detected.redLetter,
       statusReason: detected.reason,
+      // 铁路客票目前没有红字版式（退票是另一张客票），不读原票号码
+      originalInvoiceNo: null,
       invoiceType: subType,
       invoiceTypeLabel: label || '电子发票（铁路电子客票）',
       page,
@@ -435,7 +467,7 @@ export function mapInvoiceItem(item: unknown): MapOneResult {
   // ⑥ 红票判定要在符号归一**之前**，而且必须用**原始文本**——
   //    parseOcrMoney 只保数值、符号由 signAmounts 决定，拿清洗后的数去判永远是正数，
   //    红票会被当成正常票入账（而负号是 OCR 唯一能给出的红票线索）。
-  const detected = detectInvoiceStatus({
+  const detected = detectRedLetter({
     title: pickStr(info, 'Title'),
     typeLabel: label,
     // 红字发票的红冲信息常常只写在备注里（标题仍叫「电子发票（普通发票）」）
@@ -444,9 +476,18 @@ export function mapInvoiceItem(item: unknown): MapOneResult {
   });
 
   const reconciled = reconcileAmounts({ amount, taxAmount, totalAmount });
-  const signed = applyDetectedSign(reconciled.amounts, detected.status);
+  const signed = applyDetectedSign(reconciled.amounts, detected.redLetter);
   if (reconciled.warning) warnings.push(reconciled.warning);
   if (signed.warning) warnings.push(signed.warning);
+
+  /*
+   * 红字票的原票号码：认不出来不算失败（票还是照记，负数照样抵账），
+   * 但要提醒一句——没有它就是"不知道这张冲的是哪一张"，那笔原票会一直显示「正常」。
+   */
+  const originalInvoiceNo = readOriginalInvoiceNo(info, detected.redLetter);
+  if (detected.redLetter && !originalInvoiceNo) {
+    warnings.push('这张像红字票，但票面上没读出「被红冲蓝字发票号码 / 原发票号码」，记完请手动对一下原票');
+  }
 
   return {
     ok: true,
@@ -462,8 +503,9 @@ export function mapInvoiceItem(item: unknown): MapOneResult {
       taxAmount: signed.amounts.taxAmount,
       totalAmount: signed.amounts.totalAmount,
       amountCheck: reconciled.check,
-      status: detected.status,
+      redLetter: detected.redLetter,
       statusReason: detected.reason,
+      originalInvoiceNo,
       invoiceType: subType,
       invoiceTypeLabel: label || subType,
       page,

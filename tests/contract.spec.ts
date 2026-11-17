@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  CONTRACT_EXPIRING_WINDOW_DAYS,
   CONTRACT_LIMITS,
   contractCategoryLabel,
+  daysUntilDate,
+  endBeforeSignedIssue,
   isRealDate,
   normalizeAmount,
   parseContractInput,
@@ -232,5 +235,49 @@ describe('客户名称（乙方）', () => {
   it('PATCH 里给 null 表示清空（合同签给了别的主体）', () => {
     const { value } = parseContractInput({ customer_name: null }, { partial: true });
     expect(value).toEqual({ customer_name: null });
+  });
+});
+
+describe('终止日期（周期性合同）', () => {
+  it('能存能取，空串 = 清空', () => {
+    const r = parseContractInput({ ...full, end_on: '2027-09-17' }, { partial: false });
+    expect(r.issues).toEqual([]);
+    expect(r.value.end_on).toBe('2027-09-17');
+
+    const cleared = parseContractInput({ end_on: '' }, { partial: true });
+    expect(cleared.value.end_on).toBeNull();
+  });
+
+  it('不是真实日期 → 报错（2027-02-30 会被 Postgres 悄悄改成 03-02）', () => {
+    const r = parseContractInput({ end_on: '2027-02-30' }, { partial: true });
+    expect(r.issues.map((i) => i.field)).toContain('end_on');
+  });
+
+  it('终止日期早于签订日期 → 报错（两个都提交时）', () => {
+    const r = parseContractInput({ signed_on: '2026-09-18', end_on: '2026-01-01' }, { partial: false, ...{} });
+    // 必填项没给会另有两条 issue，这里只关心 end_on 那条
+    expect(r.issues.map((i) => i.field)).toContain('end_on');
+  });
+
+  it('只改一半时由 endBeforeSignedIssue 补判（service 用它拿库里的另一半）', () => {
+    expect(endBeforeSignedIssue('2026-09-18', '2026-09-18')).toBeNull();
+    expect(endBeforeSignedIssue('2026-09-18', '2026-09-19')).toBeNull();
+    expect(endBeforeSignedIssue('2026-09-18', '2026-09-17')?.field).toBe('end_on');
+    // 任一为空就不判：只填了一个日期时谈不上"反了"
+    expect(endBeforeSignedIssue(null, '2020-01-01')).toBeNull();
+    expect(endBeforeSignedIssue('2026-09-18', null)).toBeNull();
+  });
+
+  it('daysUntilDate 按日历日算（本地时区不参与，差一天的错误最难查）', () => {
+    expect(daysUntilDate('2026-03-31', '2026-03-19')).toBe(12);
+    expect(daysUntilDate('2026-03-19', '2026-03-19')).toBe(0);
+    expect(daysUntilDate('2026-03-01', '2026-03-19')).toBe(-18);
+    // 跨年 + 闰年边界
+    expect(daysUntilDate('2028-03-01', '2028-02-28')).toBe(2);
+    expect(daysUntilDate('bad', '2026-03-19')).toBeNull();
+  });
+
+  it('提醒窗口是 30 天（客户口径：提前一个月）', () => {
+    expect(CONTRACT_EXPIRING_WINDOW_DAYS).toBe(30);
   });
 });

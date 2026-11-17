@@ -547,6 +547,25 @@ export interface DashboardSummary {
   manualCostLineRatio: string | null;
   hasOverduePrice: boolean;
   overduePriceCount?: number;
+  /**
+   * 周期性合同的到期提醒（**仅管理员有**，成员拿不到这个字段）。
+   * 判据是合同上填了终止日期，且终止日期在今天 + 30 天以内——已过期的不放过，
+   * 那正是最需要有人去续签的时候。
+   */
+  expiringContracts?: {
+    total: number;
+    /** 其中已经过了终止日期的 */
+    expired: number;
+    items: Array<{
+      id: string;
+      title: string;
+      contractNo: string | null;
+      customerName: string | null;
+      endOn: string;
+      /** 负数 = 已过期 */
+      daysLeft: number;
+    }>;
+  };
   stalePrices?: Array<{
     itemId: string;
     itemName: string;
@@ -647,6 +666,11 @@ export interface Contract {
   status: ContractStatus;
   /** yyyy-mm-dd；未知时为 null（不拿建单日冒充） */
   signedOn: string | null;
+  /**
+   * 终止日期 yyyy-mm-dd。**有值就是周期性合同**（年 / 季度续签那类），
+   * 到期前一个月会出现在工作台的待处理里。
+   */
+  endOn: string | null;
   amount: string | null;
   note: string | null;
   createdBy: string | null;
@@ -669,7 +693,7 @@ export interface ContractDetail extends Contract {
 
 // ── 发票台账 ─────────────────────────────────────────────────
 
-/** 正常 / 冲红。冲红不是"作废"，是把金额翻成负数抵掉 */
+/** 正常 / 已冲红。冲红不是"作废"，是「这张蓝票已经被一张红字票冲掉了」 */
 export type InvoiceStatus = 'normal' | 'red';
 
 /** 状态怎么来的：ocr 自动判定 / manual 人工改过（人工改过的不再被重传覆盖） */
@@ -687,6 +711,15 @@ export interface InvoiceListItem {
   invoiceCode: string;
   status: InvoiceStatus;
   statusSource: InvoiceStatusSource;
+  /**
+   * 票面就是红字票（红冲票）：三项金额为负。
+   *
+   * 与 `status` 是两件事：红字票自己的状态仍是「正常」（它是一张正常凭证），
+   * 被它冲掉的那张蓝票才是「已冲红」。两列分开，一对票在合计里才能抵成 0。
+   */
+  isRedLetter: boolean;
+  /** 红字票冲的是哪一张（票面「被红冲蓝字数电发票号码 / 对应正数发票号码」） */
+  originalInvoiceNo: string | null;
   /** OCR 的 SubType 原值，如 VatElectronicInvoiceFull */
   invoiceType: string;
   /** 票种中文，直接显示，前端不维护映射表 */
@@ -790,16 +823,21 @@ export interface InvoiceUploadExtra {
 }
 
 /**
- * 上传时识别出红冲票，而系统里已有同号发票（在用、仍为「正常」）。
+ * 上传时识别出一张红字票，而它冲的那张原票就在系统里（在用、仍为「正常」）。
  *
- * 服务端**不会**自动改那张的状态：冲红会翻转三项金额、直接改「合计」。
- * 它把判断和依据一起交出来，由人在弹窗里点一下。
+ * 红字票本身**已经入账**（金额为负、状态正常），这里问的只是：要不要顺手把
+ * 原票标成「已冲红」。标不标都不影响合计——负数是红字票那行带来的。
+ * 服务端**不会自动改**，因为「谁冲了谁」是从票面文字里读出来的，读错就把别人的票改脏了。
  */
 export interface InvoiceUploadRedHint {
+  /** 待标记的那张原票 */
   invoiceId: string;
   invoiceNo: string;
   totalAmount: string | null;
   currentStatus: InvoiceStatus;
+  /** 冲它的那张红字票（这次上传的） */
+  redInvoiceNo: string;
+  redTotalAmount: string | null;
   /** 判定依据（人话）：票面金额是负数 / 票面有「红字」字样 */
   basis: string;
 }

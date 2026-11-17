@@ -154,7 +154,8 @@ export function InvoiceFiltersBar({
           >
             <option value="">全部</option>
             <option value="normal">正常</option>
-            <option value="red">冲红</option>
+            {/* 筛的是「这张蓝票被冲掉了没有」，红字票自己是「正常」（见列表里的红字票徽标） */}
+            <option value="red">已冲红</option>
           </Select>,
         )}
         {label(

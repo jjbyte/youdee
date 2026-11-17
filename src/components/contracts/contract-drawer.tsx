@@ -12,6 +12,7 @@ import type {
 } from '@/lib/types';
 import { CONTRACT_CATEGORIES, CONTRACT_STATUSES, contractStatusLabel } from '@/domain/contract';
 import { cx, fileSize, formatDate, formatDecimalString, formatMoney, formatTimeRel } from '@/lib/format';
+import { contractExpiry } from '@/lib/contract-expiry';
 import { canPreview } from '@/lib/file-preview';
 import { invoiceStatusLabel } from '@/lib/labels';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
@@ -54,6 +55,8 @@ interface FormState {
   category: ContractCategory;
   contractNo: string;
   signedOn: string;
+  /** 终止日期；有值 = 周期性合同 */
+  endOn: string;
   amount: string;
   note: string;
 }
@@ -67,6 +70,7 @@ const EMPTY: FormState = {
   category: 'commercial',
   contractNo: '',
   signedOn: '',
+  endOn: '',
   amount: '',
   note: '',
 };
@@ -80,6 +84,7 @@ function toForm(d: ContractDetail): FormState {
     category: d.category,
     contractNo: d.contractNo ?? '',
     signedOn: d.signedOn ?? '',
+    endOn: d.endOn ?? '',
     amount: d.amount ?? '',
     note: d.note ?? '',
   };
@@ -289,6 +294,7 @@ export function ContractDrawer({
         category: form.category,
         contractNo: form.contractNo.trim() || null,
         signedOn: form.signedOn || null,
+        endOn: form.endOn || null,
         amount: form.amount.trim() || null,
         note: form.note.trim() || null,
       };
@@ -580,13 +586,32 @@ export function ContractDrawer({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-[var(--space-3)]">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-[var(--space-3)]">
           <Field label="签订日期" htmlFor="ct-signed" error={fieldErrors.signedOn}>
             <Input
               id="ct-signed"
               type="date"
               value={form.signedOn}
               onChange={(e) => setForm((f) => ({ ...f, signedOn: e.target.value }))}
+            />
+          </Field>
+          {/*
+            终止日期 = 「这是周期性合同」的唯一判据（客户口径：年 / 季度续签的那类）。
+            不另设"合同周期"下拉：那个字段除了被显示出来，不影响任何计算，
+            而多一个必选枚举就多一处会填错的地方。
+          */}
+          <Field
+            label="终止日期"
+            htmlFor="ct-end"
+            error={fieldErrors.endOn}
+            hint="填了就是周期性合同（年 / 季度），到期前一个月工作台提醒管理员"
+          >
+            <Input
+              id="ct-end"
+              type="date"
+              value={form.endOn}
+              min={form.signedOn || undefined}
+              onChange={(e) => setForm((f) => ({ ...f, endOn: e.target.value }))}
             />
           </Field>
           <Field label="合同金额（元）" htmlFor="ct-amount" error={fieldErrors.amount}>
@@ -866,8 +891,19 @@ export function ContractDrawer({
         );
       })}
 
-      {detail?.signedOn ? (
-        <p className="t-2xs t-3 mt-[var(--space-4)]">签订日期：{formatDate(detail.signedOn)}</p>
+      {detail?.signedOn || detail?.endOn ? (
+        <p className="t-2xs t-3 mt-[var(--space-4)]">
+          {detail.signedOn ? <>签订日期：{formatDate(detail.signedOn)}</> : null}
+          {detail.signedOn && detail.endOn ? ' · ' : null}
+          {detail.endOn ? (
+            <>
+              终止日期：{formatDate(detail.endOn)}
+              <span className="ml-[var(--space-2)]">
+                （周期性合同{contractExpiry(detail.endOn) ? ` · ${contractExpiry(detail.endOn)!.text}` : ''}）
+              </span>
+            </>
+          ) : null}
+        </p>
       ) : null}
 
       <InvoicePicker

@@ -17,6 +17,7 @@ import type {
   TaxBasis,
   UnitMode,
 } from './types';
+import { INVOICE_STATUSES } from '../domain/invoice-common';
 
 export const UNIT_LABELS: Record<string, string> = {
   piece: '个',
@@ -212,10 +213,16 @@ export function effectiveStateLabel(state: string | null | undefined): string {
  * 早晚一处先改，界面上就会出现「结算中 / 待结算」两个说法。
  */
 
-export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
-  normal: '正常',
-  red: '冲红',
-};
+/**
+ * 发票状态文案**从领域层推出来**，不再手抄一份。
+ *
+ * 0.1.39 把 `red` 的文案从「冲红」改成「已冲红」（它是"这张蓝票已被红字票冲掉"
+ * 的一句标签，不是票面性质），领域层改了、这里手抄的那份没改，列表就继续显示旧词。
+ * 同一个枚举的两种叫法，改一次必然漏一处 —— 所以只留一份。
+ */
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = Object.fromEntries(
+  INVOICE_STATUSES.map((s) => [s.value, s.label]),
+) as Record<InvoiceStatus, string>;
 
 export function invoiceStatusLabel(s: InvoiceStatus | null | undefined): string {
   if (!s) return '';

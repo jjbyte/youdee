@@ -34,6 +34,10 @@ export interface InvoiceDTO {
   invoice_code: string;
   status: InvoiceStatus;
   status_source: InvoiceStatusSource;
+  /** 票面就是红字票（红冲票）：三项金额为负。与 status（已冲红标签）是两件事 */
+  is_red_letter: boolean;
+  /** 红字票冲的原票号码；蓝票为 null */
+  original_invoice_no: string | null;
   invoice_type: string;
   invoice_type_label: string;
   issued_on: string | null;
@@ -60,11 +64,13 @@ export interface InvoiceSummaryDTO {
   sum_total_amount: string;
   missing_amount_count: number;
   /**
-   * 命中行里 `status='red'` 的条数。
+   * 命中行里**红字票**（`is_red_letter`）的条数。
    *
-   * 为什么必须单独给：冲红票的金额是**负数**，用户看到 "合计 8,870" 而列表里有 3 张
-   * 红票时，第一反应是"合计算错了"。界面上那句「含冲红 N 张」就是把符号解释掉，
+   * 为什么必须单独给：红字票的金额是**负数**，用户看到 "合计 8,870" 而列表里有 3 张
+   * 红字票时，第一反应是"合计算错了"。界面上那句「含红字票 N 张」就是把符号解释掉，
    * 而 N 只有服务端知道（前端按页算会算成"本页有几张"，跨页就对不上）。
+   *
+   * 数的是票面性质，不是 `status='red'`：后者是"这张蓝票被冲掉了"，它一张都不影响合计。
    */
   red_count: number;
 }
@@ -105,6 +111,8 @@ export interface InvoiceRow extends QueryResultRow {
   invoice_code: string;
   status: string;
   status_source: string;
+  is_red_letter: boolean;
+  original_invoice_no: string | null;
   invoice_type: string;
   invoice_type_label: string;
   issued_on: string | null;
@@ -151,6 +159,7 @@ export interface InvoiceRow extends QueryResultRow {
  */
 export const SELECT_INVOICE = `
   SELECT i.id, i.invoice_no, i.invoice_code, i.status, i.status_source,
+         i.is_red_letter, i.original_invoice_no,
          i.invoice_type, i.invoice_type_label, i.issued_on,
          i.buyer_name, i.buyer_tax_no, i.seller_name, i.seller_tax_no,
          i.amount, i.tax_amount, i.total_amount, i.amount_check, i.remark,
@@ -165,7 +174,7 @@ export const SELECT_INVOICE = `
          coalesce(sum(i.total_amount) OVER (), 0)::text AS sum_total_amount,
          (count(*) FILTER (WHERE i.amount IS NULL OR i.tax_amount IS NULL OR i.total_amount IS NULL)
                  OVER ())::int AS missing_amount_count,
-         (count(*) FILTER (WHERE i.status = 'red') OVER ())::int AS red_count
+         (count(*) FILTER (WHERE i.is_red_letter) OVER ())::int AS red_count
     FROM invoices i`;
 
 /** 默认排序：开票日期倒序（没日期的排最后），再按录入时间兜底 */
@@ -181,6 +190,8 @@ export function toInvoiceDTO(r: InvoiceRow): InvoiceDTO {
     // 库里的值认不出时按「正常票」显示：手工改库或以后加枚举都不该让列表炸掉
     status: isInvoiceStatus(r.status) ? r.status : 'normal',
     status_source: isInvoiceStatusSource(r.status_source) ? r.status_source : 'ocr',
+    is_red_letter: r.is_red_letter === true,
+    original_invoice_no: r.original_invoice_no,
     invoice_type: r.invoice_type,
     invoice_type_label: r.invoice_type_label,
     issued_on: r.issued_on,

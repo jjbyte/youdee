@@ -114,7 +114,7 @@ export function translatePgError(e: unknown): AppError | null {
       contracts_status_valid: new AppError(40001, '合同状态只能是签订中 / 履约中 / 结算中 / 已结算 / 已终止。', 400, {
         field: 'status',
       }),
-      invoices_status_valid: new AppError(40001, '发票状态只能是正常或冲红。', 400, { field: 'status' }),
+      invoices_status_valid: new AppError(40001, '发票状态只能是「正常」或「已冲红」。', 400, { field: 'status' }),
       invoices_status_source_valid: new AppError(50001, '发票状态来源非法，已拒绝保存。', 500),
       invoices_amount_check_valid: new AppError(50001, '金额校验结论非法，已拒绝保存。', 500),
       invoices_amount_range: new AppError(40001, '发票金额超出可表示范围（绝对值需小于 1 万亿）。', 400, {

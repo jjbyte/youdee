@@ -30,29 +30,35 @@ export function useInvoiceConfirmActions({
 }) {
   const [confirm, setConfirm] = useState<ConfirmSpec | null>(null);
 
-  /** 改状态：冲红 ⇄ 正常。金额符号由服务端同步翻转，界面只负责说清后果 */
+  /**
+   * 改「已冲红」标签：**只改标签，不动金额**。
+   *
+   * 这句话必须说明白，因为它和用户直觉相反：多数人以为"标冲红"就等于把钱变负。
+   * 实际上抵账的负数由那张红字票自己带着（它是「红字票」，入账时金额就是负的），
+   * 这里再翻一次符号，同一对票会被抵两次——合计凭空少掉两个 X。
+   */
   function askStatus(next: InvoiceStatus) {
     if (!currentId || !detail) return;
     const toRed = next === 'red';
     setConfirm({
-      title: toRed ? '把这张票改成冲红？' : '把这张票改回正常？',
+      title: toRed ? '把这张原票标成「已冲红」？' : '把这张票改回「正常」？',
       body: toRed ? (
         <>
-          改完后金额、税额、价税合计会<strong>一起变成负数</strong>，合计这个数立刻变小。
-          这是抵账的动作，不是把票作废。
+          只改这个标签，<strong>金额一分不动</strong>、合计也不变——抵账的负数由冲它的那张红字票带着。
+          这行的意思是「这张蓝票已经作废了，别再拿它去对账」。
         </>
       ) : (
-        <>改完后三项金额会变回正数，合计随之变大。发票号、购买方、销售方都不动。</>
+        <>改回正常只是把标签撤掉，金额同样不动。适用于"标错了"或者"那张红字票作废了"。</>
       ),
       warn: toRed
-        ? '冲红会翻转对账口径，所以只有管理员能做；改完会被记成「人工改过」，重新识别不会覆盖它。'
-        : '如果这张其实是红票，改回正常会让合计虚高——确认票面确实是蓝票再改。',
-      confirmLabel: toRed ? '改为冲红' : '改回正常',
+        ? '标之前确认一下红字票已经录进台账了；只标标签、没有红字票时，合计里这张票仍然算着。'
+        : '撤掉标签不会把红字票一起删掉——那笔负数还在合计里。',
+      confirmLabel: toRed ? '标记为已冲红' : '改回正常',
       tone: toRed ? 'danger' : 'primary',
       run: async () => {
         apply(await api.setInvoiceStatus(currentId, next));
         setConfirm(null);
-        onChanged(toRed ? '已标记为冲红，三项金额已转为负数。' : '已改回正常，三项金额已转为正数。');
+        onChanged(toRed ? '已标记为「已冲红」（金额未改）。' : '已改回「正常」（金额未改）。');
       },
     });
   }

@@ -4,13 +4,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api, errorMessage, isUnauthorized } from '@/lib/api';
 import type { DashboardSummary } from '@/lib/types';
-import { cx, formatMoney, formatStaleDays, formatTimeRel, formatDelta, formatNumber } from '@/lib/format';
+import { cx, formatDate, formatMoney, formatStaleDays, formatTimeRel, formatDelta, formatNumber } from '@/lib/format';
+import { contractExpiry } from '@/lib/contract-expiry';
 import { Badge } from '@/components/ui/badge';
 import { ErrorState, Note, EmptyState } from '@/components/ui/states';
 import { Money } from '@/components/ui/money';
 import { NewQuoteButton } from '@/components/new-quote-button';
 import { LowestSummaryView } from '@/components/lowest-summary';
-import { IconArrowRight, IconExpired, IconRisk } from '@/components/icons';
+import { IconArrowRight, IconContract, IconExpired, IconRisk } from '@/components/icons';
 
 interface StalePrice {
   priceId: string;
@@ -207,9 +208,58 @@ export default function DashboardPage() {
                 }
               />
 
-              {/* ④ 无报价主体：接口没给计数，就不编数字，只给入口 */}
+              {/* ④ 周期性合同到期（**仅管理员有这一块**：合同台账对成员是 403） */}
+              {data.expiringContracts ? (
+                <Todo
+                  index="④"
+                  tone={
+                    (data.expiringContracts.expired ?? 0) > 0
+                      ? 'danger'
+                      : (data.expiringContracts.total ?? 0) > 0
+                        ? 'warn'
+                        : 'neutral'
+                  }
+                  icon={<IconContract size={16} />}
+                  text={
+                    data.expiringContracts.total > 0
+                      ? `${data.expiringContracts.total} 份周期性合同一个月内到期${
+                          data.expiringContracts.expired > 0
+                            ? `，其中 ${data.expiringContracts.expired} 份已经到期`
+                            : ''
+                        }`
+                      : '没有快到期的周期性合同'
+                  }
+                  action={{ label: data.expiringContracts.total > 0 ? '去续签' : '看合同', href: '/contracts?expiring=1' }}
+                  detail={
+                    data.expiringContracts.items.length > 0
+                      ? data.expiringContracts.items.map((c) => {
+                          const e = contractExpiry(c.endOn);
+                          return (
+                            <div key={c.id} className="flex items-baseline gap-[var(--space-3)] t-sm">
+                              <Link href={`/contracts?expiring=1`} className="truncate">
+                                {c.title}
+                              </Link>
+                              {c.customerName ? <span className="t-3 truncate">{c.customerName}</span> : null}
+                              <span className="t-3 num">终止 {formatDate(c.endOn)}</span>
+                              <span style={{ flex: 1 }} />
+                              <span
+                                className={
+                                  e?.tone === 'expired' ? 't-danger t-2xs fw-semi' : 't-warning t-2xs fw-semi'
+                                }
+                              >
+                                {e?.text ?? ''}
+                              </span>
+                            </div>
+                          );
+                        })
+                      : null
+                  }
+                />
+              ) : null}
+
+              {/* ⑤ 无报价主体：接口没给计数，就不编数字，只给入口 */}
               <Todo
-                index="④"
+                index="⑤"
                 tone="neutral"
                 text="还有物料没有任何供应商报价，比价时会是空的"
                 action={{ label: '去补', href: '/materials' }}

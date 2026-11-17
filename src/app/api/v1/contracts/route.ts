@@ -44,6 +44,8 @@ export const GET = route(async (req) => {
       status,
       signedFrom: dateParam(sp, 'signed_from'),
       signedTo: dateParam(sp, 'signed_to'),
+      // 工作台那条「合同要到期」点进来带的就是它（窗口天数在 service 里，不在这里）
+      expiring: sp.get('expiring') === '1' || sp.get('expiring') === 'true',
       createdFrom: dateParam(sp, 'created_from'),
       createdTo: dateParam(sp, 'created_to'),
       hasFile,

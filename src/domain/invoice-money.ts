@@ -11,7 +11,7 @@
  */
 import { fmtAmount, parseAmount } from './money';
 import { INVOICE_LIMITS, toHalfWidth } from './invoice-common';
-import type { AmountCheck, InvoiceStatus } from './invoice-common';
+import type { AmountCheck } from './invoice-common';
 
 /**
  * 金额文本 → 两位小数十进制字符串（正数向；符号由 `signAmounts` 统一决定）。
@@ -155,8 +155,16 @@ export function reconcileAmounts(input: InvoiceAmounts): ReconcileResult {
 
 /* ── 红票判定与符号归一（Spec §5.5）──────────────────────────── */
 
-export interface DetectedStatus {
-  status: InvoiceStatus;
+/**
+ * 判定结论。
+ *
+ * **注意：这里判的是「这张票面是不是红字票」，不是「这张票有没有被冲红」。**
+ * 两件事在 0.1.39 之前合成一个 status，结果是红字票入账（负数）与原票标已冲红
+ * 互相把符号翻一遍，一对票在合计里抵成 −2X。现在只回答"票面性质"这一个问题。
+ */
+export interface RedLetterVerdict {
+  /** 票面是红字票 → 三项金额记负 */
+  redLetter: boolean;
   /** 判定依据，写进日志与 ocr_raw 旁边的备注，便于复核 */
   reason: 'amount_negative' | 'title_red' | 'heuristic_normal';
 }
@@ -178,55 +186,55 @@ export function isNegativeAmountText(v: string | null | undefined): boolean {
 }
 
 /**
- * 冲红判定（启发式）。
+ * 红字票判定（启发式）。
  *
  * 已核实：`RecognizeGeneralInvoice` 返回的 `VatInvoiceInfo` / `VatElectronicInfo`
  * **没有红票标记字段**（`RedLetterInvoiceMark` 只在 `VatInvoiceVerify` 的结构体里）。
  * 所以只能：
- *   1. 三项金额任一为负 → red（用的是**原始文本**，见 `isNegativeAmountText`）
- *   2. 票面名称 / 票种描述 / **备注** 含「红字」「红冲」「冲红」→ red
- *   3. 其它 → normal
+ *   1. 三项金额任一为负 → 红字票（用的是**原始文本**，见 `isNegativeAmountText`）
+ *   2. 票面名称 / 票种描述 / **备注** 含「红字」「红冲」「冲红」→ 红字票
+ *   3. 其它 → 蓝字票
  *
  * 为什么要把备注也算进来：数电红字发票的票面标题常常仍是「电子发票（普通发票）」，
  * 红字信息只出现在备注里（如「被红冲蓝字数电发票号码：xxx」）。只看标题会漏判，
  * 而漏判的代价是合计里多进一笔正数。
  *
- * 判定错的代价是合计偏大或偏小，所以入库后必须让人能改（`status_source='manual'`）。
+ * 判定错的代价是合计偏大或偏小，所以入库后必须让人能改。
  */
-export function detectInvoiceStatus(input: {
+export function detectRedLetter(input: {
   title?: string | null;
   typeLabel?: string | null;
   /** 票面备注。红字发票的红冲信息常只在这里出现 */
   remark?: string | null;
   /** OCR 原始文本或已清洗的金额都可以：负号按文本判 */
   amounts: InvoiceAmounts;
-}): DetectedStatus {
+}): RedLetterVerdict {
   const anyNegative = [input.amounts.amount, input.amounts.taxAmount, input.amounts.totalAmount].some(
     isNegativeAmountText,
   );
-  if (anyNegative) return { status: 'red', reason: 'amount_negative' };
+  if (anyNegative) return { redLetter: true, reason: 'amount_negative' };
 
   const text = `${input.title ?? ''}${input.typeLabel ?? ''}${input.remark ?? ''}`;
   if (text.includes('红字') || text.includes('红冲') || text.includes('冲红')) {
-    return { status: 'red', reason: 'title_red' };
+    return { redLetter: true, reason: 'title_red' };
   }
 
-  return { status: 'normal', reason: 'heuristic_normal' };
+  return { redLetter: false, reason: 'heuristic_normal' };
 }
 
 /**
- * 强制重定符号：red → 三项负数，normal → 三项正数。
+ * 按票面性质定符号：红字票 → 三项负数，蓝字票 → 三项正数。
  *
- * 唯一使用场景是**人工改状态**（`PATCH /invoices/:id/status`，仅管理员）。
- * 这一步和改 status 必须在同一个事务里完成：只改状态不改符号，
- * 就会出现"冲红 3 张但合计没变"，而这种 bug 只有对账时才会被发现。
+ * 唯一的输入是"这张票面是不是红字票"，**与 status（已冲红标签）无关**：
+ * 把原票标成「已冲红」如果也翻符号，同一对票就会被抵两次，合计凭空多出 −2X。
+ * 这条线 0.1.38 及以前是反的，改回来时踩过一次账，注释留在这儿防复发。
  */
-export function signAmounts(amounts: InvoiceAmounts, status: InvoiceStatus): InvoiceAmounts {
+export function signAmounts(amounts: InvoiceAmounts, redLetter: boolean): InvoiceAmounts {
   const apply = (v: string | null): string | null => {
     const c = toCents(v);
     if (c === null) return v;
     const abs = c < 0n ? -c : c;
-    return fmtAmount(status === 'red' ? -abs : abs);
+    return fmtAmount(redLetter ? -abs : abs);
   };
   return {
     amount: apply(amounts.amount),
@@ -237,22 +245,22 @@ export function signAmounts(amounts: InvoiceAmounts, status: InvoiceStatus): Inv
 
 /**
  * 入库时的符号（与 `signAmounts` 的区别只有一点）：
- *   - red → 取负（原本已是负数也取负，避免 `--` 得正）
- *   - normal → **保持原符号**，但出现负号说明判定可能错了，记一条 warning 让人复核
+ *   - 红字票 → 取负（原本已是负数也取负，避免 `--` 得正）
+ *   - 蓝字票 → **保持原符号**，但出现负号说明判定可能错了，记一条 warning 让人复核
  *
- * 为什么 normal 不强行取正：手工录入的人可能故意填负数（比如先记一张要冲的票），
- * 强行取正等于替他改数。而统计口径的一致性由 red/normal 的状态本身保证。
+ * 为什么蓝字票不强行取正：手工录入的人可能故意填负数（比如金额分两次开、
+ * 这次只补差额），强行取正等于替他改数。
  */
 export function applyDetectedSign(
   amounts: InvoiceAmounts,
-  status: InvoiceStatus,
+  redLetter: boolean,
 ): { amounts: InvoiceAmounts; warning: string | null } {
-  if (status === 'red') return { amounts: signAmounts(amounts, 'red'), warning: null };
+  if (redLetter) return { amounts: signAmounts(amounts, true), warning: null };
   const negative = [amounts.amount, amounts.taxAmount, amounts.totalAmount].some(
     (v) => (toCents(v) ?? 0n) < 0n,
   );
   return {
     amounts,
-    warning: negative ? '这张票状态是「正常」但有一项金额是负数，请确认是不是冲红票' : null,
+    warning: negative ? '这张票填的是负数、但没标成红字票，请确认是不是红字发票' : null,
   };
 }

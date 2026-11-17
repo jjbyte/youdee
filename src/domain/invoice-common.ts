@@ -22,10 +22,18 @@ export { toHalfWidth };
 
 /* ── 枚举 ──────────────────────────────────────────────────── */
 
-/** 正常票 / 冲红票。与软删（deleted_at）正交：冲红是业务状态，删除是可见性 */
+/**
+ * 账面状态：正常 / 已冲红。
+ *
+ * **它只是一句标签，不改金额。** 「票面是红字票」是另一件事（`is_red_letter`），
+ * 那一件才决定三项金额的正负。0.1.38 及以前把两件事合成这一列，
+ * 于是"红字票入账"与"原票标已冲红"各翻一次符号，一对票在合计里抵成 −2X。
+ *
+ * 与软删（deleted_at）正交：冲红是业务状态，删除是可见性。
+ */
 export const INVOICE_STATUSES = [
   { value: 'normal', label: '正常' },
-  { value: 'red', label: '冲红' },
+  { value: 'red', label: '已冲红' },
 ] as const;
 
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number]['value'];

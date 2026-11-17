@@ -141,11 +141,11 @@ describe('纸质专票（VatInvoiceInfo 组）', () => {
     expect(r.invoice.amountCheck).toBe('ok');
   });
 
-  it('票种落 SubType 原值 + 中文描述，状态启发式为 normal', () => {
+  it('票种落 SubType 原值 + 中文描述，启发式判定为蓝字票', () => {
     if (!r.ok) throw new Error('should map');
     expect(r.invoice.invoiceType).toBe('VatSpecialInvoice');
     expect(r.invoice.invoiceTypeLabel).toBe('增值税专用发票');
-    expect(r.invoice.status).toBe('normal');
+    expect(r.invoice.redLetter).toBe(false);
     expect(r.invoice.page).toBe(1);
   });
 
@@ -209,14 +209,87 @@ describe('红票与异常输入', () => {
     };
     const r = mapInvoiceItem(red);
     if (!r.ok) throw new Error('should map');
-    expect(r.invoice.status).toBe('red');
+    expect(r.invoice.redLetter).toBe(true);
     expect(r.invoice.statusReason).toBe('amount_negative');
     expect(r.invoice.totalAmount).toBe('-1130.00');
     // 三项自洽（绝对值口径比较）
     expect(r.invoice.amountCheck).toBe('ok');
   });
 
-  it('票面含「红字」但没有负号 → 仍判 red（OCR 不保证给负号）', () => {
+  it('红字票备注里的原发票号码被读出来（这是提示"标原票"的唯一依据）', () => {
+    const redWithOriginal = {
+      Code: 'OK',
+      Type: 16,
+      Page: 1,
+      SubType: 'VatElectronicInvoiceFull',
+      SubTypeDescription: '电子发票（普通发票）',
+      SingleInvoiceInfos: {
+        VatElectronicInvoiceFull: {
+          Number: '25112000000012345678',
+          Date: '2026年03月04日',
+          Buyer: '有底文化',
+          Seller: '某某展览',
+          Total: '-1130.00',
+          Remark: '被红冲蓝字数电发票号码：25112000000099998888',
+        },
+      },
+    };
+    const r = mapInvoiceItem(redWithOriginal);
+    if (!r.ok) throw new Error('should map');
+    expect(r.invoice.redLetter).toBe(true);
+    expect(r.invoice.originalInvoiceNo).toBe('25112000000099998888');
+  });
+
+  it('红字票但票面没有原票号码 → 照样入账，只是给一句提示', () => {
+    const redNoOriginal = {
+      Code: 'OK',
+      Type: 3,
+      Page: 1,
+      SubType: 'VatCommonInvoice',
+      SubTypeDescription: '增值税普通发票（红字）',
+      SingleInvoiceInfos: {
+        VatCommonInvoice: {
+          Code: '044001900114',
+          Number: '55667788',
+          Date: '2026-03-05',
+          Buyer: '有底文化',
+          Seller: '某某展览',
+          Total: '-50.00',
+        },
+      },
+    };
+    const r = mapInvoiceItem(redNoOriginal);
+    if (!r.ok) throw new Error('should map');
+    expect(r.invoice.originalInvoiceNo).toBeNull();
+    expect(r.invoice.warnings.join()).toContain('原发票号码');
+  });
+
+  it('蓝字票不去猜原票号码（备注里有类似字样也不看）', () => {
+    const blueWithNoise = {
+      Code: 'OK',
+      Type: 3,
+      Page: 1,
+      SubType: 'VatCommonInvoice',
+      SubTypeDescription: '增值税普通发票',
+      SingleInvoiceInfos: {
+        VatCommonInvoice: {
+          Code: '044001900115',
+          Number: '11224455',
+          Date: '2026-03-06',
+          Buyer: '有底文化',
+          Seller: '某某展览',
+          Total: '1130.00',
+          Remark: '原发票号码：25112000000099998888',
+        },
+      },
+    };
+    const r = mapInvoiceItem(blueWithNoise);
+    if (!r.ok) throw new Error('should map');
+    expect(r.invoice.redLetter).toBe(false);
+    expect(r.invoice.originalInvoiceNo).toBeNull();
+  });
+
+  it('票面含「红字」但没有负号 → 仍判红字票（OCR 不保证给负号）', () => {
     const redTitle = {
       Code: 'OK',
       Type: 3,
@@ -236,7 +309,7 @@ describe('红票与异常输入', () => {
     };
     const r = mapInvoiceItem(redTitle);
     if (!r.ok) throw new Error('should map');
-    expect(r.invoice.status).toBe('red');
+    expect(r.invoice.redLetter).toBe(true);
     expect(r.invoice.statusReason).toBe('title_red');
     // 只有 total 时也归一成负数
     expect(r.invoice.totalAmount).toBe('-1130.00');
@@ -442,7 +515,7 @@ describe('电子发票（铁路电子客票）', () => {
     };
     const m = mapInvoiceItem(refund);
     if (!m.ok) throw new Error('should map');
-    expect(m.invoice.status).toBe('red');
+    expect(m.invoice.redLetter).toBe(true);
     expect(m.invoice.statusReason).toBe('amount_negative');
     expect(m.invoice.totalAmount).toBe('-109.00');
     expect(m.invoice.amountCheck).toBe('ok');

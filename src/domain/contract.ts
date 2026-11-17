@@ -96,6 +96,33 @@ export interface FieldIssue {
   message: string;
 }
 
+/**
+ * 到期提醒窗口：距终止日期不足这么多天，工作台就提一条（客户口径是「提前一个月」）。
+ *
+ * 30 天写死在这里而不是设置项：这个数字只影响"什么时候提醒"，不影响任何账。
+ * 做成设置项就得有人去调它，而调它的那天一定是因为提醒太多或太少——
+ * 那时该改的是合同上的终止日期，不是这个阈值。
+ */
+export const CONTRACT_EXPIRING_WINDOW_DAYS = 30;
+
+/**
+ * 距终止日期还有几天（负数 = 已经过期）。
+ *
+ * 两个参数都是 `yyyy-mm-dd`，用 UTC 零点相减：本地时区参与进来的话，
+ * 在 UTC+8 的机器上「明天到期」会被算成 0 天，而这类差一天的错误没人会去查。
+ */
+export function daysUntilDate(endOn: string, todayIso: string): number | null {
+  const parse = (s: string): number | null => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    const [y, m, d] = s.split('-').map(Number) as [number, number, number];
+    return Date.UTC(y, m - 1, d);
+  };
+  const a = parse(endOn);
+  const b = parse(todayIso);
+  if (a === null || b === null) return null;
+  return Math.round((a - b) / 86_400_000);
+}
+
 export interface ParsedContract {
   contract_no: string | null;
   title: string;
@@ -107,6 +134,11 @@ export interface ParsedContract {
   category: ContractCategory;
   /** yyyy-mm-dd */
   signed_on: string | null;
+  /**
+   * 终止日期 yyyy-mm-dd。填了就是**周期性合同**（年 / 季度续签那类），
+   * 到期前一个月工作台会给全部管理员提一条待处理。
+   */
+  end_on: string | null;
   /** 十进制字符串（两位小数以内），交给 numeric 列 */
   amount: string | null;
   note: string | null;
@@ -152,6 +184,26 @@ export function normalizeAmount(v: string): string | null {
   if (!int || int.length > CONTRACT_LIMITS.amountIntDigits) return null;
   const normalizedInt = int.replace(/^0+(?=\d)/, '');
   return frac === undefined ? normalizedInt : `${normalizedInt}.${frac}`;
+}
+
+/**
+ * 终止日期不能早于签订日期。
+ *
+ * 单独导出是因为 PATCH 常常只提交其中一个字段：那时只能拿库里存的另一半来比，
+ * 而"反了"的判定必须与"新建时两个一起提交"用同一句——两处各写一遍，
+ * 早晚会出现"新建拦得住、编辑拦不住"，于是库里就有了终止日在签订日之前的合同。
+ */
+export function endBeforeSignedIssue(
+  signedOn: string | null | undefined,
+  endOn: string | null | undefined,
+): FieldIssue | null {
+  if (!signedOn || !endOn) return null;
+  // 都是 yyyy-mm-dd，字典序即时间序，不需要转 Date
+  if (endOn >= signedOn) return null;
+  return {
+    field: 'end_on',
+    message: `终止日期（${endOn}）早于签订日期（${signedOn}），这两个日期反了。`,
+  };
 }
 
 export interface ParseResult {
@@ -230,6 +282,22 @@ export function parseContractInput(raw: Raw, opts: { partial?: boolean } = {}): 
       }
     }
   }
+
+  if (has(raw, 'end_on')) {
+    const t = text(raw.end_on);
+    if (t === null) picked.end_on = null;
+    else if (t !== undefined) {
+      if (!isRealDate(t)) {
+        issues.push({ field: 'end_on', message: '终止日期要写成 YYYY-MM-DD，而且得是日历上真有的那一天。' });
+      } else {
+        picked.end_on = t;
+      }
+    }
+  }
+
+  // 只有两个字段这次都提交了才比得了。PATCH 只改一半的情形由 service 拿库里的另一半再比一次
+  const cross = endBeforeSignedIssue(picked.signed_on, picked.end_on);
+  if (cross) issues.push(cross);
 
   if (has(raw, 'amount')) {
     const t = text(raw.amount);

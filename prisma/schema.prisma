@@ -47,13 +47,13 @@ model User {
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(3)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  pricesCreated         Price[]          @relation("PriceCreatedBy")
-  quotesCreated         Quote[]          @relation("QuoteCreatedBy")
-  templatesCreated      QuoteTemplate[]  @relation("TemplateCreatedBy")
-  contractsCreated      Contract[]       @relation("ContractCreatedBy")
-  contractQuotesCreated ContractQuote[]  @relation("ContractQuoteCreatedBy")
+  pricesCreated         Price[]           @relation("PriceCreatedBy")
+  quotesCreated         Quote[]           @relation("QuoteCreatedBy")
+  templatesCreated      QuoteTemplate[]   @relation("TemplateCreatedBy")
+  contractsCreated      Contract[]        @relation("ContractCreatedBy")
+  contractQuotesCreated ContractQuote[]   @relation("ContractQuoteCreatedBy")
   /// 发票录入人（反向关系，Prisma 要求两端都声明）
-  createdInvoices       Invoice[]        @relation("InvoiceCreatedBy")
+  createdInvoices       Invoice[]         @relation("InvoiceCreatedBy")
   /// 合同↔发票关联的建立人
   contractInvoices      ContractInvoice[] @relation("ContractInvoiceCreatedBy")
   logs                  PriceChangeLog[]
@@ -113,6 +113,10 @@ model Contract {
   status       String    @default("negotiating") @db.VarChar(20)
   /// 签订日期；未知时留空，不拿建单日冒充
   signedOn     DateTime? @map("signed_on") @db.Date
+  /// 终止日期。**填了就是周期性合同**（年 / 季度续签的那类），到期前一个月工作台提醒管理员。
+  /// 不设"合同期限"枚举：客户口径只有"有没有到期日"这一个区分，年还是季度写在备注里就够，
+  /// 多加一个字段就要多维护一套取值，而它不影响任何计算。
+  endOn        DateTime? @map("end_on") @db.Date
   /// 合同金额（元）；null = 未记录，不是 0
   amount       Decimal?  @db.Decimal(14, 2)
   note         String?   @db.Text
@@ -122,12 +126,14 @@ model Contract {
   /// 软删：合同是凭据，误删不可恢复就等于把唯一一份扫描件抹掉
   deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  createdByUser User?           @relation("ContractCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  createdByUser User?             @relation("ContractCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
   files         ContractFile[]
   quotes        ContractQuote[]
   invoices      ContractInvoice[]
 
   @@index([signedOn(sort: Desc)])
+  /// 到期提醒按 end_on 扫一个月窗口，没有索引就是全表扫
+  @@index([endOn])
   @@index([category])
   @@index([status])
   @@index([deletedAt])
@@ -185,45 +191,53 @@ model ContractQuote {
 ///   2) 唯一键是 (invoice_code, invoice_no)：纸质票的 8 位号码在不同发票代码下会重复，
 ///      只按号码判重会把两张真票当成一张吞掉。invoice_code 用**空串**而非 NULL 兜全电票
 ///      —— 唯一索引对 NULL 不生效（多行 NULL 互不冲突）。
-///   3) status 与金额符号绑在一起：red → 三项负数，normal → 正数。改状态必须同时重定符号。
+///   3) 「这张票是不是红字票」与「这张票有没有被冲红」是**两件事**，各存一列：
+///      - `is_red_letter` = 票面性质，决定金额符号（红字票三项为负）；
+///      - `status` = 账面状态（正常 / 已冲红），只对蓝票有意义，**不改金额**。
+///      合成一列过（0.1.38 及以前：status=red 即负数），结果是「红字票入账」与
+///      「原票标已冲红」互相翻符号，一对票在合计里抵成 −2X 而不是 0。
 model Invoice {
-  id               String    @id @default(uuid()) @db.Uuid
+  id                String    @id @default(uuid()) @db.Uuid
   /// 发票号码：全电 20 位 / 纸质 8 位。规范化后只保留数字与大写字母
-  invoiceNo        String    @map("invoice_no") @db.VarChar(32)
+  invoiceNo         String    @map("invoice_no") @db.VarChar(32)
   /// 发票代码：纸质票 10/12 位；全电票与多数电子票为空 → 存空串，不存 NULL
-  invoiceCode      String    @default("") @map("invoice_code") @db.VarChar(20)
-  /// normal 正常 / red 冲红。与 deleted_at 正交：冲红是业务状态，删除是可见性
-  status           String    @default("normal") @db.VarChar(10)
+  invoiceCode       String    @default("") @map("invoice_code") @db.VarChar(20)
+  /// normal 正常 / red 已冲红（被红字票冲掉了）。与 deleted_at 正交：冲红是业务状态，删除是可见性
+  status            String    @default("normal") @db.VarChar(10)
   /// 状态怎么来的：ocr 自动判定 / manual 人工改过。人工改过的不再被重传覆盖
-  statusSource     String    @default("ocr") @map("status_source") @db.VarChar(10)
+  statusSource      String    @default("ocr") @map("status_source") @db.VarChar(10)
+  /// 票面就是红字票（红冲票）：三项金额为负，入账状态仍是「正常」——它本身就是一张正常凭证
+  isRedLetter       Boolean   @default(false) @map("is_red_letter")
+  /// 红字票冲的是哪一张：票面「被红冲蓝字数电发票号码 / 对应正数发票号码 / 原发票号码」
+  originalInvoiceNo String?   @map("original_invoice_no") @db.VarChar(32)
   /// 票种：OCR 的 SubType 原值（VatSpecialInvoice / VatElectronicInvoiceFull / …）
-  invoiceType      String    @default("Unknown") @map("invoice_type") @db.VarChar(40)
+  invoiceType       String    @default("Unknown") @map("invoice_type") @db.VarChar(40)
   /// 票种中文（SubTypeDescription 原值），列表直接显示，避免前端维护映射表
-  invoiceTypeLabel String    @map("invoice_type_label") @db.VarChar(60)
+  invoiceTypeLabel  String    @map("invoice_type_label") @db.VarChar(60)
   /// 开票日期；OCR 认不出时为空，不拿上传日冒充
-  issuedOn         DateTime? @map("issued_on") @db.Date
-  buyerName        String    @default("") @map("buyer_name") @db.VarChar(200)
-  buyerTaxNo       String?   @map("buyer_tax_no") @db.VarChar(30)
-  sellerName       String    @default("") @map("seller_name") @db.VarChar(200)
-  sellerTaxNo      String?   @map("seller_tax_no") @db.VarChar(30)
-  /// 不含税金额（元）。冲红为负
-  amount           Decimal?  @db.Decimal(14, 2)
-  /// 税额（元）。冲红为负
-  taxAmount        Decimal?  @map("tax_amount") @db.Decimal(14, 2)
-  /// 价税合计（元）。冲红为负
-  totalAmount      Decimal?  @map("total_amount") @db.Decimal(14, 2)
+  issuedOn          DateTime? @map("issued_on") @db.Date
+  buyerName         String    @default("") @map("buyer_name") @db.VarChar(200)
+  buyerTaxNo        String?   @map("buyer_tax_no") @db.VarChar(30)
+  sellerName        String    @default("") @map("seller_name") @db.VarChar(200)
+  sellerTaxNo       String?   @map("seller_tax_no") @db.VarChar(30)
+  /// 不含税金额（元）。红字票为负
+  amount            Decimal?  @db.Decimal(14, 2)
+  /// 税额（元）。红字票为负
+  taxAmount         Decimal?  @map("tax_amount") @db.Decimal(14, 2)
+  /// 价税合计（元）。红字票为负
+  totalAmount       Decimal?  @map("total_amount") @db.Decimal(14, 2)
   /// ok / derived（由另两项推算）/ mismatch（|amount+tax-total| > 0.01）
-  amountCheck      String    @default("ok") @map("amount_check") @db.VarChar(10)
+  amountCheck       String    @default("ok") @map("amount_check") @db.VarChar(10)
   /// OCR 原始响应里与本票相关的那一段（jsonb）：口径变了能回溯，不必再花一次钱重识别
-  ocrRaw           Json?     @map("ocr_raw")
+  ocrRaw            Json?     @map("ocr_raw")
   /// 腾讯云 RequestId：出问题时要拿它找腾讯云对账
-  ocrRequestId     String?   @map("ocr_request_id") @db.VarChar(64)
-  remark           String?   @db.Text
-  createdBy        String?   @map("created_by") @db.Uuid
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  ocrRequestId      String?   @map("ocr_request_id") @db.VarChar(64)
+  remark            String?   @db.Text
+  createdBy         String?   @map("created_by") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
   /// 软删：票是凭据，误删可恢复；物理文件由周任务回收
-  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(3)
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(3)
 
   createdByUser User?             @relation("InvoiceCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
   files         InvoiceFile[]
@@ -231,6 +245,8 @@ model Invoice {
 
   @@unique([invoiceCode, invoiceNo])
   @@index([invoiceNo])
+  /// 红字票入账时按它回查原票（要不要提示「标为已冲红」）
+  @@index([originalInvoiceNo])
   @@index([issuedOn(sort: Desc)])
   @@index([status])
   @@index([deletedAt])

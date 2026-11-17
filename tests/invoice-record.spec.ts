@@ -3,7 +3,7 @@ import {
   AMOUNT_TOLERANCE_CENTS,
   INVOICE_STATUSES,
   applyDetectedSign,
-  detectInvoiceStatus,
+  detectRedLetter,
   isInvoiceStatus,
   isSameInvoice,
   normalizeInvoiceCode,
@@ -80,56 +80,56 @@ describe('缺项推导（derived）', () => {
   });
 });
 
-describe('红票判定与符号归一', () => {
-  it('任一项为负 → red（OCR 唯一的负号线索）', () => {
-    const d = detectInvoiceStatus({ amounts: { amount: '-1000.00', taxAmount: '-130.00', totalAmount: '-1130.00' } });
-    expect(d.status).toBe('red');
+describe('红字票判定与符号归一', () => {
+  it('任一项为负 → 红字票（OCR 唯一的负号线索）', () => {
+    const d = detectRedLetter({ amounts: { amount: '-1000.00', taxAmount: '-130.00', totalAmount: '-1130.00' } });
+    expect(d.redLetter).toBe(true);
     expect(d.reason).toBe('amount_negative');
   });
 
-  it('票面文字含「红字」/「红冲」→ red（不依赖负号）', () => {
+  it('票面文字含「红字」/「红冲」→ 红字票（不依赖负号）', () => {
     expect(
-      detectInvoiceStatus({ title: '增值税普通发票（红字）', amounts: { amount: '1.00', taxAmount: null, totalAmount: null } })
-        .status,
-    ).toBe('red');
+      detectRedLetter({ title: '增值税普通发票（红字）', amounts: { amount: '1.00', taxAmount: null, totalAmount: null } })
+        .redLetter,
+    ).toBe(true);
     expect(
-      detectInvoiceStatus({ typeLabel: '红冲发票', amounts: { amount: '1.00', taxAmount: null, totalAmount: null } }).status,
-    ).toBe('red');
+      detectRedLetter({ typeLabel: '红冲发票', amounts: { amount: '1.00', taxAmount: null, totalAmount: null } }).redLetter,
+    ).toBe(true);
   });
 
-  it('没有任何线索 → normal', () => {
-    const d = detectInvoiceStatus({ amounts: { amount: '1000.00', taxAmount: '130.00', totalAmount: '1130.00' } });
-    expect(d.status).toBe('normal');
+  it('没有任何线索 → 蓝字票', () => {
+    const d = detectRedLetter({ amounts: { amount: '1000.00', taxAmount: '130.00', totalAmount: '1130.00' } });
+    expect(d.redLetter).toBe(false);
     expect(d.reason).toBe('heuristic_normal');
   });
 
-  it('red 归一后三项都是负数（原本已是负数也不出现 -- 得 +）', () => {
-    const neg = applyDetectedSign({ amount: '-1000.00', taxAmount: '-130.00', totalAmount: '-1130.00' }, 'red');
+  it('红字票归一后三项都是负数（原本已是负数也不出现 -- 得 +）', () => {
+    const neg = applyDetectedSign({ amount: '-1000.00', taxAmount: '-130.00', totalAmount: '-1130.00' }, true);
     expect(neg.amounts).toEqual({ amount: '-1000.00', taxAmount: '-130.00', totalAmount: '-1130.00' });
-    const pos = applyDetectedSign({ amount: '1000.00', taxAmount: '130.00', totalAmount: '1130.00' }, 'red');
+    const pos = applyDetectedSign({ amount: '1000.00', taxAmount: '130.00', totalAmount: '1130.00' }, true);
     expect(pos.amounts).toEqual({ amount: '-1000.00', taxAmount: '-130.00', totalAmount: '-1130.00' });
   });
 
-  it('normal 保持原符号，但出现负号要告警（可能判错了）', () => {
-    const keep = applyDetectedSign({ amount: '1000.00', taxAmount: '130.00', totalAmount: '1130.00' }, 'normal');
+  it('蓝字票保持原符号，但出现负号要告警（可能判错了）', () => {
+    const keep = applyDetectedSign({ amount: '1000.00', taxAmount: '130.00', totalAmount: '1130.00' }, false);
     expect(keep.warning).toBeNull();
-    const odd = applyDetectedSign({ amount: '-1000.00', taxAmount: '130.00', totalAmount: '-870.00' }, 'normal');
+    const odd = applyDetectedSign({ amount: '-1000.00', taxAmount: '130.00', totalAmount: '-870.00' }, false);
     expect(odd.warning).toContain('负数');
   });
 
-  it('signAmounts（人工改状态）强制重定：red → 负、normal → 正', () => {
+  it('signAmounts 按票面性质强制重定：红字票 → 负、蓝字票 → 正', () => {
     const amounts = { amount: '1000.00', taxAmount: '130.00', totalAmount: '1130.00' };
-    expect(signAmounts(amounts, 'red')).toEqual({
+    expect(signAmounts(amounts, true)).toEqual({
       amount: '-1000.00',
       taxAmount: '-130.00',
       totalAmount: '-1130.00',
     });
-    expect(signAmounts({ amount: '-1000.00', taxAmount: '-130.00', totalAmount: '-1130.00' }, 'normal')).toEqual(amounts);
+    expect(signAmounts({ amount: '-1000.00', taxAmount: '-130.00', totalAmount: '-1130.00' }, false)).toEqual(amounts);
   });
 
-  it('冲红后合计变小：数值上直接相加即可（统计只有一条口径）', () => {
+  it('一对票抵成 0：原票 +1130 与红字票 −1130 直接相加（改「已冲红」标签不再翻符号）', () => {
     const blue = toCents('1130.00')!;
-    const red = toCents(signAmounts({ amount: null, taxAmount: null, totalAmount: '1130.00' }, 'red').totalAmount)!;
+    const red = toCents(signAmounts({ amount: null, taxAmount: null, totalAmount: '1130.00' }, true).totalAmount)!;
     expect(blue + red).toBe(0n);
   });
 });
@@ -262,13 +262,14 @@ describe('手工录入解析（parseInvoiceInput）', () => {
     expect(r.notes.join()).toContain('0.02');
   });
 
-  it('填了 status=red 时三项按负数落库（状态与符号必须同时成立）', () => {
+  it('勾了「红字票」时三项按负数落库（票面性质决定符号）', () => {
     const r = parseInvoiceInput(
       {
         invoice_no: '01234567',
         buyer_name: '有底文化',
         seller_name: '某某展览',
-        status: 'red',
+        is_red_letter: true,
+        original_invoice_no: '25112000000012345678',
         amount: '1000.00',
         tax_amount: '130.00',
         total_amount: '1130.00',
@@ -278,10 +279,18 @@ describe('手工录入解析（parseInvoiceInput）', () => {
     expect(r.value.amount).toBe('-1000.00');
     expect(r.value.tax_amount).toBe('-130.00');
     expect(r.value.total_amount).toBe('-1130.00');
+    // 红字票记下"冲的是哪一张"，之后才能提示把原票标已冲红
+    expect(r.value.original_invoice_no).toBe('25112000000012345678');
   });
 
-  it('PATCH 只改金额时按**库里现有的红票状态**定符号（不能默认成 normal）', () => {
-    const r = parseInvoiceInput({ amount: '2000.00' }, { partial: true, statusFallback: 'red' });
+  it('status 不再决定符号：标「已冲红」不会把金额翻成负数', () => {
+    const r = parseInvoiceInput({ status: 'red', amount: '1000.00' }, { partial: true });
+    expect(r.value.status).toBe('red');
+    expect(r.value.amount).toBe('1000.00');
+  });
+
+  it('PATCH 只改金额时按**库里现有的票面性质**定符号（不能默认成蓝票）', () => {
+    const r = parseInvoiceInput({ amount: '2000.00' }, { partial: true, redLetterFallback: true });
     expect(r.value.amount).toBe('-2000.00');
   });
 

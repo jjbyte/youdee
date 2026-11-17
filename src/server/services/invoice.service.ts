@@ -4,12 +4,14 @@
  * 四条照客户口径定的边界：
  *   1. **一次扫描出 items + summary**（`OVER ()` 窗口聚合，见 invoice-dto 的 SELECT）。
  *      写成两条 SQL 就会出现"合计和行数对不上"，而这种不一致没人能复现。
- *   2. **金额只有一种口径**：冲红为负，统计直接 SUM。所以改状态必须同步重定符号
- *      （`setInvoiceStatus`），否则"冲红 3 张但合计没变"，只有对账时才会发现。
+ *   2. **金额只有一种口径**：红字票记负数，统计直接 SUM。负数由 `is_red_letter`
+ *      （票面性质）决定，**不由状态决定**——`setInvoiceStatus` 只改「已冲红」这句标签、
+ *      一分钱都不动。0.1.38 曾让两者共用一个字段，于是"红字票入账"与"原票标已冲红"
+ *      各翻一次符号，一对票在合计里抵成 −2X。
  *   3. **软删只打 deleted_at**：票是凭据（扫描件常是唯一副本），原件一字节不动，
  *      恢复后必须还在。物理回收由周任务按 storage_key 引用计数判断。
- *   4. **权限分两档**：录入 / 编辑人人可做（行政活）；改状态 / 删除仅管理员。
- *      冲红会翻转金额符号，直接改"金额合计"这个对账数字，必须留一道人。
+ *   4. **权限分两档**：录入 / 编辑人人可做（行政活）；改状态 / 改红字票 / 删除仅管理员。
+ *      红字票会翻转金额符号，直接改"金额合计"这个对账数字，必须留一道人。
  *      具体拦截在 route 层（`requireUser` / `requireAdmin`），这里是纯数据操作。
  *
  * 不在这个文件里的三块：上传识别后的落库（invoice-upload.service）、
@@ -342,15 +344,18 @@ export async function createInvoice(raw: Record<string, unknown>, actor: Current
 
   const rows = await q<{ id: string }>(
     `INSERT INTO invoices
-       (invoice_no, invoice_code, status, status_source, invoice_type, invoice_type_label,
+       (invoice_no, invoice_code, status, status_source, is_red_letter, original_invoice_no,
+        invoice_type, invoice_type_label,
         issued_on, buyer_name, buyer_tax_no, seller_name, seller_tax_no,
         amount, tax_amount, total_amount, amount_check, remark, created_by)
-     VALUES ($1,$2,$3,'manual',$4,$5,$6::date,$7,$8,$9,$10,$11::numeric,$12::numeric,$13::numeric,$14,$15,$16)
+     VALUES ($1,$2,$3,'manual',$4,$5,$6,$7,$8::date,$9,$10,$11,$12,$13::numeric,$14::numeric,$15::numeric,$16,$17,$18)
      RETURNING id`,
     [
       invoiceNo,
       invoiceCode,
       status,
+      v.is_red_letter === true,
+      v.original_invoice_no ?? null,
       v.invoice_type ?? 'Manual',
       v.invoice_type_label ?? '手工录入',
       v.issued_on ?? null,
@@ -396,18 +401,23 @@ export async function patchInvoice(
     invoice_no: string;
     invoice_code: string;
     status: string;
+    is_red_letter: boolean;
     amount: string | null;
     tax_amount: string | null;
     total_amount: string | null;
   }>(
-    `SELECT id, invoice_no, invoice_code, status, amount, tax_amount, total_amount
+    `SELECT id, invoice_no, invoice_code, status, is_red_letter, amount, tax_amount, total_amount
        FROM invoices WHERE id = $1 AND deleted_at IS NULL`,
     [id],
   );
   if (!existing) throw new AppError(40401, '这张发票不存在，可能已经被删掉了。', 404);
 
-  const currentStatus: InvoiceStatus = isInvoiceStatus(existing.status) ? existing.status : 'normal';
-  const { value, issues, notes } = parseInvoiceInput(raw, { partial: true, statusFallback: currentStatus });
+  const { value, issues, notes } = parseInvoiceInput(raw, {
+    partial: true,
+    // 只改金额、没提交「红字票」这一格时，符号要按**库里现有的票面性质**定，
+    // 不能按默认的"蓝票"定 —— 否则编辑一张红字票的备注顺手改了金额，三项会被翻成正数
+    redLetterFallback: existing.is_red_letter === true,
+  });
   assertValid(issues, notes);
 
   const v = value as Partial<ParsedInvoice>;
@@ -438,6 +448,7 @@ export async function patchInvoice(
   if ('seller_name' in v) set('seller_name', v.seller_name);
   if ('seller_tax_no' in v) set('seller_tax_no', v.seller_tax_no);
   if ('remark' in v) set('remark', v.remark);
+  if ('original_invoice_no' in v) set('original_invoice_no', v.original_invoice_no);
   if ('amount' in v) set('amount', v.amount, '::numeric');
   if ('tax_amount' in v) set('tax_amount', v.tax_amount, '::numeric');
   if ('total_amount' in v) set('total_amount', v.total_amount, '::numeric');
@@ -445,15 +456,31 @@ export async function patchInvoice(
 
   if ('status' in v) {
     const next = v.status;
-    if (!isInvoiceStatus(next)) throw new AppError(40001, '发票状态只能是「正常」或「冲红」。', 400, { field: 'status' });
-    if (actor.role !== 'admin') {
-      throw new AppError(40301, '只有管理员能改发票状态：冲红会翻转金额符号，直接影响合计。', 403);
+    if (!isInvoiceStatus(next)) {
+      throw new AppError(40001, '发票状态只能是「正常」或「已冲红」。', 400, { field: 'status' });
     }
+    if (actor.role !== 'admin') {
+      throw new AppError(40301, '只有管理员能改发票状态。', 403);
+    }
+    /*
+     * 只改标签，**不动金额**。
+     *
+     * 「已冲红」表达的是"这张蓝票已经被一张红字票冲掉了"，而抵账的负数由那张红字票
+     * 自己带着。这里要是再翻一次符号，同一对票就会抵两次（合计变成 −2X）。
+     */
     set('status', next);
-    // 人改过的状态不再被重传覆盖
+    set('status_source', 'manual');
+  }
+
+  if ('is_red_letter' in v) {
+    const next = v.is_red_letter === true;
+    if (actor.role !== 'admin') {
+      throw new AppError(40301, '只有管理员能改「红字票」标记：它会翻转三项金额的符号，直接影响合计。', 403);
+    }
+    set('is_red_letter', next);
     set('status_source', 'manual');
     if (!('amount' in v) && !('tax_amount' in v) && !('total_amount' in v)) {
-      // 只改状态：金额同步重定符号（这是 §5.5 的连锁动作，不能只改状态列）
+      // 只改票面性质：金额同步重定符号（这是 §5.5 的连锁动作，不能只改这一列）
       const signed = signAmounts(
         {
           amount: existing.amount,
@@ -490,28 +517,22 @@ export async function patchInvoice(
 /**
  * 改状态（仅管理员，仅 `PATCH /invoices/:id/status` 一条路径）。
  *
- * **必须同时重定符号**：`status` 改了而三项金额没改，就会出现
- * "冲红 3 张但合计没变"——这个 bug 只有对账时才会被发现，而且发现时已经跨月。
+ * **只改标签，不动金额。** 「已冲红」= 这张蓝票被一张红字票冲掉了，
+ * 而抵账的负数由那张红字票自己带着（它是 `is_red_letter`，入账时金额就是负的）。
+ * 这里要是顺手翻符号，同一对票会被抵两次——0.1.38 及以前就是这样，
+ * 只改状态就把合计打歪，而且只有对账时才发现。
+ *
+ * 要改的是"这张票面是不是红字票"（那才决定符号），走 `patchInvoice` 的 `is_red_letter`。
  */
 export async function setInvoiceStatus(id: string, status: InvoiceStatus): Promise<InvoiceDetailDTO> {
-  const existing = await one<{ amount: string | null; tax_amount: string | null; total_amount: string | null }>(
-    'SELECT amount, tax_amount, total_amount FROM invoices WHERE id = $1 AND deleted_at IS NULL',
-    [id],
-  );
-  if (!existing) throw new AppError(40401, '这张发票不存在，可能已经被删掉了。', 404);
-
-  const signed = signAmounts(
-    { amount: existing.amount, taxAmount: existing.tax_amount, totalAmount: existing.total_amount },
-    status,
-  );
-  await q(
+  const rows = await q<{ id: string }>(
     `UPDATE invoices
-        SET status = $1, status_source = 'manual',
-            amount = $2::numeric, tax_amount = $3::numeric, total_amount = $4::numeric,
-            updated_at = now()
-      WHERE id = $5`,
-    [status, signed.amount, signed.taxAmount, signed.totalAmount, id],
+        SET status = $1, status_source = 'manual', updated_at = now()
+      WHERE id = $2 AND deleted_at IS NULL
+      RETURNING id`,
+    [status, id],
   );
+  if (!rows[0]) throw new AppError(40401, '这张发票不存在，可能已经被删掉了。', 404);
   return getInvoice(id);
 }
 

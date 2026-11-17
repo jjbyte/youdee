@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '@/lib/api';
 import { cx, formatDate, formatMoney, formatTimeRel } from '@/lib/format';
+import { contractExpiry } from '@/lib/contract-expiry';
 import type { Contract, ContractCategory, ContractStatus, Page } from '@/lib/types';
 import {
   CONTRACT_CATEGORIES,
@@ -80,6 +81,14 @@ function ContractsPageInner() {
   const [signedTo, setSignedTo] = useState('');
   const [createdFrom, setCreatedFrom] = useState('');
   const [createdTo, setCreatedTo] = useState('');
+  /**
+   * 只看「已到期 + 一个月内到期」。工作台那条提醒点进来时带 `?expiring=1`。
+   *
+   * 用 window.location 在挂载后读一次，而不是 useSearchParams：
+   * 后者在 app router 里要求外面包一层 Suspense，否则构建时静态化这一步会报错，
+   * 而这里只需要"进来那一下"的初始值——用户之后再改地址栏本来也不会触发重渲染。
+   */
+  const [expiring, setExpiring] = useState(false);
   const [fileFilter, setFileFilter] = useState<FileFilter>('');
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [page, setPage] = useState(1);
@@ -113,6 +122,7 @@ function ContractsPageInner() {
         createdTo: createdTo || undefined,
         hasFile: fileFilter === '' ? undefined : fileFilter === 'has',
         status: status || undefined,
+        expiring: expiring || undefined,
         includeDeleted: includeDeleted && isAdmin ? true : undefined,
       };
       const [list, ...rest] = await Promise.all([
@@ -145,6 +155,7 @@ function ContractsPageInner() {
     signedTo,
     createdFrom,
     createdTo,
+    expiring,
     fileFilter,
     includeDeleted,
     isAdmin,
@@ -154,6 +165,15 @@ function ContractsPageInner() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * 工作台那条「合同要到期」的链接带的是 `?expiring=1`。
+   * 只在挂载后读一次：用 useSearchParams 会让这个页面必须包 Suspense，
+   * 而它并不需要跟着地址栏变化实时响应（自己改地址栏本来就不会触发重渲染）。
+   */
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('expiring') === '1') setExpiring(true);
+  }, []);
 
   // `/` 聚焦搜索框，与报价单列表一致
   useEffect(() => {
@@ -185,6 +205,7 @@ function ContractsPageInner() {
       || signedTo
       || createdFrom
       || createdTo
+      || expiring
       || fileFilter
       || includeDeleted,
   );
@@ -201,6 +222,7 @@ function ContractsPageInner() {
     setSignedTo('');
     setCreatedFrom('');
     setCreatedTo('');
+    setExpiring(false);
     setFileFilter('');
     setPage(1);
   };
@@ -256,6 +278,7 @@ function ContractsPageInner() {
           <h1 className="t-xl">合同管理</h1>
           <p className="t-sm t-3 mt-[var(--space-1)]">
             公司签过的合同都在这儿。合同电子版、报价单、结算资料都跟着合同存，按编号、名称、甲乙方、日期都能查到。
+            填了终止日期的算周期性合同（年 / 季度），到期前一个月会出现在工作台。
           </p>
         </div>
         <Button
@@ -428,6 +451,25 @@ function ContractsPageInner() {
               ))}
             </Select>,
           )}
+          {/*
+            到期提醒：与工作台那条待处理共用同一个口径（窗口天数在服务端、
+            只在 CONTRACT_EXPIRING_WINDOW_DAYS 一处定义）。工作台点进来带 ?expiring=1。
+          */}
+          {label(
+            '到期提醒',
+            <Select
+              value={expiring ? 'expiring' : ''}
+              aria-label="到期筛选"
+              style={{ width: 150 }}
+              onChange={(e) => {
+                setExpiring(e.target.value === 'expiring');
+                setPage(1);
+              }}
+            >
+              <option value="">全部</option>
+              <option value="expiring">已到期 / 一个月内</option>
+            </Select>,
+          )}
           {isAdmin
             ? label(
                 '删除状态',
@@ -448,6 +490,7 @@ function ContractsPageInner() {
           <span className="ml-auto flex items-center gap-[var(--space-3)]">
             <span className="t-xs t-3">
               共 <span className="num">{total}</span> 份
+              {expiring ? ' · 已到期或一个月内' : ''}
               {includeDeleted ? ' · 已删除' : ''}
             </span>
             {hasFilter ? (
@@ -516,7 +559,7 @@ function ContractsPageInner() {
                     <Th>状态</Th>
                     <Th>甲方（公司）</Th>
                     <Th>乙方（客户）</Th>
-                    <Th>签订时间</Th>
+                    <Th>签订 / 终止</Th>
                     <Th align="right">合同金额</Th>
                     <Th>关联报价单</Th>
                     <Th>附件</Th>
@@ -527,6 +570,8 @@ function ContractsPageInner() {
                 <tbody>
                   {rows.map((r) => {
                     const deleted = r.deletedAt !== null;
+                    // 一行只算一次：到期这句话在三处要说（列表 / 抽屉 / 工作台），算法只有一份
+                    const expiry = contractExpiry(r.endOn);
                     return (
                       <tr
                         key={r.id}
@@ -567,6 +612,25 @@ function ContractsPageInner() {
                           ) : (
                             <span className="t-3 t-xs">没填</span>
                           )}
+                          {/* 有终止日期 = 周期性合同（年 / 季度）。到期临近时这一行自己会说出来，
+                              不用人去心算「2027-03-31 还有多久」 */}
+                          {expiry ? (
+                            <span className="cell-sub flex items-center gap-[var(--space-2)]">
+                              <span className="num">→ {formatDate(r.endOn)}</span>
+                              <span
+                                className={cx(
+                                  't-2xs',
+                                  expiry.tone === 'expired'
+                                    ? 't-danger fw-semi'
+                                    : expiry.tone === 'soon'
+                                      ? 't-warning fw-semi'
+                                      : 't-3',
+                                )}
+                              >
+                                {expiry.text}
+                              </span>
+                            </span>
+                          ) : null}
                         </Td>
                         <Td align="right">
                           {r.amount ? (

@@ -1301,34 +1301,52 @@ async function main() {
     `amount=${JSON.stringify(invScale.json?.data?.amount)}（${typeof invScale.json?.data?.amount}）`,
   );
 
-  // 16.9 冲红票：填正数也要归一成负数
-  //      漏了这一步，"冲红 3 张"在合计里等于三张正常票，账面上凭空多出一笔钱。
+  // 16.9 红字票：填正数也要归一成负数，而**状态仍是「正常」**
+  //      红字票是一张正常凭证，"红"说的是票面性质（金额为负），不是"被冲掉了"。
+  //      漏了这一步，红字票在合计里等于一张正常票，账面上凭空多出一笔钱。
   const invRed = await invCreate({
     invoice_code: '111100001111',
     invoice_no: invNo(7),
-    status: 'red',
+    is_red_letter: true,
+    original_invoice_no: invNo(1),
     amount: '100.00',
     tax_amount: '13.00',
     total_amount: '113.00',
   });
   const invRedId = invRed.json?.data?.id;
   record(
-    '冲红票填正数被归一成三项负数',
+    '红字票填正数被归一成三项负数，状态仍是「正常」（票面性质 ≠ 已冲红）',
     invRed.json?.data?.amount === '-100.00' &&
       invRed.json?.data?.tax_amount === '-13.00' &&
-      invRed.json?.data?.total_amount === '-113.00',
-    `${invRed.json?.data?.amount} / ${invRed.json?.data?.tax_amount} / ${invRed.json?.data?.total_amount}`,
+      invRed.json?.data?.total_amount === '-113.00' &&
+      invRed.json?.data?.status === 'normal' &&
+      invRed.json?.data?.is_red_letter === true &&
+      invRed.json?.data?.original_invoice_no === invNo(1),
+    `${invRed.json?.data?.amount} / ${invRed.json?.data?.total_amount} status=${invRed.json?.data?.status} red=${invRed.json?.data?.is_red_letter}`,
   );
 
-  // 16.10 改状态必须同步重定符号
-  //       只改 status 不改金额，就会出现"冲红 3 张但合计没变"——这种错只有月底对账才发现。
-  const invToNormal = await call('PATCH', `/invoices/${invRedId}/status`, { as: 'admin', body: { status: 'normal' } });
+  // 16.10 标「已冲红」只改标签，**不动金额**
+  //       抵账的负数由红字票自己带着；这里要是顺手翻符号，一对票会被抵两次。
+  //       造一张蓝票来标，这样断言里"金额没变"才有意义。
+  const invBlueForStatus = await invCreate({
+    invoice_code: '111100001111',
+    invoice_no: invNo(8),
+    amount: '100.00',
+    tax_amount: '13.00',
+    total_amount: '113.00',
+  });
+  const invBlueForStatusId = invBlueForStatus.json?.data?.id;
+  const invToRed = await call('PATCH', `/invoices/${invBlueForStatusId}/status`, {
+    as: 'admin',
+    body: { status: 'red' },
+  });
   record(
-    '改状态时金额同步翻正，且 status_source 记成 manual',
-    invToNormal.json?.data?.amount === '100.00' &&
-      invToNormal.json?.data?.total_amount === '113.00' &&
-      invToNormal.json?.data?.status_source === 'manual',
-    `${invToNormal.json?.data?.total_amount} source=${invToNormal.json?.data?.status_source}`,
+    '标「已冲红」金额一分不动，且 status_source 记成 manual',
+    invToRed.json?.data?.status === 'red' &&
+      invToRed.json?.data?.amount === '100.00' &&
+      invToRed.json?.data?.total_amount === '113.00' &&
+      invToRed.json?.data?.status_source === 'manual',
+    `${invToRed.json?.data?.status} ${invToRed.json?.data?.total_amount} source=${invToRed.json?.data?.status_source}`,
   );
 
   // 16.12 summary 与 items 必须是同一个口径
@@ -1448,6 +1466,77 @@ async function main() {
     invBadStatus.status === 400 && invBadStatus.json?.code === 40001,
     `${invBadStatus.status} ${invBadStatus.json?.code} ${invBadStatus.json?.message ?? ''}`,
   );
+
+  // 16.16b 合同终止日期：填了就是周期性合同，快到期要进工作台
+  //       三条一起看才说明口径没走岔：存得进去、日期反了拦得住、筛选与工作台是同一批合同。
+  const endSoon = localDate(new Date(Date.now() + 10 * 864e5));
+  const endFar = localDate(new Date(Date.now() + 200 * 864e5));
+  const invEndContract = await call('POST', '/contracts', {
+    as: 'admin',
+    body: {
+      title: `自检到期合同${invStamp}`,
+      company_name: `自检公司${invStamp}`,
+      signed_on: invToday,
+      end_on: endSoon,
+      category: 'lease',
+    },
+  });
+  const invEndContractId = invEndContract.json?.data?.id;
+  record(
+    '合同终止日期能存能取（date 原样、不跨时区）',
+    invEndContract.json?.data?.end_on === endSoon && invEndContract.json?.data?.signed_on === invToday,
+    `end_on=${invEndContract.json?.data?.end_on} signed_on=${invEndContract.json?.data?.signed_on}`,
+  );
+
+  const invEndFar = await call('POST', '/contracts', {
+    as: 'admin',
+    body: {
+      title: `自检远期合同${invStamp}`,
+      company_name: `自检公司${invStamp}`,
+      signed_on: invToday,
+      end_on: endFar,
+    },
+  });
+  const invEndFarId = invEndFar.json?.data?.id;
+
+  const invEndBad = await call('POST', '/contracts', {
+    as: 'admin',
+    body: {
+      title: `自检日期反了${invStamp}`,
+      company_name: `自检公司${invStamp}`,
+      signed_on: invToday,
+      end_on: invYesterday,
+    },
+  });
+  record(
+    '终止日期早于签订日期 → 400（不静默纠正）',
+    invEndBad.status === 400 && invEndBad.json?.code === 40001,
+    `${invEndBad.status} ${invEndBad.json?.code} ${invEndBad.json?.message ?? ''}`,
+  );
+
+  const invExpiring = await call('GET', '/contracts?expiring=1&limit=100', { as: 'admin' });
+  const invExpiringIds = (invExpiring.json?.data?.items ?? []).map((c) => c.id);
+  record(
+    '?expiring=1 只出「一个月内到期」的那份（远期的不算）',
+    invExpiringIds.includes(invEndContractId) && !invExpiringIds.includes(invEndFarId),
+    `命中 ${invExpiringIds.length} 份，近端=${invExpiringIds.includes(invEndContractId)} 远期=${invExpiringIds.includes(invEndFarId)}`,
+  );
+
+  const invDash = await call('GET', '/dashboard/summary', { as: 'admin' });
+  const invDashMember = await call('GET', '/dashboard/summary', { as: 'member' });
+  const invExpBlock = invDash.json?.data?.expiring_contracts;
+  record(
+    '工作台给管理员列出到期合同（含刚造的那份），成员拿不到这一块',
+    Boolean(invExpBlock) &&
+      (invExpBlock?.items ?? []).some((c) => c.id === invEndContractId) &&
+      invDashMember.json?.data?.expiring_contracts === undefined,
+    `total=${invExpBlock?.total} member=${JSON.stringify(invDashMember.json?.data?.expiring_contracts)}`,
+  );
+
+  // 造完就删（软删，与其它自检数据一致）：三份合同都别留在台账里
+  for (const cid of [invEndContractId, invEndFarId, invEndBad.json?.data?.id]) {
+    if (cid) await call('DELETE', `/contracts/${cid}`, { as: 'admin' });
+  }
 
   // 16.15 合同挂票必须幂等
   //       不幂等的话，用户手一抖点两下，同一份合同里就会有两行一样的票，

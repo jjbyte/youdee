@@ -24,9 +24,11 @@ import {
 /**
  * 发票详情 / 编辑抽屉。`invoiceId === null` 时是「手工录入」（无原件）。
  *
- * 三个刻意的取舍：① 改状态单独一个动作且要先确认——冲红会把三项金额翻成负数，
- * 等于直接改对账数字；② 原件与字段同屏，因为对账就是"看一眼票面 → 改一个字段"来回跳；
- * ③ 已删除的票整块只读，不给人"改了才发现存不上"。
+ * 三个刻意的取舍：
+ *   ① **票面性质**（红字票，决定金额负号）与**账面状态**（已冲红，只是标签）分成两处改，
+ *      且「已冲红」要先确认——它会改"这张票还算不算数"这个判断，但不改金额；
+ *   ② 原件与字段同屏，因为对账就是"看一眼票面 → 改一个字段"来回跳；
+ *   ③ 已删除的票整块只读，不给人"改了才发现存不上"。
  */
 export function InvoiceDrawer({
   open,
@@ -214,11 +216,21 @@ export function InvoiceDrawer({
       {/* ── 状态 ── */}
       <div className="flex items-center gap-[var(--space-3)] flex-wrap">
         <span className="t-2xs t-3">状态</span>
+        {/*
+          两个徽标回答两个不同的问题：
+            · 红字票 = 这张票面本身是红冲票，金额记负（在台账里是一张正常凭证）；
+            · 正常 / 已冲红 = 这张**蓝票**有没有被红字票冲掉。
+          把两者合成一个「冲红」，就会出现"这张票明明是红票，怎么状态写正常"的误读。
+        */}
+        {detail?.isRedLetter ? <Badge tone="warn">红字票</Badge> : null}
         <Badge tone={detail?.status === 'red' ? 'danger' : 'neutral'}>
           {detail ? invoiceStatusLabel(detail.status) : '正常'}
         </Badge>
         {detail?.statusSource === 'manual' ? (
           <span className="t-2xs t-3">人工改过（重新识别不会覆盖）</span>
+        ) : null}
+        {detail?.isRedLetter && detail.originalInvoiceNo ? (
+          <span className="t-2xs t-3 num">冲的是原票 {detail.originalInvoiceNo}</span>
         ) : null}
         <span style={{ flex: 1 }} />
         {isAdmin && currentId && detail && !deleted ? (
@@ -226,8 +238,9 @@ export function InvoiceDrawer({
             type="button"
             className={cx('btn btn--link t-xs', detail.status === 'red' ? '' : 't-danger')}
             onClick={() => askStatus(detail.status === 'red' ? 'normal' : 'red')}
+            title="只改标签，不动金额：抵账的负数由红字票那一行带着"
           >
-            {detail.status === 'red' ? '改回正常（金额转正）' : '标记为冲红（金额转负）'}
+            {detail.status === 'red' ? '改回正常（只改标签）' : '标记为已冲红（金额不变）'}
           </button>
         ) : null}
         {!isAdmin ? <span className="t-2xs t-3">改状态找管理员</span> : null}

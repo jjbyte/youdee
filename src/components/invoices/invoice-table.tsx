@@ -72,10 +72,11 @@ export function InvoiceTable({
         </thead>
         <tbody>
           {rows.map((r) => {
-            const red = r.status === 'red';
+            // 金额着红看的是**票面**（红字票是负数），不是「已冲红」标签
+            const redLetter = r.isRedLetter;
             const deleted = r.deletedAt !== null;
             const picked = selected.has(r.id);
-            const amountTone = red ? 't-danger' : undefined;
+            const amountTone = redLetter ? 't-danger' : undefined;
             const check = INVOICE_AMOUNT_CHECK_TEXT[r.amountCheck] ?? '';
             return (
               <tr
@@ -143,9 +144,22 @@ export function InvoiceTable({
                 </Td>
 
                 <Td>
-                  <Badge tone={red ? 'danger' : 'neutral'}>{invoiceStatusLabel(r.status)}</Badge>
+                  {/*
+                    两个徽标是两件事：左边说的是**票面性质**（红字票，金额为负），
+                    右边说的是**这张蓝票被冲掉了没有**。合成一个「冲红」，
+                    用户就分不清"这张是红字票"还是"这张被红字票冲了"。
+                  */}
+                  <div className="flex items-center gap-[var(--space-2)] flex-wrap">
+                    {redLetter ? <Badge tone="warn">红字票</Badge> : null}
+                    <Badge tone={r.status === 'red' ? 'danger' : 'neutral'}>{invoiceStatusLabel(r.status)}</Badge>
+                  </div>
+                  {redLetter && r.originalInvoiceNo ? (
+                    <span className="cell-sub num truncate max-w-[180px]" title={`冲的是原票 ${r.originalInvoiceNo}`}>
+                      冲 {r.originalInvoiceNo}
+                    </span>
+                  ) : null}
                   {r.statusSource === 'manual' ? (
-                    <span className="cell-sub" title="人工改过的状态，不会被重新识别覆盖">
+                    <span className="cell-sub" title="人工改过的标记，不会被重新识别覆盖">
                       人工改过
                     </span>
                   ) : null}

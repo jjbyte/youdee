@@ -22,8 +22,10 @@ import { q, one } from '../db';
 import { AppError } from '../http';
 import { likePattern, paginated, type PageQuery } from '../params';
 import {
+  CONTRACT_EXPIRING_WINDOW_DAYS,
   DEFAULT_CONTRACT_CATEGORY,
   DEFAULT_CONTRACT_STATUS,
+  endBeforeSignedIssue,
   isContractCategory,
   isContractStatus,
   parseContractInput,
@@ -88,6 +90,8 @@ export interface ContractDTO {
   /** 签订中 / 履约中 / 结算中 / 已结算 / 已终止。写入路径只有 PATCH /contracts/:id/status */
   status: ContractStatus;
   signed_on: string | null;
+  /** 终止日期；有值 = 周期性合同（年 / 季度），到期前一个月进工作台 */
+  end_on: string | null;
   amount: string | null;
   note: string | null;
   created_by: string | null;
@@ -118,6 +122,7 @@ interface ContractRow extends QueryResultRow {
   category: string;
   status: string;
   signed_on: string | null;
+  end_on: string | null;
   amount: string | null;
   note: string | null;
   created_by: string | null;
@@ -159,7 +164,7 @@ interface QuoteRow extends QueryResultRow {
 
 const SELECT = `
   SELECT c.id, c.contract_no, c.title, c.company_name, c.customer_name, c.project_name,
-         c.category, c.status, c.signed_on, c.amount, c.note, c.created_by, u.name AS created_by_name,
+         c.category, c.status, c.signed_on, c.end_on, c.amount, c.note, c.created_by, u.name AS created_by_name,
          c.created_at, c.updated_at, c.deleted_at,
          (SELECT count(*) FROM contract_files f WHERE f.contract_id = c.id)::int AS file_count,
          (SELECT count(*) FROM contract_files f WHERE f.contract_id = c.id AND f.category = 'contract')::int AS contract_file_count,
@@ -182,6 +187,7 @@ function toDTO(r: ContractRow): ContractDTO {
     status: isContractStatus(r.status) ? r.status : DEFAULT_CONTRACT_STATUS,
     // date 列由 db.ts 的类型解析器原样返回 yyyy-mm-dd，不做时区转换
     signed_on: r.signed_on,
+    end_on: r.end_on,
     amount: r.amount,
     note: r.note,
     created_by: r.created_by,
@@ -264,6 +270,14 @@ export interface ContractListQuery {
   status?: ContractStatus | null;
   signedFrom: string | null;
   signedTo: string | null;
+  /**
+   * 只看「已经到期 + 一个月内到期」的周期性合同。工作台那条待处理点进来就是它。
+   *
+   * 上限是今天 + 30 天、**不设下限**：过期的合同不能因为过了那一天就悄悄从提醒里消失，
+   * 那正是最需要有人去续签的时候。已终止（terminated）的不算——那份合同已经结束了，
+   * 续不续是另一件事，不该一直占着提醒位。
+   */
+  expiring?: boolean;
   createdFrom: string | null;
   createdTo: string | null;
   hasFile: boolean | null;
@@ -304,6 +318,14 @@ export async function listContracts(query: ContractListQuery) {
   if (query.status) add((n) => `c.status = $${n}`, query.status);
   if (query.signedFrom) add((n) => `c.signed_on >= $${n}::date`, query.signedFrom);
   if (query.signedTo) add((n) => `c.signed_on <= $${n}::date`, query.signedTo);
+  if (query.expiring) {
+    // 用 CURRENT_DATE 而不是把"今天"从 Node 传进来：库与应用的时钟差一天的话，
+    // 提醒会在每月最后一天来回跳。窗口天数跟着参数走，口径只在这一处。
+    add(
+      (n) => `c.end_on IS NOT NULL AND c.end_on <= (CURRENT_DATE + $${n}::int) AND c.status <> 'terminated'`,
+      CONTRACT_EXPIRING_WINDOW_DAYS,
+    );
+  }
   // 创建日期是 timestamptz：用半开区间 [当天 0 点, 次日 0 点) 而不是 ::date，
   // 后者按会话时区截断，前端选 11-11 会漏掉当天下午建的合同
   if (query.createdFrom) add((n) => `c.created_at >= $${n}::date`, query.createdFrom);
@@ -318,9 +340,13 @@ export async function listContracts(query: ContractListQuery) {
   const where = parts.length ? `WHERE ${parts.join(' AND ')}` : '';
 
   const totalRows = await q<{ n: string }>(`SELECT count(*)::text AS n FROM contracts c ${where}`, params);
+  // 按"到期"筛的时候，人要看的是"哪份最先到期"，签订时间在这里没有意义
+  const order = query.expiring
+    ? 'c.end_on ASC, c.created_at DESC'
+    : 'c.signed_on DESC NULLS LAST, c.created_at DESC';
   const rows = await q<ContractRow>(
     `${SELECT} ${where}
-      ORDER BY c.signed_on DESC NULLS LAST, c.created_at DESC
+      ORDER BY ${order}
       LIMIT ${query.page.limit} OFFSET ${query.page.offset}`,
     params,
   );
@@ -378,8 +404,8 @@ export async function createContract(raw: Record<string, unknown>, actor: Curren
     throw new AppError(40001, '合同名称与公司名称都必须填。', 400);
   }
   const rows = await q<{ id: string }>(
-    `INSERT INTO contracts (contract_no, title, company_name, customer_name, project_name, category, signed_on, amount, note, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7::date,$8::numeric,$9,$10)
+    `INSERT INTO contracts (contract_no, title, company_name, customer_name, project_name, category, signed_on, end_on, amount, note, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::date,$8::date,$9::numeric,$10,$11)
      RETURNING id`,
     [
       value.contract_no ?? null,
@@ -389,6 +415,7 @@ export async function createContract(raw: Record<string, unknown>, actor: Curren
       value.project_name ?? null,
       value.category ?? DEFAULT_CONTRACT_CATEGORY,
       value.signed_on ?? null,
+      value.end_on ?? null,
       value.amount ?? null,
       value.note ?? null,
       actor.id,
@@ -401,10 +428,26 @@ export async function patchContract(
   id: string,
   raw: Record<string, unknown>,
 ): Promise<ContractDetailDTO> {
-  const existing = await one<{ id: string }>('SELECT id FROM contracts WHERE id = $1 AND deleted_at IS NULL', [id]);
+  const existing = await one<{ id: string; signed_on: string | null; end_on: string | null }>(
+    'SELECT id, signed_on, end_on FROM contracts WHERE id = $1 AND deleted_at IS NULL',
+    [id],
+  );
   if (!existing) throw new AppError(40401, '这份合同不存在，可能已经被删掉了。', 404);
 
   const { value, issues } = parseContractInput(raw, { partial: true });
+
+  /*
+   * 只改了两个日期中的一个时，`parseContractInput` 比不了（它只看这次提交的键），
+   * 于是「把签订日期挪到终止日期之后」这种改动会静悄悄落库。
+   * 所以这里用库里的另一半补齐，再走同一句判定。
+   */
+  if (!issues.some((i) => i.field === 'end_on')) {
+    const cross = endBeforeSignedIssue(
+      'signed_on' in value ? value.signed_on : existing.signed_on,
+      'end_on' in value ? value.end_on : existing.end_on,
+    );
+    if (cross) issues.push(cross);
+  }
   assertValid(issues);
 
   const sets: string[] = [];
@@ -420,6 +463,7 @@ export async function patchContract(
   if ('project_name' in value) set('project_name', value.project_name);
   if ('category' in value) set('category', value.category);
   if ('signed_on' in value) set('signed_on', value.signed_on, '::date');
+  if ('end_on' in value) set('end_on', value.end_on, '::date');
   if ('amount' in value) set('amount', value.amount, '::numeric');
   if ('note' in value) set('note', value.note);
 
@@ -664,4 +708,78 @@ export async function setContractStatus(id: string, status: ContractStatus): Pro
   );
   if (!rows[0]) throw new AppError(40401, '这份合同不存在，可能已经被删掉了。', 404);
   return getContract(id);
+}
+
+/* ── 周期性合同到期（工作台提醒）──────────────────────────────── */
+
+export interface ExpiringContractDTO {
+  id: string;
+  title: string;
+  contract_no: string | null;
+  customer_name: string | null;
+  /** 终止日期 yyyy-mm-dd */
+  end_on: string;
+  /** 距终止日期还有几天；**负数 = 已经过期**（不放过期，提醒会一直挂着直到续签或终止） */
+  days_left: number;
+}
+
+export interface ExpiringContractsDTO {
+  /** 已到期 + 一个月内到期的总数 */
+  total: number;
+  /** 其中已经过了终止日期的 */
+  expired: number;
+  /** 最早的几条，给工作台直接列出来 */
+  items: ExpiringContractDTO[];
+}
+
+/**
+ * 到期提醒的数据源（工作台用，仅管理员）。
+ *
+ * 窗口天数与列表筛选共用 `CONTRACT_EXPIRING_WINDOW_DAYS`：工作台说"3 份要到期"，
+ * 点进去列表也必须是那 3 份——两处各写一个 30，改的时候一定漏一个。
+ *
+ * 排除 `terminated`：已经终止的合同不需要人去续签，让它一直占着提醒位只会训练人忽略提醒。
+ */
+export async function listExpiringContracts(limit = 5): Promise<ExpiringContractsDTO> {
+  const head = await one<{ total: string; expired: string }>(
+    `SELECT count(*)::text AS total,
+            count(*) FILTER (WHERE end_on < CURRENT_DATE)::text AS expired
+       FROM contracts
+      WHERE deleted_at IS NULL
+        AND end_on IS NOT NULL
+        AND end_on <= CURRENT_DATE + $1::int
+        AND status <> 'terminated'`,
+    [CONTRACT_EXPIRING_WINDOW_DAYS],
+  );
+  const rows = await q<{
+    id: string;
+    title: string;
+    contract_no: string | null;
+    customer_name: string | null;
+    end_on: string;
+    days_left: number;
+  }>(
+    `SELECT id, title, contract_no, customer_name, end_on::text AS end_on,
+            (end_on - CURRENT_DATE)::int AS days_left
+       FROM contracts
+      WHERE deleted_at IS NULL
+        AND end_on IS NOT NULL
+        AND end_on <= CURRENT_DATE + $1::int
+        AND status <> 'terminated'
+      ORDER BY end_on ASC
+      LIMIT $2`,
+    [CONTRACT_EXPIRING_WINDOW_DAYS, limit],
+  );
+  return {
+    total: Number(head?.total ?? 0),
+    expired: Number(head?.expired ?? 0),
+    items: rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      contract_no: r.contract_no,
+      customer_name: r.customer_name,
+      end_on: r.end_on,
+      days_left: Number(r.days_left),
+    })),
+  };
 }

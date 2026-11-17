@@ -46,18 +46,26 @@ export interface UploadExtraItem {
 }
 
 /**
- * 这次上传识别出一张**红冲票**，而系统里已经有同号的发票（在用、且当前是「正常」）。
+ * 这次上传识别出一张**红字票**，而它冲的那张原票就在系统里（在用、仍是「正常」）。
  *
- * 为什么不在服务端直接把那张改成冲红：改状态会把三项金额翻成负数，是**会改合计**的动作。
- * 识别又不保证对（红票只有启发式线索：负号、票面/备注里的「红字」字样），
- * 所以让人看见这条判断、由他点一下，比替他改账安全。没点的话什么都不变。
+ * 两件事要分清：
+ *   1. 红字票本身**已经入账**（金额为负、状态正常）——它不是"待处理"，是台账里的一行；
+ *   2. 这里问的只是：要不要顺手把**原票**标成「已冲红」。
+ *
+ * 标记**不改金额**，所以标不标都不影响合计（负数是红字票那一行带来的）。
+ * 之所以还要问一句：这一步会改别人的票，而"谁冲了谁"是从票面文字读出来的，
+ * 读错就把一张无辜的票标脏了——让人看一眼比替他改安全。
  */
 export interface UploadRedHint {
+  /** 待标记的那张原票 */
   invoice_id: string;
   invoice_no: string;
-  /** 库里那张的价税合计，用来确认「说的是不是同一张票」 */
+  /** 库里那张原票的价税合计，用来确认「说的是不是同一张票」 */
   total_amount: string | null;
   current_status: 'normal' | 'red';
+  /** 冲它的那张红字票（这次上传的） */
+  red_invoice_no: string;
+  red_total_amount: string | null;
   /** 判定依据（人话），让用户自己判断这个红票结论可信不可信 */
   basis: string;
 }
@@ -83,13 +91,21 @@ function redBasisText(reason: string): string {
     : '票面上有「红字 / 红冲 / 冲红」字样';
 }
 
+/**
+ * 插一行票。
+ *
+ * `status` 恒为 `'normal'`：红字票也是一张正常凭证，它的「红」由 `is_red_letter`
+ * 表达（那一列决定三项金额的符号）。被它冲掉的原票才是 `status='red'`（已冲红），
+ * 而那条状态由人在上传后的提示里点，或事后在抽屉里改。
+ */
 function insertInvoiceSql(): string {
   return `INSERT INTO invoices
-       (invoice_no, invoice_code, status, status_source, invoice_type, invoice_type_label,
+       (invoice_no, invoice_code, status, status_source, is_red_letter, original_invoice_no,
+        invoice_type, invoice_type_label,
         issued_on, buyer_name, buyer_tax_no, seller_name, seller_tax_no,
         amount, tax_amount, total_amount, amount_check, ocr_raw, ocr_request_id, created_by)
-     VALUES ($1,$2,$3,'ocr',$4,$5,$6::date,$7,$8,$9,$10,
-             $11::numeric,$12::numeric,$13::numeric,$14,$15::jsonb,$16,$17)
+     VALUES ($1,$2,'normal','ocr',$3,$4,$5,$6,$7::date,$8,$9,$10,$11,
+             $12::numeric,$13::numeric,$14::numeric,$15,$16::jsonb,$17,$18)
      RETURNING id`;
 }
 
@@ -97,7 +113,8 @@ function insertParams(m: MappedInvoice, requestId: string | null, actorId: strin
   return [
     m.invoiceNo,
     m.invoiceCode,
-    m.status,
+    m.redLetter,
+    m.originalInvoiceNo,
     m.invoiceType.slice(0, 40),
     m.invoiceTypeLabel.slice(0, 60),
     m.issuedOn,
@@ -109,7 +126,7 @@ function insertParams(m: MappedInvoice, requestId: string | null, actorId: strin
     m.taxAmount,
     m.totalAmount,
     m.amountCheck,
-    JSON.stringify({ ...m.raw, statusReason: m.statusReason }),
+    JSON.stringify({ ...m.raw, statusReason: m.statusReason, redLetter: m.redLetter }),
     requestId,
     actorId,
   ];
@@ -122,6 +139,68 @@ async function fileCountInTx(client: PoolClient, invoiceId: string): Promise<num
     [invoiceId],
   );
   return Number(r.rows[0]?.n ?? 0);
+}
+
+interface OriginalRow {
+  id: string;
+  invoice_no: string;
+  status: string;
+  total_amount: string | null;
+  deleted_at: Date | null;
+}
+
+/**
+ * 红字票 → 「要不要把原票标成已冲红」。
+ *
+ * 三种情形都要说清楚，因为它们的后果不同：
+ *   1. 原票在台账里、仍是「正常」→ 攒一条提示，让人点一下（这是主路径）；
+ *   2. 原票在台账里但已经是「已冲红」→ 什么都不用做，静默（重复上传同一张红字票时就是这样）；
+ *   3. 原票不在台账里 → 给一句 warning：这张红字票已经记上了，但它冲的那张票我们没有，
+ *      补录之后别忘了标。**不能因为找不到原票就不记红字票**——那笔负数是真的发生了。
+ *
+ * 查不到 / 已删除 / 自己冲自己都不提示：前两种点不了，第三种是识别噪声。
+ */
+async function collectOriginalHint(
+  client: PoolClient,
+  m: MappedInvoice,
+  hints: UploadRedHint[],
+  warnings: string[],
+): Promise<void> {
+  const target = m.originalInvoiceNo;
+  if (!target) return; // 映射阶段已经提示过「没读出原票号码」
+  if (target === m.invoiceNo) return;
+
+  const found = await client.query<OriginalRow>(
+    `SELECT id, invoice_no, status, total_amount, deleted_at
+       FROM invoices
+      WHERE invoice_no = $1
+      ORDER BY (deleted_at IS NULL) DESC, created_at
+      LIMIT 1`,
+    [target],
+  );
+  const o = found.rows[0];
+  if (!o) {
+    warnings.push(
+      `${m.invoiceNo}：这张红字票冲的原票 ${target} 还没在台账里，红字票已按负数记上；补录原票后记得把它标成「已冲红」。`,
+    );
+    return;
+  }
+  if (o.deleted_at) {
+    warnings.push(`${m.invoiceNo}：原票 ${target} 在「已删除」里，没有替你改它。恢复之后再标「已冲红」。`);
+    return;
+  }
+  if (o.status === 'red') return; // 已经是答案，不再问第二次
+  if (hints.some((h) => h.invoice_id === o.id)) return;
+
+  hints.push({
+    invoice_id: o.id,
+    invoice_no: o.invoice_no,
+    total_amount: o.total_amount,
+    current_status: 'normal',
+    red_invoice_no: m.invoiceNo,
+    red_total_amount: m.totalAmount,
+    basis: redBasisText(m.statusReason),
+  });
 }
 
 /**
@@ -184,12 +263,22 @@ export async function persistUpload(opts: {
       let firstAttached = false;
       const extra: UploadExtraItem[] = [];
       const redHints: UploadRedHint[] = [];
-      /** 新插入的红票号码：入库后要提示人「这一张是按冲红记的」 */
+      /** 新插入的红票号码：入库后要提示人「这一张是按红字票记的」 */
       const insertedRed: string[] = [];
+      /** 事务内产生的提示（原票找不到之类），出事务后并进 warnings */
+      const redWarnings: string[] = [];
       let referenced = 0;
 
       for (let i = 0; i < outcome.items.length; i += 1) {
         const m = outcome.items[i]!;
+
+        /*
+         * 红字票：先把它冲的那张原票找出来，攒一条「要不要标已冲红」的提示。
+         * 放在这里而不是判重之后，是因为**红字票自己的号码是新的**（每张红字票
+         * 都有自己的号），走不到判重分支——0.1.38 就是这么漏掉整件事的。
+         */
+        if (m.redLetter) await collectOriginalHint(client, m, redHints, redWarnings);
+
         // 判重口径与手工录入**必须同一套**（Spec §12-7：代码为空时对号码放宽匹配）。
         // 原来这里是 `invoice_code = $1 AND invoice_no = $2` 全等：一次没认出代码存成 ''，
         // 重传时认出代码就会新建一行——同一张票两条记录，金额与税额全部虚增，且没有提示。
@@ -202,9 +291,8 @@ export async function persistUpload(opts: {
           total_amount: string | null;
           deleted_at: Date | null;
         }>(
-          /* `status` / `total_amount` / `deleted_at` 只为「红冲确认」而取：
-             红票要不要提示人改状态，取决于库里那张现在是正常还是已冲红、有没有被删。
-             多取三列不额外扫表，却省掉一次事务内二次查询。 */
+          /* `status` / `total_amount` / `deleted_at` 顺手取回来（同一次扫描）：
+             重传一张已冲红的票时，界面上要能说清"那张已经标过了"，而不是又让人点一次。 */
           `SELECT id, invoice_code, invoice_no, status, total_amount, deleted_at
              FROM invoices
             WHERE invoice_no = $1
@@ -217,23 +305,6 @@ export async function persistUpload(opts: {
         );
 
         if (hit) {
-          /*
-           * 识别成红冲票、而同号发票已经在库且仍是「正常」→ 攒一条待确认提示。
-           *
-           * 不在这里直接把 hit 改成红冲：那会把三项金额翻成负数、改掉「合计」这个
-           * 对账数字，而红票判定只是启发式（负号 / 票面文字）。让人看见并点一下，
-           * 比替他改账安全；他不点，这里就什么都不变。
-           * 已经删掉的、本来就是红票的都不问——前者不在台账里，后者已经是答案。
-           */
-          if (m.status === 'red' && hit.status === 'normal' && !hit.deleted_at) {
-            redHints.push({
-              invoice_id: hit.id,
-              invoice_no: hit.invoice_no,
-              total_amount: hit.total_amount,
-              current_status: 'normal',
-              basis: redBasisText(m.statusReason),
-            });
-          }
           // 命中去重：只在"这张票还没有原件"时补挂；否则丢弃这份原件
           const n = await fileCountInTx(client, hit.id);
           let attached = false;
@@ -260,8 +331,8 @@ export async function persistUpload(opts: {
 
         const inserted = await client.query<{ id: string }>(insertInvoiceSql(), insertParams(m, outcome.requestId, actor.id));
         const id = inserted.rows[0]!.id;
-        // 库里没有同号票 → 按"这就是一张红冲票"直接入账（金额已经是负数）
-        if (m.status === 'red') insertedRed.push(m.invoiceNo);
+        // 红字票照记：金额是负数（映射阶段已经取负），状态仍是「正常」
+        if (m.redLetter) insertedRed.push(m.invoiceNo);
         await insertInvoiceFileRow(client, id, stored!);
         referenced += 1;
         if (i === 0) {
@@ -273,13 +344,13 @@ export async function persistUpload(opts: {
       }
 
       if (!firstId) throw new AppError(42208, '这张票没认出来，请重传一次或用「手工录入」。', 422, { field: 'file' });
-      return { firstId, firstDuplicated, firstAttached, extra, redHints, insertedRed, referenced };
+      return { firstId, firstDuplicated, firstAttached, extra, redHints, insertedRed, redWarnings, referenced };
     });
 
     // ② 这份物理文件一行都没被引用（命中的票本来就有原件）→ 立刻回收，别留孤儿
     if (outcomeTx.referenced === 0) await discardStoredFile(stored);
 
-    const warnings = [...outcome.warnings];
+    const warnings = [...outcome.warnings, ...outcomeTx.redWarnings];
     for (const m of outcome.items) {
       for (const w of m.warnings) warnings.push(`${m.invoiceNo}：${w}`);
     }
@@ -291,7 +362,7 @@ export async function persistUpload(opts: {
       );
     }
     for (const no of outcomeTx.insertedRed) {
-      warnings.push(`${no}：识别成红冲票，已按冲红入库（三项金额是负数）。`);
+      warnings.push(`${no}：这是红字票，已按负数入账（状态显示「正常」——它本身就是一张正常凭证）。`);
     }
     const skippedNote = outcome.skipped.length;
     if (skippedNote > 0) {

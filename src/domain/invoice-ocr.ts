@@ -29,7 +29,7 @@ import {
   toCents,
   type AmountCheck,
 } from './invoice-record';
-import { ORIGINAL_INVOICE_KEYS, extractOriginalInvoiceNo } from './invoice-red-letter';
+import { extractOriginalFromFields, extractOriginalInvoiceNo } from './invoice-red-letter';
 import { fmtAmount } from './money';
 
 /* ── SubType 分组表（务必按组取字段，不能混取）────────────────── */
@@ -229,25 +229,40 @@ function pickInfo(
 
 /* ── 单张映射 ─────────────────────────────────────────────── */
 
+/**
+ * 红字票但没读出原票号时的那句话。
+ *
+ * 两个分支（增值税 / 铁路客票）说的是同一件事，所以只有一份文案：
+ * 抄成两句之后，改一处就会在另一处留下一个说法不一样的提示。
+ */
+const NO_ORIGINAL_WARNING = '这张像红字票，但没读出它冲的是哪张原票，请记完手动对一下原票';
 
 /**
  * 红字票冲的是哪一张。
  *
  * 查找顺序是**先结构化字段、再备注、最后整段兜底**：
- *   - 腾讯云对红字票没有稳定字段（各票种各叫一个名），`ORIGINAL_INVOICE_KEYS` 只是先试一遍；
- *   - 真正的信息一般写在 `Remark`：「被红冲蓝字数电发票号码：xxxx」；
- *   - 兜底把那一段信息里所有字符串拼起来再找一遍：字段名猜错时不至于永远返回 null。
+ *   - 结构化字段最可靠：铁路电子客票的红字票就把原票号放在 `OriginalNumber` 里
+ *     （真样张：`26949134178001843878`），票面上没有任何"原发票号码"字样；
+ *   - 增值税那边红字信息一般写在 `Remark`：「被红冲蓝字数电发票号码：xxxx」；
+ *   - 兜底把那一段里所有字符串再按标签找一遍：字段名猜错时不至于永远返回 null。
  *
- * 认错一个号码的代价是"提示用户把另一张无辜的票标成已冲红"，所以这里
- * **只认显式标签 + 号码**（见 invoice-red-letter），不在没有标签的文本里乱抓 20 位数字。
+ * 认错一个号码的代价是"提示用户把另一张无辜的票标成已冲红"，所以两条路径都只认
+ * **有依据的号码**：结构化字段按形态（8 位 / 20 位）+ 键名白名单，文本按显式标签
+ * （见 invoice-red-letter），不在没有标签的文本里乱抓数字。
+ *
+ * `selfInvoiceNo` 用来排除"字段里放的是本票号码"的情况。
  */
-function readOriginalInvoiceNo(info: Record<string, unknown>, redLetter: boolean): string | null {
+function readOriginalInvoiceNo(
+  info: Record<string, unknown>,
+  redLetter: boolean,
+  selfInvoiceNo: string | null = null,
+): string | null {
   if (!redLetter) return null;
-  const structured = ORIGINAL_INVOICE_KEYS.map((k) => (typeof info[k] === 'string' ? (info[k] as string) : null));
+  const byField = extractOriginalFromFields(info, selfInvoiceNo);
+  if (byField.invoiceNo) return byField.invoiceNo;
   const remark = typeof info.Remark === 'string' ? info.Remark : null;
   const allStrings = Object.values(info).filter((v): v is string => typeof v === 'string');
-  const hit = extractOriginalInvoiceNo([...structured, remark, ...allStrings]);
-  return hit.invoiceNo;
+  return extractOriginalInvoiceNo([remark, ...allStrings]).invoiceNo;
 }
 
 /* ── 铁路电子客票（Type 16 的另一套字段）──────────────────────── */
@@ -338,6 +353,9 @@ function mapRailInvoice(args: {
   if (reconciled.warning) warnings.push(reconciled.warning);
   if (signed.warning) warnings.push(signed.warning);
 
+  const originalInvoiceNo = readOriginalInvoiceNo(info, detected.redLetter, invoiceNo);
+  if (detected.redLetter && !originalInvoiceNo) warnings.push(NO_ORIGINAL_WARNING);
+
   return {
     ok: true,
     invoice: {
@@ -354,8 +372,15 @@ function mapRailInvoice(args: {
       amountCheck: reconciled.check,
       redLetter: detected.redLetter,
       statusReason: detected.reason,
-      // 铁路客票目前没有红字版式（退票是另一张客票），不读原票号码
-      originalInvoiceNo: null,
+      /*
+       * 铁路客票**有**红字版式，而且原票号是结构化字段给的。
+       *
+       * 真样张（2026-11-17）：思凡的红字铁路票 `Number=26949334178000034160`、
+       * `OriginalNumber=26949134178001843878`，三项金额全负、票面没有一个"红字"字样，
+       * 也没有「被红冲蓝字数电发票号码」。0.1.39 写死 null 的那一版会把这张票
+       * 记成"不知道冲的是哪张"，原票永远显示「正常」——所以这里必须走同一套读取。
+       */
+      originalInvoiceNo: readOriginalInvoiceNo(info, detected.redLetter, invoiceNo),
       invoiceType: subType,
       invoiceTypeLabel: label || '电子发票（铁路电子客票）',
       page,
@@ -484,10 +509,8 @@ export function mapInvoiceItem(item: unknown): MapOneResult {
    * 红字票的原票号码：认不出来不算失败（票还是照记，负数照样抵账），
    * 但要提醒一句——没有它就是"不知道这张冲的是哪一张"，那笔原票会一直显示「正常」。
    */
-  const originalInvoiceNo = readOriginalInvoiceNo(info, detected.redLetter);
-  if (detected.redLetter && !originalInvoiceNo) {
-    warnings.push('这张像红字票，但票面上没读出「被红冲蓝字发票号码 / 原发票号码」，记完请手动对一下原票');
-  }
+  const originalInvoiceNo = readOriginalInvoiceNo(info, detected.redLetter, invoiceNo);
+  if (detected.redLetter && !originalInvoiceNo) warnings.push(NO_ORIGINAL_WARNING);
 
   return {
     ok: true,

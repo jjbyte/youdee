@@ -6,7 +6,7 @@
  * 认不出来的情形也留一条（宁可少问一次，也不要瞎猜一个号码）。
  */
 import { describe, expect, it } from 'vitest';
-import { extractOriginalInvoiceNo } from '../src/domain/invoice-red-letter';
+import { extractOriginalFromFields, extractOriginalInvoiceNo } from '../src/domain/invoice-red-letter';
 import { contractExpiry } from '../src/lib/contract-expiry';
 
 describe('红字票的原发票号码', () => {
@@ -51,6 +51,57 @@ describe('红字票的原发票号码', () => {
   it('没有任何标签 → null（20 位数字裸奔时不猜）', () => {
     expect(extractOriginalInvoiceNo(['25112000000012345678']).invoiceNo).toBeNull();
     expect(extractOriginalInvoiceNo([null, undefined, '']).invoiceNo).toBeNull();
+  });
+});
+
+/**
+ * 结构化字段那条路（真样张补的）。
+ *
+ * 铁路电子客票的红字票把原票号码放在 `OriginalNumber` 里，票面上**一个字都没写**
+ * "原发票号码"。0.1.39 只把这些字段的**值**当成文字交给标签匹配 → 值里没有标签 →
+ * 永远返回 null，那张原票就一直显示「正常」。所以这条路必须单独测。
+ */
+describe('红字票的原票号码（结构化字段）', () => {
+  /** 真样张：思凡的红字铁路票 */
+  const RAIL_RED = {
+    Number: '26949334178000034160',
+    OriginalNumber: '26949134178001843878',
+    Fare: '-306.50',
+    Tax: '-25.31',
+    Total: '-281.19',
+  };
+
+  it('原票号直接给在 OriginalNumber 里 → 取值，label 记字段名', () => {
+    const r = extractOriginalFromFields(RAIL_RED, RAIL_RED.Number);
+    expect(r.invoiceNo).toBe('26949134178001843878');
+    expect(r.label).toBe('OriginalNumber');
+  });
+
+  it('纸质票的「代码-号码」写法取右段', () => {
+    const r = extractOriginalFromFields({ OriginalInvoiceNo: '044031900111-12345678' });
+    expect(r.invoiceNo).toBe('12345678');
+  });
+
+  it('8 位纸质号码与 20 位全电号码都收，其它长度一律不收（没有标签的数字只能靠形态判断）', () => {
+    expect(extractOriginalFromFields({ OriginalNumber: '12345678' }).invoiceNo).toBe('12345678');
+    expect(extractOriginalFromFields({ OriginalNumber: '25112000000012345678' }).invoiceNo).toBe(
+      '25112000000012345678',
+    );
+    // 9 位 / 6 位 / 带汉字 → 不是发票号码，宁可不猜
+    expect(extractOriginalFromFields({ OriginalNumber: '123456789' }).invoiceNo).toBeNull();
+    expect(extractOriginalFromFields({ OriginalNumber: 'G3811' }).invoiceNo).toBeNull();
+    expect(extractOriginalFromFields({ OriginalNumber: '08车05D号' }).invoiceNo).toBeNull();
+  });
+
+  it('字段里放的是本票号码 → 不采信（那就是"冲自己"）', () => {
+    const r = extractOriginalFromFields(RAIL_RED, '26949134178001843878');
+    expect(r.invoiceNo).toBeNull();
+  });
+
+  it('字段全是空 / 非字符串 → null，不抛错', () => {
+    expect(extractOriginalFromFields({}).invoiceNo).toBeNull();
+    expect(extractOriginalFromFields({ OriginalNumber: null, OriginalInvoiceNo: 123 }).invoiceNo).toBeNull();
+    expect(extractOriginalFromFields({ OriginalNumber: '   ' }).invoiceNo).toBeNull();
   });
 });
 

@@ -261,7 +261,9 @@ describe('红票与异常输入', () => {
     const r = mapInvoiceItem(redNoOriginal);
     if (!r.ok) throw new Error('should map');
     expect(r.invoice.originalInvoiceNo).toBeNull();
-    expect(r.invoice.warnings.join()).toContain('原发票号码');
+    // 文案不再点名「原发票号码」那几个字：现在结构化字段（OriginalNumber）也算一条路，
+    // 说「票面上没读出原发票号码」会与事实不符（票面上确实没写，但字段里可能有）
+    expect(r.invoice.warnings.join()).toContain('原票');
   });
 
   it('蓝字票不去猜原票号码（备注里有类似字样也不看）', () => {
@@ -531,5 +533,67 @@ describe('电子发票（铁路电子客票）', () => {
     if (m.ok) throw new Error('should reject');
     expect(m.skip.code).toBe(42208);
     expect(m.skip.reason).toBe('invoice_no_unreadable');
+  });
+
+  /**
+   * 红字铁路票（真样张补的）：0.1.39 那句「铁路客票目前没有红字版式」是错的。
+   * 思凡那张 `红字发票-2cu0n12000u4e25hpEE47.ofd` 就是红字铁路票，原票号在
+   * `OriginalNumber` 里，票面没有任何"红字 / 原发票号码"字样。
+   */
+  it('红字铁路票：读得出 OriginalNumber 里的原票号，不再提示手工对账', () => {
+    const redRail = {
+      ...RAIL,
+      SingleInvoiceInfos: {
+        ElectronicTrainTicketFull: {
+          ...RAIL.SingleInvoiceInfos.ElectronicTrainTicketFull,
+          Number: '26949334178000034160',
+          OriginalNumber: '26949134178001843878',
+          Fare: '-306.50',
+          Tax: '-25.31',
+          Total: '-281.19',
+        },
+      },
+    };
+    const m = mapInvoiceItem(redRail);
+    if (!m.ok) throw new Error('should map');
+    expect(m.invoice.redLetter).toBe(true);
+    expect(m.invoice.originalInvoiceNo).toBe('26949134178001843878');
+    expect(m.invoice.warnings).toEqual([]);
+    expect(m.invoice.totalAmount).toBe('-306.50');
+  });
+
+  it('红字铁路票但没给原票号：照记，并提示手工对一下', () => {
+    const redRailNoOrig = {
+      ...RAIL,
+      SingleInvoiceInfos: {
+        ElectronicTrainTicketFull: {
+          ...RAIL.SingleInvoiceInfos.ElectronicTrainTicketFull,
+          Fare: '-306.50',
+          Tax: '-25.31',
+          Total: '-281.19',
+        },
+      },
+    };
+    const m = mapInvoiceItem(redRailNoOrig);
+    if (!m.ok) throw new Error('should map');
+    expect(m.invoice.redLetter).toBe(true);
+    expect(m.invoice.originalInvoiceNo).toBeNull();
+    expect(m.invoice.warnings.join('｜')).toContain('原票');
+  });
+
+  it('蓝票上就算带了 OriginalNumber 也不采信（只有红字票才读原票号）', () => {
+    const blueWithStray = {
+      ...RAIL,
+      SingleInvoiceInfos: {
+        ElectronicTrainTicketFull: {
+          ...RAIL.SingleInvoiceInfos.ElectronicTrainTicketFull,
+          OriginalNumber: '26949134178001843878',
+        },
+      },
+    };
+    const m = mapInvoiceItem(blueWithStray);
+    if (!m.ok) throw new Error('should map');
+    expect(m.invoice.redLetter).toBe(false);
+    expect(m.invoice.originalInvoiceNo).toBeNull();
   });
 });

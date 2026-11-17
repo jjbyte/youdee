@@ -278,7 +278,8 @@ function ContractsPageInner() {
           <h1 className="t-xl">合同管理</h1>
           <p className="t-sm t-3 mt-[var(--space-1)]">
             公司签过的合同都在这儿。合同电子版、报价单、结算资料都跟着合同存，按编号、名称、甲乙方、日期都能查到。
-            填了终止日期的算周期性合同（年 / 季度），到期前一个月会出现在工作台。
+            填了终止日期的算周期性合同（年 / 季度）：到期近的自动排在最前面，一个月内到期的日期标红，
+            工作台也会给管理员留一条待办。
           </p>
         </div>
         <Button
@@ -572,6 +573,13 @@ function ContractsPageInner() {
                     const deleted = r.deletedAt !== null;
                     // 一行只算一次：到期这句话在三处要说（列表 / 抽屉 / 工作台），算法只有一份
                     const expiry = contractExpiry(r.endOn);
+                    /**
+                     * 「还剩 3 天」只在**还该续签**的时候才说。
+                     * 已终止 / 已删除的合同终止日是历史信息：日期照显示，但不再催，
+                     * 也不标红 —— 否则列表末尾那几行一边灰着「已终止」，一边红着
+                     * 「还剩 8 天」，红的那句会把人叫回来点开一个已经结束的合同。
+                     */
+                    const renewWorthy = r.status !== 'terminated' && !deleted;
                     return (
                       <tr
                         key={r.id}
@@ -613,22 +621,26 @@ function ContractsPageInner() {
                             <span className="t-3 t-xs">没填</span>
                           )}
                           {/* 有终止日期 = 周期性合同（年 / 季度）。到期临近时这一行自己会说出来，
-                              不用人去心算「2027-03-31 还有多久」 */}
+                              不用人去心算「2027-03-31 还有多久」。
+                              一个月内的「日期本身」也标红：只标红「还剩 3 天」那句时，
+                              眼睛扫一列日期是看不出哪份急的 —— 而这正是客户要的那一眼。 */}
                           {expiry ? (
                             <span className="cell-sub flex items-center gap-[var(--space-2)]">
-                              <span className="num">→ {formatDate(r.endOn)}</span>
                               <span
-                                className={cx(
-                                  't-2xs',
-                                  expiry.tone === 'expired'
-                                    ? 't-danger fw-semi'
-                                    : expiry.tone === 'soon'
-                                      ? 't-warning fw-semi'
-                                      : 't-3',
-                                )}
+                                className={cx('num', renewWorthy && expiry.tone !== 'normal' && 't-danger fw-semi')}
+                                title={
+                                  renewWorthy && expiry.tone !== 'normal'
+                                    ? `终止日期 ${formatDate(r.endOn)}，${expiry.text}，记得安排续签`
+                                    : `终止日期 ${formatDate(r.endOn)}`
+                                }
                               >
-                                {expiry.text}
+                                → {formatDate(r.endOn)}
                               </span>
+                              {renewWorthy ? (
+                                <span className={cx('t-2xs', expiry.tone === 'normal' ? 't-3' : 't-danger fw-semi')}>
+                                  {expiry.text}
+                                </span>
+                              ) : null}
                             </span>
                           ) : null}
                         </Td>

@@ -3,7 +3,9 @@ import {
   canAccessContracts,
   canAccessInvoices,
   canArchive,
+  canCreateCatalog,
   canDeleteRecord,
+  canManageCatalog,
   ROLE_CAPABILITIES,
 } from '../src/domain/permissions';
 import { canRestore, canVoid } from '../src/domain/quote-status';
@@ -60,6 +62,38 @@ describe('合同 / 发票整块只对管理员开放（2026-11-17）', () => {
     expect(invoice?.member).toBe(false);
     expect(contract?.admin).toBe(true);
     expect(invoice?.admin).toBe(true);
+  });
+});
+
+describe('建档（物料 / 人员 / 供应商）对成员开放，改档仍然关门（2026-11-17）', () => {
+  /**
+   * 客户的原话是「普通成员无法新建物料、人员库、供应商、物料报价，报错要管理员权限」。
+   * 所以这条边界测的是**两半**：建档真的开了，改档真的没跟着开。
+   * 只测前一半的话，把 canManageCatalog 一起改成 true 也能过——而那正是不能发生的事：
+   * 成员把「桁架 3m」改名成「桁架」，历史报价单里那行还指着它，
+   * 从此同一个东西在两张单上叫两个名字，而没有任何一条数据能说明是什么时候变的。
+   */
+  it('建档：两种角色都能', () => {
+    expect(canCreateCatalog('admin')).toBe(true);
+    expect(canCreateCatalog('member')).toBe(true);
+  });
+
+  it('改档 / 分类字典：只有管理员', () => {
+    expect(canManageCatalog('admin')).toBe(true);
+    expect(canManageCatalog('member')).toBe(false);
+  });
+
+  it('能力表里「新建物料 / 人员 / 供应商」对成员是开的', () => {
+    const create = ROLE_CAPABILITIES.find((c) => c.label.startsWith('新建物料'));
+    expect(create).toBeDefined();
+    expect(create?.member).toBe(true);
+  });
+
+  it('能力表里「改已有档案」对成员是关的', () => {
+    const edit = ROLE_CAPABILITIES.find((c) => c.label.startsWith('改已有档案'));
+    expect(edit).toBeDefined();
+    expect(edit?.member).toBe(false);
+    expect(edit?.admin).toBe(true);
   });
 });
 

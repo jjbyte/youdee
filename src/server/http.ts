@@ -9,7 +9,7 @@
  */
 import { NextResponse } from 'next/server';
 import { currentUser, type CurrentUser } from './auth/session';
-import { canCreatePrice, canOverridePrice, canManageCatalog, canManageUsers, canExportInternal, canArchive, canDeleteRecord, canAccessContracts, canAccessInvoices } from '@/domain/permissions';
+import { canCreateCatalog, canCreatePrice, canOverridePrice, canManageCatalog, canManageUsers, canExportInternal, canArchive, canDeleteRecord, canAccessContracts, canAccessInvoices } from '@/domain/permissions';
 
 export interface ApiError {
   code: number;
@@ -205,6 +205,19 @@ export async function requireAdmin(what = '该操作'): Promise<CurrentUser> {
   if (!canManageCatalog(u.role) || !canManageUsers(u.role)) {
     throw new AppError(40301, `${what}需要管理员权限。`, 403);
   }
+  return u;
+}
+
+/**
+ * 建档：新建物料 / 人员 / 供应商（member 也能）。
+ *
+ * 与 `requireAdmin` 分开，不是给 admin 开后门，而是把"加法"和"改口径"分开：
+ * 建档错了，作废就能藏起来（作废成员本来就能做）；改档会把同一个东西换个名字，
+ * 而历史报价单里那行还指着它 —— 那种错没人能从数据里看出来。
+ */
+export async function requireCatalogCreate(what = '该操作'): Promise<CurrentUser> {
+  const u = await requireUser();
+  if (!canCreateCatalog(u.role)) throw new AppError(40301, `${what}需要管理员权限。`, 403);
   return u;
 }
 

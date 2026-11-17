@@ -1,4 +1,4 @@
-import { body, boolParam, ok, optStr, requireAdmin, requireUser, reqStr, searchParams } from '@/server/http';
+import { body, boolParam, ok, optStr, requireCatalogCreate, requireUser, reqStr, searchParams } from '@/server/http';
 import { enumParam, pageQuery, sortClause } from '@/server/params';
 import { route } from '@/server/wrap';
 import { listItems } from '@/server/services/items-read.service';
@@ -32,7 +32,8 @@ export const GET = route(async (req) => {
 });
 
 export const POST = route(async (req) => {
-  const actor = await requireAdmin('新建计价主体');
+  // 建档成员也能做（2026-11-17）；改档仍是 requireAdmin（见 [id]/route.ts）
+  const actor = await requireCatalogCreate('新建计价主体');
   const b = await body<Record<string, unknown>>(req);
   const created = await createItem(actor, {
     item_type: reqStr(b.item_type, '主体类型', 20),

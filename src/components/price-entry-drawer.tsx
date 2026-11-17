@@ -10,7 +10,7 @@ import { Drawer, Toast } from '@/components/ui/overlay';
 import { Badge } from '@/components/ui/badge';
 import { Note } from '@/components/ui/states';
 import { useMe } from '@/lib/use-me';
-import { canCreatePrice, canManageCatalog } from '@/domain/permissions';
+import { canCreateCatalog, canCreatePrice } from '@/domain/permissions';
 import { IconPlus, IconRisk } from '@/components/icons';
 import { PriceTierEditor, type TierDraft } from './price-tier-editor';
 
@@ -284,7 +284,9 @@ export function PriceEntryDrawer({
                   </button>
                 ))}
                 {filtered.length === 0 ? <div className="t-sm t-3 p-[var(--space-2)]">没找到这家。</div> : null}
-                {canManageCatalog(role) ? (
+                {/* 就地建档：成员也能（2026-11-17）。录价时发现的新供应商当场登记，
+                    否则这条价就录不下去 —— 而"录不下去"的下一步是记在微信里，月底再补。 */}
+                {canCreateCatalog(role) ? (
                   <button
                     type="button"
                     className="btn btn--ghost btn--sm w-full !justify-start"

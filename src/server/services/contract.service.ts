@@ -287,8 +287,8 @@ export interface ContractListQuery {
 }
 
 /**
- * 列表顺序：签订时间倒序，没填签订日期的排在最后（NULLS LAST）。
- * 不能让没填日期的合同沉到最后就消失——它仍在列表里，只是排在末尾。
+ * 列表顺序：**先到期、后签订**。三段见函数体内的注释。
+ * 没填签订日期的合同不会因为排序沉到看不见——它仍在列表里，只是在同一段内排末尾（NULLS LAST）。
  */
 export async function listContracts(query: ContractListQuery) {
   const parts: string[] = [];
@@ -340,10 +340,30 @@ export async function listContracts(query: ContractListQuery) {
   const where = parts.length ? `WHERE ${parts.join(' AND ')}` : '';
 
   const totalRows = await q<{ n: string }>(`SELECT count(*)::text AS n FROM contracts c ${where}`, params);
-  // 按"到期"筛的时候，人要看的是"哪份最先到期"，签订时间在这里没有意义
-  const order = query.expiring
-    ? 'c.end_on ASC, c.created_at DESC'
-    : 'c.signed_on DESC NULLS LAST, c.created_at DESC';
+
+  /*
+   * 排序（2026-11-17 客户要求：到期近的排最前）。
+   *
+   *   0 段 一个月内到期（含已过期）—— 唯一需要动作的一批，日期由近到远
+   *   1 段 其余填了终止日期的周期性合同 —— 也是日期由近到远
+   *   2 段 没有终止日期的（非周期性 / 还没填）—— 维持原口径：签订时间倒序
+   *   已终止 / 已删除的压到 2 段：它们不需要续签，终止日只是历史信息，
+   *   让它按"最早到期"顶在最前面，只会把真正该续的那几份挤下去。
+   *   （已删除的只在管理员勾了「已删除」时才出现在列表里，但出现了也不该占头条。）
+   *
+   * 窗口天数用参数而不是字面量：它和上面 ?expiring=1 的筛选必须是同一个数，
+   * 两处各写一个 30，改一处漏一处时列表的"排最前"和筛选的"只出这批"就对不上。
+   */
+  params.push(CONTRACT_EXPIRING_WINDOW_DAYS);
+  const order = `CASE
+      WHEN c.status = 'terminated' OR c.deleted_at IS NOT NULL THEN 2
+      WHEN c.end_on IS NOT NULL AND c.end_on <= (CURRENT_DATE + $${params.length}::int) THEN 0
+      WHEN c.end_on IS NOT NULL THEN 1
+      ELSE 2
+    END,
+    c.end_on ASC NULLS LAST,
+    c.signed_on DESC NULLS LAST,
+    c.created_at DESC`;
   const rows = await q<ContractRow>(
     `${SELECT} ${where}
       ORDER BY ${order}

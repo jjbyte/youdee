@@ -1,4 +1,4 @@
-import { body, boolParam, ok, optLoose, optStr, requireAdmin, requireUser, reqStr, searchParams } from '@/server/http';
+import { body, boolParam, ok, optLoose, optStr, requireCatalogCreate, requireUser, reqStr, searchParams } from '@/server/http';
 import { enumParam, pageQuery, sortClause } from '@/server/params';
 import { route } from '@/server/wrap';
 import { SUPPLIER_TYPES } from '@/domain/units';
@@ -23,7 +23,9 @@ export const GET = route(async (req) => {
 });
 
 export const POST = route(async (req) => {
-  await requireAdmin('新建供应商');
+  // 建档成员也能做（2026-11-17）：录价时发现新供应商就能当场登记。
+  // 改档仍只有管理员（见 [id]/route.ts）—— 改名会让历史报价单对不上人。
+  await requireCatalogCreate('新建供应商');
   const b = await body<Record<string, unknown>>(req);
   const created = await createSupplier({
     name: reqStr(b.name, '供应商名称', 80),

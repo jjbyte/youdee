@@ -55,9 +55,23 @@ export function canManageUsers(role: Role): boolean {
   return role === 'admin';
 }
 
-/** 供应商/分类/主体维护 */
+/** 供应商/分类/主体维护（改档、删档、分类字典） */
 export function canManageCatalog(role: Role): boolean {
   return role === 'admin';
+}
+
+/**
+ * 建档：新建物料 / 人员 / 供应商（2026-11-17 客户要求，member 也能建）。
+ *
+ * 和 `canManageCatalog` 拆成两个函数，理由与「新建价格 / 改旧价」那一对完全一样：
+ * 建档是**加法**——建错了一条，作废就看不见了（作废 `canArchive` 本来成员就能做）；
+ * 改档是**改口径**——同名主体被改名换单位后，历史报价单里那行还指着它，
+ * 从此"同一个东西"在两个地方叫两个名字，而没有人能从数据里看出来是什么时候变的。
+ *
+ * 所以分界线不是"重要不重要"，是"做完之后别人手里的数字会不会跟着变"。
+ */
+export function canCreateCatalog(role: Role): boolean {
+  return role === 'admin' || role === 'member';
 }
 
 /**
@@ -96,13 +110,15 @@ export const ROLE_CAPABILITIES: RoleCapability[] = [
   { label: '屏幕上看成本与毛利', admin: true, member: true },
   { label: '手填成本（只影响本单）', admin: true, member: true },
   { label: '新建一条价（含版本化复制）', admin: true, member: true },
+  { label: '新建物料 / 人员 / 供应商', admin: true, member: true },
   { label: '作废 / 恢复（可反悔）', admin: true, member: true },
   { label: '覆盖 / 停用已有价', admin: true, member: false },
   { label: '改交易性质 / 折算系数', admin: true, member: false },
   { label: '删除报价单 / 物料 / 人员 / 价 / 供应商', admin: true, member: false },
   { label: '导出客户版', admin: true, member: true },
   { label: '导出内部版（含成本）', admin: true, member: false },
-  { label: '供应商档案 / 分类字典', admin: true, member: false },
+  { label: '改已有档案（名称 / 单位 / 分类）', admin: true, member: false },
+  { label: '分类字典', admin: true, member: false },
   { label: '合同管理（全部功能，含查看）', admin: true, member: false },
   { label: '发票台账（全部功能，含查看）', admin: true, member: false },
   { label: '设置项 / 账号管理', admin: true, member: false },

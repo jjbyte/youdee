@@ -588,6 +588,99 @@ async function main() {
     `${memberPatch.json?.code} ${memberPatch.json?.message ?? ''}`,
   );
 
+  // 10b. 建档 vs 改档（2026-11-17 客户要求：成员建不了物料 / 人员 / 供应商 / 报价）。
+  //      这条边界有两半，必须一起测：建档真的开了，改档真的**没**跟着开。
+  //      只测前一半的话，把 canManageCatalog 一起放开也能过 —— 而那正是不能发生的事：
+  //      成员把「桁架 3m」改名后，历史报价单里那行还指着它，同一个东西从此两个名字。
+  const memStamp = String(Date.now()).slice(-5);
+  const memCat = truss.category_id;
+  const mItem = await call('POST', '/items', {
+    as: 'member',
+    body: {
+      item_type: 'material',
+      category_id: memCat,
+      name: `成员建的物料${memStamp}`,
+      base_unit_code: 'sqm',
+      spec: '自检',
+    },
+  });
+  record(
+    '成员能新建物料（201，不再 40301）',
+    mItem.status === 201 && Boolean(mItem.json?.data?.id),
+    `HTTP ${mItem.status} ${mItem.json?.code ?? ''} ${mItem.json?.message ?? mItem.json?.data?.name ?? ''}`,
+  );
+
+  /**
+   * 人员与物料共用 items 表、共用同一支 POST，但分类是两棵树：
+   * 拿 material 的分类 id 去建 personnel，会被分类域校验拦下（400）——那不是权限问题，
+   * 所以这里单独取一个 personnel 分类。取不到就记失败而不是记通过：
+   * 跳过的项被当成通过，正是自检开始骗人的第一步。
+   */
+  const personCats = await call('GET', '/categories?domain=personnel&include_counts=false', { as: 'member' });
+  const personCatId = Array.isArray(personCats.json?.data) ? personCats.json?.data?.[0]?.id : null;
+  const mPerson = await call('POST', '/items', {
+    as: 'member',
+    body: {
+      item_type: 'personnel',
+      category_id: personCatId,
+      name: `成员建的人员${memStamp}`,
+      base_unit_code: 'session',
+    },
+  });
+  record(
+    '成员能新建人员（人员库走同一支 POST）',
+    mPerson.status === 201 && Boolean(mPerson.json?.data?.id),
+    `HTTP ${mPerson.status} ${mPerson.json?.code ?? ''} ${mPerson.json?.message ?? mPerson.json?.data?.name ?? ''}`,
+  );
+
+  const mSup = await call('POST', '/suppliers', {
+    as: 'member',
+    body: { name: `成员建的供应商${memStamp}`, type: 'factory' },
+  });
+  record(
+    '成员能新建供应商（201，不再 40301）',
+    mSup.status === 201 && Boolean(mSup.json?.data?.id),
+    `HTTP ${mSup.status} ${mSup.json?.code ?? ''} ${mSup.json?.message ?? mSup.json?.data?.name ?? ''}`,
+  );
+
+  const mPrice = await call('POST', '/prices', {
+    as: 'member',
+    body: {
+      item_id: mItem.json?.data?.id,
+      supplier_id: mSup.json?.data?.id,
+      unit_code: 'sqm',
+      // 不填折算系数：单位的基准单位就是 sqm，填 1 会被 42201 拦下
+      // （「1 等于说两个单位相同」——那条校验是对的，别为了过自检去绕它）
+      unit_price: '88.88',
+      tax_included: true,
+      pricing_nature: 'purchase',
+      effective_from: new Date(today.getTime() - 2 * 86400_000).toISOString().slice(0, 10),
+      close_previous: false,
+    },
+  });
+  record(
+    '成员能录物料报价（引用自己刚建的物料与供应商）',
+    mPrice.status === 201 && Boolean(mPrice.json?.data?.id),
+    `HTTP ${mPrice.status} ${mPrice.json?.code ?? ''} ${mPrice.json?.message ?? mPrice.json?.data?.unit_price ?? ''}`,
+  );
+
+  // 另一半：改档仍然关门（上面 584 行那条测的是已有主体，这里测成员改自己刚建的那条）
+  const mEditOwn = await call('PATCH', `/items/${mItem.json?.data?.id}`, {
+    as: 'member',
+    body: { name: `成员改自己的${memStamp}` },
+  });
+  record(
+    '成员改档案（含自己刚建的）仍被拒（40301）',
+    mEditOwn.json?.code === 40301,
+    `${mEditOwn.json?.code} ${mEditOwn.json?.message ?? ''}`,
+  );
+
+  // 收尾：自检造的数据不许留在台账里（物料/供应商都是 DELETE 才干净，作废仍会出现在"含已作废"）
+  if (mPrice.json?.data?.id) await call('DELETE', `/prices/${mPrice.json.data.id}`, { as: 'admin' });
+  if (mItem.json?.data?.id) await call('DELETE', `/items/${mItem.json.data.id}`, { as: 'admin' });
+  if (mPerson.json?.data?.id) await call('DELETE', `/items/${mPerson.json.data.id}`, { as: 'admin' });
+  if (mSup.json?.data?.id) await call('DELETE', `/suppliers/${mSup.json.data.id}`, { as: 'admin' });
+
   // 权限一旦能被编辑，就必须能被别人编辑不了：成员不能给自己升管理员
   const memberRoleEscalation = await call('PATCH', `/users/${mlogin.json?.data?.id ?? adminId}`, {
     as: 'member',
@@ -1522,6 +1615,57 @@ async function main() {
     `命中 ${invExpiringIds.length} 份，近端=${invExpiringIds.includes(invEndContractId)} 远期=${invExpiringIds.includes(invEndFarId)}`,
   );
 
+  /*
+   * 16.16c 列表顺序（2026-11-17 客户要求）：快到期的排最前，有终止日期的排在没终止日期的前面。
+   *
+   * 排序在 SQL 里，单测够不着，只能在真库上验。三项分别锁住三段：
+   *   ① 一个月内的排在远期前面 ② 有终止日期的排在没终止日期前面 ③ 已终止的不顶到前面
+   * 只测 ① 的话，把排序写成"有终止日期的一律按签订时间"也能过，
+   * 而那会让「2027-06 到期」的合同压在「下周到期」的前面——正是客户要修的那件事。
+   */
+  const invNoEnd = await call('POST', '/contracts', {
+    as: 'admin',
+    body: { title: `自检无终止日期${invStamp}`, company_name: `自检公司${invStamp}`, signed_on: invToday },
+  });
+  const invNoEndId = invNoEnd.json?.data?.id;
+  const invTerm = await call('POST', '/contracts', {
+    as: 'admin',
+    body: {
+      title: `自检已终止${invStamp}`,
+      company_name: `自检公司${invStamp}`,
+      signed_on: invToday,
+      end_on: endSoon,
+    },
+  });
+  const invTermId = invTerm.json?.data?.id;
+  if (invTermId) {
+    await call('PATCH', `/contracts/${invTermId}/status`, { as: 'admin', body: { status: 'terminated' } });
+  }
+
+  const invOrdered = await call('GET', '/contracts?limit=200', { as: 'admin' });
+  const orderIds = (invOrdered.json?.data?.items ?? []).map((c) => c.id);
+  const at = (id) => orderIds.indexOf(id);
+  const posNear = at(invEndContractId);
+  const posFar = at(invEndFarId);
+  const posNoEnd = at(invNoEndId);
+  const posTerm = at(invTermId);
+
+  record(
+    '默认列表：一个月内到期的排在远期前面',
+    posNear >= 0 && posFar >= 0 && posNear < posFar,
+    `近端第 ${posNear + 1} 条，远期第 ${posFar + 1} 条（共 ${orderIds.length} 条）`,
+  );
+  record(
+    '默认列表：有终止日期的排在没终止日期的前面',
+    posFar >= 0 && posNoEnd >= 0 && posFar < posNoEnd,
+    `远期第 ${posFar + 1} 条，无终止日期第 ${posNoEnd + 1} 条`,
+  );
+  record(
+    '默认列表：已终止的不顶到待续签前面',
+    posTerm >= 0 && posFar >= 0 && posTerm > posFar,
+    `已终止第 ${posTerm + 1} 条，远期第 ${posFar + 1} 条`,
+  );
+
   const invDash = await call('GET', '/dashboard/summary', { as: 'admin' });
   const invDashMember = await call('GET', '/dashboard/summary', { as: 'member' });
   const invExpBlock = invDash.json?.data?.expiring_contracts;
@@ -1533,8 +1677,8 @@ async function main() {
     `total=${invExpBlock?.total} member=${JSON.stringify(invDashMember.json?.data?.expiring_contracts)}`,
   );
 
-  // 造完就删（软删，与其它自检数据一致）：三份合同都别留在台账里
-  for (const cid of [invEndContractId, invEndFarId, invEndBad.json?.data?.id]) {
+  // 造完就删（软删，与其它自检数据一致）：这几份合同都别留在台账里
+  for (const cid of [invEndContractId, invEndFarId, invEndBad.json?.data?.id, invNoEndId, invTermId]) {
     if (cid) await call('DELETE', `/contracts/${cid}`, { as: 'admin' });
   }
 

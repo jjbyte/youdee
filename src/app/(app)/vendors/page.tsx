@@ -5,7 +5,7 @@ import { cx, formatStaleDays, formatTimeRel, todayISO } from '@/lib/format';
 import { SUPPLIER_TYPE_LABELS, SUPPLIER_TYPE_ORDER, supplierTypeLabel } from '@/lib/labels';
 import type { Price, Supplier, SupplierType } from '@/lib/types';
 import { useMe } from '@/lib/use-me';
-import { canDeleteRecord, canManageCatalog } from '@/domain/permissions';
+import { canCreateCatalog, canDeleteRecord, canManageCatalog } from '@/domain/permissions';
 import { Badge } from '@/components/ui/badge';
 import { Button, IconButton } from '@/components/ui/button';
 import { SearchInput } from '@/components/ui/field';
@@ -39,7 +39,10 @@ function daysSince(iso: string | null | undefined): number | null {
  */
 export default function VendorsPage() {
   const { user } = useMe();
+  /** 改档 / 删档：仅管理员 */
   const isAdmin = user ? canManageCatalog(user.role) : false;
+  /** 建档：成员也能（2026-11-17）——录价当场发现的新供应商得能登记，否则只能拿微信记在本子上 */
+  const canCreate = user ? canCreateCatalog(user.role) : false;
   const canDelete = user ? canDeleteRecord(user.role) : false;
 
   const [q, setQ] = useState('');
@@ -153,13 +156,13 @@ export default function VendorsPage() {
             所以「外聘 vs 自有」的成本对比，天然就是同一个人主体下两条价并列。
           </p>
         </div>
-        {isAdmin ? (
+        {canCreate ? (
           <Button variant="primary" icon={<IconPlus size={16} />} onClick={() => setCreating(true)}>
             新建供应商
           </Button>
         ) : (
           <span className="t-xs t-3 max-w-[280px]">
-            供应商档案只有管理员能改；你可以录价、比价、出单。
+            供应商档案只有管理员能看和改；你可以录价、比价、出单。
           </span>
         )}
       </div>
@@ -224,7 +227,7 @@ export default function VendorsPage() {
                 ? '换个关键词，或者把类型筛选清掉。'
                 : '录价的时候可以直接新建供应商，不用先来这里登记。'
             }
-            primary={isAdmin ? { label: '新建供应商', onClick: () => setCreating(true) } : undefined}
+            primary={canCreate ? { label: '新建供应商', onClick: () => setCreating(true) } : undefined}
           />
         ) : null}
 

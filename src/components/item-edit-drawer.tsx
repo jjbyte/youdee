@@ -222,7 +222,9 @@ export function ItemEditDrawer({
       }
     >
       {!isAdmin ? (
-        <Note tone="warn">档案只有管理员能改。你可以录价、比价、出单。</Note>
+        <Note tone="neutral">
+          档案只有管理员能改，但新建和录价你都能做。刚建错名字的话，先作废再建一条——作废随时能恢复。
+        </Note>
       ) : null}
 
       {loading ? (
